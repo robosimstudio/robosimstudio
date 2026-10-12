@@ -13,7 +13,7 @@ the file, and the page and its readings show what it built.
 
 Reference: `examples/live/REFERENCE.md` (the contract for `scene.py`,
 every `ctl` command, what each reading means, the frame and units). The API:
-`examples/00_getting_started/` and the docstrings of `rss.`'s names. The
+`examples/00_getting_started/README.md` and each example folder's README. The
 catalog: `./ctl catalog`. Read those rather than guessing a constructor or a
 name.
 

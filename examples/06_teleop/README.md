@@ -3,6 +3,67 @@
 Driving a simulated YAM from a real leader arm, and feeling
 what the simulated arm runs into on the leader's own servos.
 
+<!-- examples:start: written by scripts/example_readmes.py from each script's docstring -->
+
+## Leader arm
+
+![Leader arm](media/00_leader_arm.webp)
+
+Drive the simulated YAM from a real leader arm, read only.
+
+Each control step the script reads every connected leader, converts servo ticks
+to joint angles through a calibration file, and applies them as one
+`joint_position` action. Nothing is written to a servo, so nothing can push
+back on your hand. `--simulate` swaps the arm for a scripted hand that sweeps
+both arms and works the jaws, over a table of registers instead of a bus.
+
+**Key features:**
+
+* `resolve_leaders` looks each calibration up by its adapter's serial
+* `read_action` reads one arm as `[q_0 .. q_5, grip]`
+* `apply_arm_actions` drives only the arms that have a leader
+* `YAM_TELEOP_ARM` gives the follower servo gains that keep up with a hand
+
+Needs the `[lerobot-feetech]` extra and a calibrated leader arm.
+
+```bash
+uv run --extra lerobot-feetech examples/06_teleop/00_leader_arm.py
+```
+
+Source: [`00_leader_arm.py`](00_leader_arm.py)
+
+## Force feedback
+
+![Force feedback](media/01_force_feedback.webp)
+
+Feel what the simulated arm runs into, on the leader arm's own servos.
+
+Where the simulated arm cannot reach where your hand is -- its side against the
+welded panel, its hand pressed on the crate -- the gap is rendered as torque on
+the leader. In free space no motor is energized. Take `--no-feedback` first:
+it drives the simulation and never energizes a motor. `--simulate` swaps the
+arm for a scripted hand whose sweep meets the panel; a table of registers
+renders nothing you can feel.
+
+**Key features:**
+
+* `Teleoperation` owns the servos from the first torque-off to the last
+* `status` says which motor is pushing back
+* `ComplianceConfig` holds the deadband, ramp, cap and servo gains
+* `slab` welds something to push against; a welded cylinder does not stop the arm's capsules
+
+Needs the `[lerobot-feetech]` extra and a calibrated leader arm.
+
+With feedback on, the leader's servos are powered: keep clear of the arm and keep its power switch in reach.
+
+```bash
+uv run --extra lerobot-feetech examples/06_teleop/01_force_feedback.py
+```
+
+Source: [`01_force_feedback.py`](01_force_feedback.py)
+
+<!-- examples:end -->
+
 ## What you need
 
 | Item | What |
@@ -116,6 +177,9 @@ Without hardware, `--simulate` runs a scripted hand over a table of registers:
 both arms sweep and the jaws open and close. It exercises the loop and shows
 nothing about feel.
 
+![The leader-arm example with --simulate: a scripted hand sweeps both arms and works the jaws.](media/leader_sim.webp)
+*The leader-arm example with `--simulate`: a scripted hand sweeps both arms and works the jaws. Played at 2x.*
+
 ## Force feedback
 
 > **Note.** Force feedback is experimental. The version in this release has been checked
@@ -126,6 +190,9 @@ nothing about feel.
 uv run examples/06_teleop/01_force_feedback.py --leader right:/dev/ch340-<serial> --no-feedback
 uv run examples/06_teleop/01_force_feedback.py --leader right:/dev/ch340-<serial>
 ```
+
+![The force-feedback example with --simulate: the status line names the motor that pushes back.](media/force_feedback_sim.webp)
+*The force-feedback example with `--simulate`: the status line names the motor that pushes back. Played at 2x.*
 
 Take `--no-feedback` first. It drives the scene from the leader and never
 energizes a motor, which is how a calibration is checked with nothing able to
@@ -180,13 +247,6 @@ Pass a `ComplianceConfig` to `Teleoperation` in
 `robosimstudio.robots.teleop.force_feedback` to change them. The example uses
 the defaults.
 
-## Examples
-
-- `00_leader_arm.py`: drive the simulated YAM from a real leader arm, read only.
-- `01_force_feedback.py`: the same, with the simulated arm's contact felt on the leader's servos.
-
-Run one with `uv run <path>` from a clone; `--simulate` runs either without hardware.
-
 ## Safety
 
 - Torque is off at rest, off while the page is stale, and off on the way out.
@@ -217,7 +277,7 @@ Run one with `uv run <path>` from a clone; `--simulate` runs either without hard
 
 ## Rig checklist
 
-This page lists the commands a person with a leader arm runs to verify
+The commands a person with a leader arm runs to verify
 teleoperation and force feedback, in order, with what to observe at each step
 and what counts as pass.
 
@@ -225,7 +285,7 @@ Everything the software can check without an arm has been checked: the loop
 closed against a stepped scene with a table of registers in place of the bus,
 free space rendering nothing, a welded wall and a stalled jaw rendering a
 correction with the right sign. What only the rig can show is what reaches a
-real servo and how it feels. That is what this page is for.
+real servo and how it feels. That is what this checklist is for.
 
 ### Before you start
 
@@ -331,7 +391,7 @@ enough; a second arm is a second `<arm>:<port>` pair in `--leader`.
 
 ### What the rig decides
 
-Two things are open until someone runs this page.
+Two things are open until someone runs this checklist.
 
 - **Feel.** The gains and limits in `ComplianceConfig` are the ones a reference
   teleoperation rig runs on the same servos. Whether they feel right through

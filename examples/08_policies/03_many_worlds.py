@@ -7,7 +7,7 @@ A job names the task, the policy and how many episodes to run. With
 ``num_worlds=16`` the fleet runner builds sixteen copies of the scene in one
 model and steps them together, each world running its own episode of the
 sampler and its own copy of the graph. It writes one results row per episode
-and the rate with its 95% interval.
+and the rate with its 95% interval. Needs the ``[gap]`` extra.
 
 **Key features:**
 

@@ -7,7 +7,7 @@ With ``privileged=False`` no ``sim.*`` tool is registered: the graph has what a
 real rig has, camera frames and the arm's own state. ``pick_place_camera/``
 reads the overhead depth image, takes what stands 50 mm above the bench as the
 cube and what stands 4 mm above it as the pad, and runs the same pick, check
-and place as the retry example.
+and place as the retry example. Needs the ``[gap]`` extra.
 
 **Key features:**
 
