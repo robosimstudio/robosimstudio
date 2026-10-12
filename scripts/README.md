@@ -9,6 +9,7 @@ Every script here runs by path: `uv run python scripts/<name>.py`. Each answers
 | --- | --- |
 | `live.py` | Open the live page on a `scene.py` and rebuild it on every save. `python -m robosimstudio_real2sim_agent up` is the same thing, detached. |
 | `testrun.py` | Run one tier of the test suite: `--tier fast` needs no GPU, `--tier medium` builds and steps scenes. |
+| `example_readmes.py` | Write each example folder's README sections from its scripts' docstrings; `--check` says whether they are up to date. |
 | `bench_run.py` | Run a policy over a task's episodes and write a run directory: one results row per episode and the success rate. `--task-root` adds a folder of your tasks, `--num-worlds` runs them side by side. |
 
 ## Hardware

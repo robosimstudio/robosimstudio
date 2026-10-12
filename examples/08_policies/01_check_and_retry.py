@@ -6,7 +6,7 @@ A graph can check its own work and branch: here, a missed grasp is tried once mo
 ``pick_place_retry/`` splits the job into two subgraphs. ``pick`` turns the jaws
 to close across the cube's faces, lifts, and raises if the hand shut on air; its
 ``on_error`` names that outcome, and the top level routes it to a second copy of
-``pick``. The cube starts somewhere new, turned, in each of four episodes.
+``pick``. The cube starts somewhere new, turned, in each of four episodes. Needs the ``[gap]`` extra.
 
 **Key features:**
 

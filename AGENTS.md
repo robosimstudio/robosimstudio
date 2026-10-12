@@ -11,8 +11,9 @@ you save it, and a command line onto that page.
 ## Read first
 
 1. [`README.md`](README.md): what is here and how to run it.
-2. [`examples/00_getting_started/`](examples/00_getting_started/) (`Scene`,
-   `Sim`, `Ref`, the constructors) and the docstrings of the `rss.` names. Poses
+2. [`examples/00_getting_started/README.md`](examples/00_getting_started/README.md)
+   (`Scene`, `Sim`, `Ref`, the constructors), each example folder's README, and
+   [`examples/PHYSICS.md`](examples/PHYSICS.md) (engines and coupling). Poses
    are in the cell's work-surface frame: `at=(0, 0, 0.2)` is 200 mm over the
    middle of the bench, whatever bench (frames and units:
    [`examples/live/REFERENCE.md`](examples/live/REFERENCE.md#frames-and-units)).

@@ -6,7 +6,7 @@ A policy is a graph: a folder holding a ``workflow.json`` and the scripts it nam
 ``pick_place/`` reads where the cube and the square are, works out four hand
 poses in one script node, and moves the arm with ``robot.*`` tools. The task
 names that folder in ``(:graph pick "pick_place")``, and ``SolutionGraph`` runs
-it for one episode, scored the way the benchmark scores every episode.
+it for one episode, scored the way the benchmark scores every episode. Needs the ``[gap]`` extra.
 
 **Key features:**
 

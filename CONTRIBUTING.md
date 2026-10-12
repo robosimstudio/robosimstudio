@@ -28,7 +28,9 @@ builds a scene is `medium`.
 
 - **A new example** is one script under `examples/<NN_category>/`. Line 1 of its
   docstring is the title, the next sentence says what it shows, and it defines
-  `main()`.
+  `main()`. A looping clip of it goes in that folder's `media/` as
+  `<script>.webp`; then `uv run python scripts/example_readmes.py` writes its
+  section of the folder's README.
 - **A new kind of thing** or **a new robot** registers itself; the library is not
   edited. See `examples/04_extending/`.
 - **A task** is a document and **a policy** is a graph folder; neither needs a
