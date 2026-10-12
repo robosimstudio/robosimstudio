@@ -1,4 +1,4 @@
-# RoboSimStudio
+# <img alt="" src=".github/media/logo.png" height="44" align="top" /> RoboSimStudio
 
 <p align="left">
   <a href="https://github.com/robosimstudio/robosimstudio/actions/workflows/tests.yml"><img alt="tests" src="https://github.com/robosimstudio/robosimstudio/actions/workflows/tests.yml/badge.svg" /></a>
