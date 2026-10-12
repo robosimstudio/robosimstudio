@@ -7,8 +7,8 @@
 
 <!-- TODO(release): a row of links here: "Tech report" (arXiv) and "Live demos". -->
 
-RoboSimStudio is an interactive, agentic simulation toolkit for robot
-manipulation, built on [Newton](https://github.com/newton-physics/newton).
+RoboSimStudio is an open interactive toolkit that accelerates human and agentic
+physics-based Real2Sim of Robot Manipulation Tasks.
 
 <p align="center">
   <img alt="Forty-eight manipulation tasks built with RoboSimStudio, playing side by side" src=".github/media/splash.webp" width="100%" />
@@ -53,26 +53,6 @@ Every script under `examples/` runs the same way.
 The live demos from the project page run from [`examples/09_demos/`](examples/09_demos/):
 wipe a grab bar with a sponge, route a cable into clips, and fold a towel, each
 by dragging the robot's hand in the studio.
-
-## Roadmap
-
-Coming in later releases:
-
-- The benchmark's task suites, and the graphs that solve them.
-- Policy-learning integrations.
-
-## Limitations
-
-- **GPU.** Every scene needs an NVIDIA GPU; CI only runs the CPU checks.
-- **SuperDex.** The engine behind `rss.sponge`, the SuperDex cable, the sponge and
-  cable demos ships wheels for Python 3.12 only.
-- **Genesis.** Install the `[genesis]` extra in a virtual environment of its own;
-  see `examples/02_cloth/03_genesis.py`.
-- **Graphs.** The `[gap]` extra installs the graph runtime from git, with torch
-  and cuRobo: several gigabytes, and a clone with `uv run` rather than `pip`.
-- **Contact.** The default rigid-to-cloth coupling pushes a sheet but does not
-  pinch one; the cloth example shows the coupling that does.
-- **Stability.** APIs move without deprecation before 1.0. Pin a version.
 
 ## Citation
 

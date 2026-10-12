@@ -5,7 +5,7 @@ build-backend = "hatchling.build"
 [project]
 name = "robosimstudio"
 dynamic = ["version"]
-description = "An interactive, agentic simulation toolkit for robot manipulation, built on Newton"
+description = "An open interactive toolkit that accelerates human and agentic physics-based Real2Sim of Robot Manipulation Tasks"
 readme = "README.md"
 license = "Apache-2.0"
 requires-python = ">=3.10"
