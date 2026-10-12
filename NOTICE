@@ -28,3 +28,8 @@ assets/embodiments/robotiq_2f85/
 
 Where each file came from and what was changed is recorded in
 assets/PROVENANCE.md.
+
+.github/media/logo.png
+    The sponge emoji (U+1F9FD) from Noto Emoji
+    (https://github.com/googlefonts/noto-emoji), padded to a square.
+    Apache License 2.0. Copyright 2013 Google Inc.
