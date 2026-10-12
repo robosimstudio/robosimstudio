@@ -1,0 +1,30 @@
+RoboSimStudio
+Copyright 2026 Kaiyuan Chen
+
+Licensed under the Apache License, Version 2.0 (see LICENSE).
+
+This distribution includes third-party robot models. Each keeps its own
+licence, in a LICENSE file beside the files it covers:
+
+assets/embodiments/panda/
+    Franka Emika Panda arm and hand, from robosuite 1.4.0
+    (https://github.com/ARISE-Initiative/robosuite). MIT License.
+    Copyright (c) 2022 Stanford Vision and Learning Lab and UT Robot
+    Perception and Learning Lab. robosuite's Panda meshes derive from
+    Franka's franka_description (Apache License 2.0). panda_kinematics.urdf
+    derives from the panda_description in example-robot-data, itself taken
+    from franka_description.
+
+assets/embodiments/yam/i2rt_yam/
+assets/embodiments/yam_i2rt/
+assets/embodiments/yam_i2rt_arena/
+    i2rt YAM arm and linear_4310 gripper (https://github.com/i2rt-robotics/i2rt).
+    MIT License. Copyright (c) i2rt robotics.
+
+assets/embodiments/robotiq_2f85/
+    Robotiq 2F-85 gripper, from MuJoCo Menagerie
+    (https://github.com/google-deepmind/mujoco_menagerie). BSD 2-Clause
+    License. Copyright (c) 2013, ROS-Industrial.
+
+Where each file came from and what was changed is recorded in
+assets/PROVENANCE.md.

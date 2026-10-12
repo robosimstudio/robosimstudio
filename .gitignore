@@ -1,0 +1,23 @@
+# Warp kernel cache and ruff's
+.cache/
+__pycache__/
+*.py[cod]
+
+# uv. The lockfile is tracked: `uv sync --frozen` is then a rebuild rather than
+# a fresh resolve, and `uv lock` is the deliberate act of moving.
+.venv/
+
+# Build output
+dist/
+
+# Run output: episodes, videos and snapshots are evidence, not source.
+outputs/
+examples/live/run/
+
+# A stripped MJCF is written beside its source and removed afterwards; a crash
+# in between leaks one.
+robosimstudio_stripped_*.xml
+
+# Claude Code: local state, except the project skills, which are source.
+.claude/*
+!.claude/skills/

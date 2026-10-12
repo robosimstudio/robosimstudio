@@ -1,0 +1,138 @@
+<mujoco model="yam_i2rt_bimanual">
+  <compiler angle="radian" meshdir="assets" />
+  <asset>
+    <mesh name="base" file="base.stl" />
+    <mesh name="link1" file="link1.stl" />
+    <mesh name="link2" file="link2.stl" />
+    <mesh name="link3" file="link3.stl" />
+    <mesh name="link4" file="link4.stl" />
+    <mesh name="link5" file="link5.stl" />
+    <mesh name="gripper" file="gripper.stl" />
+    <mesh name="tip_left" file="tip_left.stl" />
+    <mesh name="tip_right" file="tip_right.stl" />
+  </asset>
+  <worldbody>
+    <body name="right_base" gravcomp="1" pos="0 -0.31 0">
+      <geom pos="-0.0374966 -0.0464005 0.187501" quat="0.707105 0 0.707108 0" type="mesh" rgba="0.317647 0.121569 0.498039 1" mesh="base" />
+      <body name="right_link1" pos="0 0 0.067" quat="0.707105 0 0 -0.707108" gravcomp="1">
+        <inertial pos="-0.00261782 0.00744082 0.0237251" quat="0.602276 0.365837 0.642523 0.300984" mass="0.104154" diaginertia="0.000139023 0.000109628 4.8478e-05" />
+        <joint name="right_joint1" pos="0 0 0" axis="0 0 1" range="-2.61799 3.05433" actuatorfrcrange="-27 27" armature="0.0192" damping="0.032" frictionloss="0.12" />
+        <geom pos="-0.0464 0.0374968 0.119501" quat="0.499998 0.5 0.5 -0.500002" type="mesh" rgba="0.72549 0.45098 0.317647 1" mesh="link1" />
+        <body name="right_link2" pos="-0.0329 0.02 0.0455" quat="0.499998 0.5 -0.500002 -0.5" gravcomp="1">
+          <inertial pos="0.129165 0.000134495 -0.0321253" quat="0.499976 0.500008 0.500105 0.499911" mass="1.46908" diaginertia="0.0146686 0.014599 0.000800089" />
+          <joint name="right_joint2" pos="0 0 0" axis="0 0 1" range="0 3.65" actuatorfrcrange="-27 27" armature="0.0192" damping="0.032" frictionloss="0.12" />
+          <geom pos="-0.0174977 -0.0740001 -0.07925" quat="0.499998 0.5 0.500002 0.5" type="mesh" rgba="0 0.4 0.6 1" mesh="link2" />
+          <body name="right_link3" pos="0.264 4.08431e-07 -0.06375" quat="9.38184e-07 -0.707105 -0.707108 9.38187e-07" gravcomp="1">
+            <inertial pos="0.0556042 -0.135083 -0.0340514" quat="0.704407 0.697077 0.121918 -0.0550519" mass="0.982553" diaginertia="0.00765198 0.0076296 0.000876442" />
+            <joint name="right_joint3" pos="0 0 0" axis="0 0 1" range="0 3.66519" actuatorfrcrange="-27 27" armature="0.0192" damping="0.032" frictionloss="0.12" />
+            <geom pos="0.0740003 -0.281499 -0.0813" quat="9.38184e-07 9.38187e-07 -0.707108 -0.707105" type="mesh" rgba="0.552941 0.580392 0.203922 1" mesh="link3" />
+            <body name="right_link4" pos="0.0600003 -0.244999 -0.00205" quat="1.32679e-06 0 0 -1" gravcomp="1">
+              <inertial pos="-0.0543529 0.057068 -0.0332231" quat="0.636075 0.627088 0.370444 0.254833" mass="0.46678" diaginertia="0.000817855 0.000791274 0.000295776" />
+              <joint name="right_joint4" pos="0 0 0" axis="0 0 1" range="-1.5708 1.5708" actuatorfrcrange="-10 10" armature="0.0012" damping="0.002" frictionloss="0.04" />
+              <geom pos="-0.0138003 0.0364989 -0.0787882" quat="0.707105 0.707108 0 0" type="mesh" rgba="0.545098 0.52549 0.419608 1" mesh="link4" />
+              <body name="right_link5" pos="-0.0403003 0.0703851 -0.0323887" quat="9.38184e-07 -0.707105 -9.38187e-07 -0.707108" gravcomp="1">
+                <inertial pos="-3.55003e-05 -0.00717397 0.0375847" quat="0.911516 0.411243 -0.00302177 -0.00303654" mass="0.403307" diaginertia="0.000219794 0.000195686 0.000169647" />
+                <joint name="right_joint5" pos="0 0 0" axis="0 0 1" range="-1.5708 1.5708" actuatorfrcrange="-10 10" armature="0.0012" damping="0.002" frictionloss="0.04" />
+                <geom pos="-0.0463995 0.0311519 0.0265" quat="0.499998 -0.5 -0.5 -0.500002" type="mesh" rgba="0.827451 0.623529 0.784314 1" mesh="link5" />
+                <body name="right_link6" pos="2.39858e-07 -0.0419481 0.0404996" quat="0.499998 -0.5 -0.5 -0.500002" gravcomp="1">
+                  <inertial pos="0 0 0" mass="1e-6" diaginertia="1e-9 1e-9 1e-9" />
+                  <joint name="right_joint6" pos="0 0 0" axis="0 0 -1" range="-2.0944 2.0944" actuatorfrcrange="-10 10" armature="0.0012" damping="0.002" frictionloss="0.04" />
+                  <body name="right_gripper" pos="0 0 0" quat="1 0 0 0" gravcomp="1">
+                    <inertial pos="-3.57066e-05 0.000249371 -0.0293133" quat="0.667981 0.744113 -0.00433092 0.00882801" mass="0.553219" diaginertia="0.000409686 0.000369758 0.000324415" />
+                    <geom pos="-0.014 -0.0463995 0.0731" quat="1 0 0 0" type="mesh" rgba="0.109804 0.286275 0.0117647 1" mesh="gripper" contype="0" conaffinity="0" />
+                    <site name="right_tcp_site" pos="0 0 0" quat="0 1 0 0" size="0.005" rgba="1 0 0 1" />
+                    <site name="right_grasp_site" pos="0 0 -0.1347" quat="0 1 0 0" size="0.005" rgba="0 1 0 1" />
+                    <body name="right_tip_left" pos="-0.0238981 0.0450619 -0.0545599" quat="0.499998 -0.5 -0.5 -0.500002" gravcomp="1">
+                      <inertial pos="-0.0224716 0.0143408 -0.0426253" quat="0.498899 0.455348 -0.0576406 0.735143" mass="0.0710042" diaginertia="6.24193e-05 6.01079e-05 2.83591e-05" />
+                      <joint name="right_joint7" pos="0 0 0" type="slide" axis="0 0 -1" range="0 0.0475" armature="0.05" damping="2" frictionloss="0.5" actuatorfrcrange="-80 80" />
+                      <geom pos="0.129783 0.00999321 -0.0914614" quat="0.499998 0.5 0.500002 0.5" type="mesh" rgba="0.596078 0.788235 0.921569 1" mesh="tip_left" />
+                    </body>
+                    <body name="right_tip_right" pos="0.0238981 -0.0450619 -0.0545599" quat="0.707105 0.707108 0 0" gravcomp="1">
+                      <inertial pos="-0.0143408 -0.0224716 -0.0426253" quat="0.281222 0.8726 0.16705 -0.362738" mass="0.0710042" diaginertia="6.24193e-05 6.01079e-05 2.83591e-05" />
+                      <joint name="right_joint8" pos="0 0 0" type="slide" axis="0 0 -1" range="0 0.0475" armature="0.05" damping="2" frictionloss="0.5" actuatorfrcrange="-80 80" />
+                      <geom pos="-0.0379932 0.129783 0.00133753" quat="0.707105 -0.707108 0 0" type="mesh" rgba="0.596078 0.788235 0.921569 1" mesh="tip_right" />
+                    </body>
+                  </body>
+                </body>
+              </body>
+            </body>
+          </body>
+        </body>
+      </body>
+    </body>
+    <body name="left_base" gravcomp="1" pos="0 0.31 0">
+      <geom pos="-0.0374966 -0.0464005 0.187501" quat="0.707105 0 0.707108 0" type="mesh" rgba="0.317647 0.121569 0.498039 1" mesh="base" />
+      <body name="left_link1" pos="0 0 0.067" quat="0.707105 0 0 -0.707108" gravcomp="1">
+        <inertial pos="-0.00261782 0.00744082 0.0237251" quat="0.602276 0.365837 0.642523 0.300984" mass="0.104154" diaginertia="0.000139023 0.000109628 4.8478e-05" />
+        <joint name="left_joint1" pos="0 0 0" axis="0 0 1" range="-2.61799 3.05433" actuatorfrcrange="-27 27" armature="0.0192" damping="0.032" frictionloss="0.12" />
+        <geom pos="-0.0464 0.0374968 0.119501" quat="0.499998 0.5 0.5 -0.500002" type="mesh" rgba="0.72549 0.45098 0.317647 1" mesh="link1" />
+        <body name="left_link2" pos="-0.0329 0.02 0.0455" quat="0.499998 0.5 -0.500002 -0.5" gravcomp="1">
+          <inertial pos="0.129165 0.000134495 -0.0321253" quat="0.499976 0.500008 0.500105 0.499911" mass="1.46908" diaginertia="0.0146686 0.014599 0.000800089" />
+          <joint name="left_joint2" pos="0 0 0" axis="0 0 1" range="0 3.65" actuatorfrcrange="-27 27" armature="0.0192" damping="0.032" frictionloss="0.12" />
+          <geom pos="-0.0174977 -0.0740001 -0.07925" quat="0.499998 0.5 0.500002 0.5" type="mesh" rgba="0 0.4 0.6 1" mesh="link2" />
+          <body name="left_link3" pos="0.264 4.08431e-07 -0.06375" quat="9.38184e-07 -0.707105 -0.707108 9.38187e-07" gravcomp="1">
+            <inertial pos="0.0556042 -0.135083 -0.0340514" quat="0.704407 0.697077 0.121918 -0.0550519" mass="0.982553" diaginertia="0.00765198 0.0076296 0.000876442" />
+            <joint name="left_joint3" pos="0 0 0" axis="0 0 1" range="0 3.66519" actuatorfrcrange="-27 27" armature="0.0192" damping="0.032" frictionloss="0.12" />
+            <geom pos="0.0740003 -0.281499 -0.0813" quat="9.38184e-07 9.38187e-07 -0.707108 -0.707105" type="mesh" rgba="0.552941 0.580392 0.203922 1" mesh="link3" />
+            <body name="left_link4" pos="0.0600003 -0.244999 -0.00205" quat="1.32679e-06 0 0 -1" gravcomp="1">
+              <inertial pos="-0.0543529 0.057068 -0.0332231" quat="0.636075 0.627088 0.370444 0.254833" mass="0.46678" diaginertia="0.000817855 0.000791274 0.000295776" />
+              <joint name="left_joint4" pos="0 0 0" axis="0 0 1" range="-1.5708 1.5708" actuatorfrcrange="-10 10" armature="0.0012" damping="0.002" frictionloss="0.04" />
+              <geom pos="-0.0138003 0.0364989 -0.0787882" quat="0.707105 0.707108 0 0" type="mesh" rgba="0.545098 0.52549 0.419608 1" mesh="link4" />
+              <body name="left_link5" pos="-0.0403003 0.0703851 -0.0323887" quat="9.38184e-07 -0.707105 -9.38187e-07 -0.707108" gravcomp="1">
+                <inertial pos="-3.55003e-05 -0.00717397 0.0375847" quat="0.911516 0.411243 -0.00302177 -0.00303654" mass="0.403307" diaginertia="0.000219794 0.000195686 0.000169647" />
+                <joint name="left_joint5" pos="0 0 0" axis="0 0 1" range="-1.5708 1.5708" actuatorfrcrange="-10 10" armature="0.0012" damping="0.002" frictionloss="0.04" />
+                <geom pos="-0.0463995 0.0311519 0.0265" quat="0.499998 -0.5 -0.5 -0.500002" type="mesh" rgba="0.827451 0.623529 0.784314 1" mesh="link5" />
+                <body name="left_link6" pos="2.39858e-07 -0.0419481 0.0404996" quat="0.499998 -0.5 -0.5 -0.500002" gravcomp="1">
+                  <inertial pos="0 0 0" mass="1e-6" diaginertia="1e-9 1e-9 1e-9" />
+                  <joint name="left_joint6" pos="0 0 0" axis="0 0 -1" range="-2.0944 2.0944" actuatorfrcrange="-10 10" armature="0.0012" damping="0.002" frictionloss="0.04" />
+                  <body name="left_gripper" pos="0 0 0" quat="1 0 0 0" gravcomp="1">
+                    <inertial pos="-3.57066e-05 0.000249371 -0.0293133" quat="0.667981 0.744113 -0.00433092 0.00882801" mass="0.553219" diaginertia="0.000409686 0.000369758 0.000324415" />
+                    <geom pos="-0.014 -0.0463995 0.0731" quat="1 0 0 0" type="mesh" rgba="0.109804 0.286275 0.0117647 1" mesh="gripper" contype="0" conaffinity="0" />
+                    <site name="left_tcp_site" pos="0 0 0" quat="0 1 0 0" size="0.005" rgba="1 0 0 1" />
+                    <site name="left_grasp_site" pos="0 0 -0.1347" quat="0 1 0 0" size="0.005" rgba="0 1 0 1" />
+                    <body name="left_tip_left" pos="-0.0238981 0.0450619 -0.0545599" quat="0.499998 -0.5 -0.5 -0.500002" gravcomp="1">
+                      <inertial pos="-0.0224716 0.0143408 -0.0426253" quat="0.498899 0.455348 -0.0576406 0.735143" mass="0.0710042" diaginertia="6.24193e-05 6.01079e-05 2.83591e-05" />
+                      <joint name="left_joint7" pos="0 0 0" type="slide" axis="0 0 -1" range="0 0.0475" armature="0.05" damping="2" frictionloss="0.5" actuatorfrcrange="-80 80" />
+                      <geom pos="0.129783 0.00999321 -0.0914614" quat="0.499998 0.5 0.500002 0.5" type="mesh" rgba="0.596078 0.788235 0.921569 1" mesh="tip_left" />
+                    </body>
+                    <body name="left_tip_right" pos="0.0238981 -0.0450619 -0.0545599" quat="0.707105 0.707108 0 0" gravcomp="1">
+                      <inertial pos="-0.0143408 -0.0224716 -0.0426253" quat="0.281222 0.8726 0.16705 -0.362738" mass="0.0710042" diaginertia="6.24193e-05 6.01079e-05 2.83591e-05" />
+                      <joint name="left_joint8" pos="0 0 0" type="slide" axis="0 0 -1" range="0 0.0475" armature="0.05" damping="2" frictionloss="0.5" actuatorfrcrange="-80 80" />
+                      <geom pos="-0.0379932 0.129783 0.00133753" quat="0.707105 -0.707108 0 0" type="mesh" rgba="0.596078 0.788235 0.921569 1" mesh="tip_right" />
+                    </body>
+                  </body>
+                </body>
+              </body>
+            </body>
+          </body>
+        </body>
+      </body>
+    </body>
+  </worldbody>
+  <contact>
+    <exclude body1="right_gripper" body2="right_tip_left" />
+    <exclude body1="right_gripper" body2="right_tip_right" />
+    <exclude body1="right_tip_left" body2="right_tip_right" />
+    <exclude body1="left_gripper" body2="left_tip_left" />
+    <exclude body1="left_gripper" body2="left_tip_right" />
+    <exclude body1="left_tip_left" body2="left_tip_right" />
+  </contact>
+  <actuator>
+    <position name="act_right_joint1" joint="right_joint1" kp="300" kv="30" forcerange="-27 27" />
+    <position name="act_right_joint2" joint="right_joint2" kp="300" kv="30" forcerange="-27 27" />
+    <position name="act_right_joint3" joint="right_joint3" kp="300" kv="30" forcerange="-27 27" />
+    <position name="act_right_joint4" joint="right_joint4" kp="300" kv="30" forcerange="-10 10" />
+    <position name="act_right_joint5" joint="right_joint5" kp="300" kv="30" forcerange="-10 10" />
+    <position name="act_right_joint6" joint="right_joint6" kp="300" kv="30" forcerange="-10 10" />
+    <position name="act_right_joint7" joint="right_joint7" kp="600" kv="20" ctrlrange="0 0.0475" forcerange="-80 80" />
+    <position name="act_right_joint8" joint="right_joint8" kp="600" kv="20" ctrlrange="0 0.0475" forcerange="-80 80" />
+    <position name="act_left_joint1" joint="left_joint1" kp="300" kv="30" forcerange="-27 27" />
+    <position name="act_left_joint2" joint="left_joint2" kp="300" kv="30" forcerange="-27 27" />
+    <position name="act_left_joint3" joint="left_joint3" kp="300" kv="30" forcerange="-27 27" />
+    <position name="act_left_joint4" joint="left_joint4" kp="300" kv="30" forcerange="-10 10" />
+    <position name="act_left_joint5" joint="left_joint5" kp="300" kv="30" forcerange="-10 10" />
+    <position name="act_left_joint6" joint="left_joint6" kp="300" kv="30" forcerange="-10 10" />
+    <position name="act_left_joint7" joint="left_joint7" kp="600" kv="20" ctrlrange="0 0.0475" forcerange="-80 80" />
+    <position name="act_left_joint8" joint="left_joint8" kp="600" kv="20" ctrlrange="0 0.0475" forcerange="-80 80" />
+  </actuator>
+</mujoco>

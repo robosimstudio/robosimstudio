@@ -1,0 +1,19 @@
+# See https://pre-commit.com for more information.
+#   uvx pre-commit install
+default_language_version:
+  python: python3
+repos:
+  - repo: https://github.com/pre-commit/pre-commit-hooks
+    rev: v5.0.0
+    hooks:
+      - id: trailing-whitespace
+        exclude: ^assets/
+      - id: end-of-file-fixer
+        exclude: ^assets/
+  - repo: https://github.com/astral-sh/ruff-pre-commit
+    # Keep in step with the ruff the lockfile resolves.
+    rev: v0.16.1
+    hooks:
+      - id: ruff
+        args: [--fix]
+      - id: ruff-format

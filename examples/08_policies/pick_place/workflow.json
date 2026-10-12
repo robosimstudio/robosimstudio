@@ -1,0 +1,48 @@
+{
+  "version": 3,
+  "meta": {
+    "name": "pick_place",
+    "description": "Pick the cube up and set it down inside the square, from where the simulator says both are."
+  },
+  "nodes": {
+    "pick_place": {"type": "subgraph", "ref": "pick_place_sg"},
+    "done": {"type": "end", "status": "success"},
+    "abort": {"type": "end", "status": "failure"}
+  },
+  "edges": [["START", "pick_place"]],
+  "conditional_edges": {
+    "pick_place": {"router_field": "exit", "mapping": {"placed": "done", "failed": "abort"}}
+  },
+  "subgraphs": {
+    "pick_place_sg": {
+      "skill": "generic",
+      "inputs": {},
+      "outputs": {},
+      "nodes": {
+        "cube": {"type": "tool", "tool": "sim.get_object_pose", "inputs": {"object_name": "cube"}},
+        "square": {"type": "tool", "tool": "sim.get_region_obb", "inputs": {"region_name": "square"}},
+        "frame": {"type": "tool", "tool": "robot.grasp_frame", "inputs": {}},
+        "plan": {"type": "script", "script": "scripts/plan.py", "inputs": {"cube": {"$ref": "cube.pose"}, "square": {"$ref": "square.obb"}, "rotation": {"$ref": "frame.rotation"}}},
+        "open": {"type": "tool", "tool": "robot.set_grip", "inputs": {"preset": "open"}},
+        "above": {"type": "tool", "tool": "robot.go_to_pose", "inputs": {"pose": {"$ref": "plan.above"}}},
+        "down": {"type": "tool", "tool": "robot.go_to_pose", "inputs": {"pose": {"$ref": "plan.grasp"}}},
+        "close": {"type": "tool", "tool": "robot.close_gripper", "inputs": {"settle_steps": 60}},
+        "lift": {"type": "tool", "tool": "robot.go_to_pose", "inputs": {"pose": {"$ref": "plan.above"}}},
+        "over": {"type": "tool", "tool": "robot.go_to_pose", "inputs": {"pose": {"$ref": "plan.over"}}},
+        "lower": {"type": "tool", "tool": "robot.go_to_pose", "inputs": {"pose": {"$ref": "plan.drop"}}},
+        "release": {"type": "tool", "tool": "robot.set_grip", "inputs": {"preset": "open", "settle_steps": 20}},
+        "away": {"type": "tool", "tool": "robot.go_to_pose", "inputs": {"pose": {"$ref": "plan.over"}}},
+        "placed": {"type": "noop"}
+      },
+      "edges": [
+        ["START", "cube"], ["cube", "square"], ["square", "frame"], ["frame", "plan"],
+        ["plan", "open"], ["open", "above"], ["above", "down"], ["down", "close"],
+        ["close", "lift"], ["lift", "over"], ["over", "lower"], ["lower", "release"],
+        ["release", "away"], ["away", "placed"], ["placed", "END"]
+      ],
+      "conditional_edges": {},
+      "exit": {"router_field": null, "success_values": ["placed"]},
+      "on_error": "failed"
+    }
+  }
+}

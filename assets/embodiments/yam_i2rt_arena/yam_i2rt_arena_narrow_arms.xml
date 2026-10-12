@@ -1,0 +1,256 @@
+<mujoco model="yam_i2rt_arena_narrow">
+  <compiler angle="radian" meshdir="assets" boundmass="0.001" boundinertia="0.001" />
+  <default>
+    <default class="yam">
+      <position inheritrange="1" />
+      <joint frictionloss="0.01" damping="0.5" axis="0 0 1" />
+      <default class="dm4340">
+        <joint armature="0.032" />
+        <position kp="80" kv="6" forcerange="-28 28" />
+      </default>
+      <default class="dm4310">
+        <joint armature="0.0018" />
+        <position kp="30" kv="2" forcerange="-10 10" />
+      </default>
+      <default class="visual">
+        <geom type="mesh" contype="0" conaffinity="0" density="0" group="2" material="black" />
+      </default>
+      <default class="collision">
+        <geom group="3" type="capsule" friction="2.0 0.1 0.01" condim="6" solimp="0.998 0.998 0.001" solref="0.004 1" />
+        <default class="sphere_collision">
+          <geom size="0.0006 0 0" type="sphere" rgba="1 0 0 1" friction="4.0 0.1 0.01" condim="6" solimp="0.998 0.998 0.001" solref="0.004 1" />
+        </default>
+      </default>
+      <default class="finger">
+        <joint type="slide" armature="0.1" frictionloss="0.1" />
+        <position ctrlrange="0.0 0.0495" kp="200" kv="14" inheritrange="0" />
+      </default>
+    </default>
+    <default class="cp2">
+      <geom type="mesh" condim="6" friction="3.0 0.1 0.01" density="0" solref="0.004 1" solimp="0.998 0.998 0.001" priority="1" />
+    </default>
+  </default>
+  <asset>
+    <mesh name="base" file="base.stl" />
+    <mesh name="link1" file="link1.stl" />
+    <mesh name="link2" file="link2.stl" />
+    <mesh name="link3" file="link3.stl" />
+    <mesh name="link4" file="link4.stl" />
+    <mesh name="link5" file="link5.stl" />
+    <mesh name="camera_d405" file="d405.stl" />
+    <material name="black" rgba="0.30 0.30 0.30 1" />
+    <material name="white" rgba="0.9 0.9 0.9 1" />
+  </asset>
+  <worldbody>
+    <body name="right_base" gravcomp="1" pos="0 -0.17 0">
+      <geom pos="-0.0374966 -0.0464005 0.187501" quat="0.707105 0 0.707108 0" type="mesh" rgba="0.317647 0.121569 0.498039 1" mesh="base" />
+      <body name="right_link1" pos="0 0 0.067" quat="0.707105 0 0 -0.707108" gravcomp="1">
+        <inertial pos="-0.00261782 0.00744082 0.0237251" quat="0.602276 0.365837 0.642523 0.300984" mass="0.104154" diaginertia="0.000139023 0.000109628 4.8478e-05" />
+        <joint name="right_joint1" pos="0 0 0" axis="0 0 1" range="-2.61799 3.05433" actuatorfrcrange="-27 27" armature="0.0192" damping="0.032" frictionloss="0.12" />
+        <geom pos="-0.0464 0.0374968 0.119501" quat="0.499998 0.5 0.5 -0.500002" type="mesh" rgba="0.72549 0.45098 0.317647 1" mesh="link1" />
+        <body name="right_link2" pos="-0.0329 0.02 0.0455" quat="0.499998 0.5 -0.500002 -0.5" gravcomp="1">
+          <inertial pos="0.129165 0.000134495 -0.0321253" quat="0.499976 0.500008 0.500105 0.499911" mass="1.46908" diaginertia="0.0146686 0.014599 0.000800089" />
+          <joint name="right_joint2" pos="0 0 0" axis="0 0 1" range="0 3.65" actuatorfrcrange="-27 27" armature="0.0192" damping="0.032" frictionloss="0.12" />
+          <geom pos="-0.0174977 -0.0740001 -0.07925" quat="0.499998 0.5 0.500002 0.5" type="mesh" rgba="0 0.4 0.6 1" mesh="link2" />
+          <body name="right_link3" pos="0.264 4.08431e-07 -0.06375" quat="9.38184e-07 -0.707105 -0.707108 9.38187e-07" gravcomp="1">
+            <inertial pos="0.0556042 -0.135083 -0.0340514" quat="0.704407 0.697077 0.121918 -0.0550519" mass="0.982553" diaginertia="0.00765198 0.0076296 0.000876442" />
+            <joint name="right_joint3" pos="0 0 0" axis="0 0 1" range="0 3.66519" actuatorfrcrange="-27 27" armature="0.0192" damping="0.032" frictionloss="0.12" />
+            <geom pos="0.0740003 -0.281499 -0.0813" quat="9.38184e-07 9.38187e-07 -0.707108 -0.707105" type="mesh" rgba="0.552941 0.580392 0.203922 1" mesh="link3" />
+            <body name="right_link4" pos="0.0600003 -0.244999 -0.00205" quat="1.32679e-06 0 0 -1" gravcomp="1">
+              <inertial pos="-0.0543529 0.057068 -0.0332231" quat="0.636075 0.627088 0.370444 0.254833" mass="0.46678" diaginertia="0.000817855 0.000791274 0.000295776" />
+              <joint name="right_joint4" pos="0 0 0" axis="0 0 1" range="-1.5708 1.5708" actuatorfrcrange="-10 10" armature="0.0012" damping="0.002" frictionloss="0.04" />
+              <geom pos="-0.0138003 0.0364989 -0.0787882" quat="0.707105 0.707108 0 0" type="mesh" rgba="0.545098 0.52549 0.419608 1" mesh="link4" />
+              <body name="right_link5" pos="-0.0403003 0.0703851 -0.0323887" quat="9.38184e-07 -0.707105 -9.38187e-07 -0.707108" gravcomp="1">
+                <inertial pos="-3.55003e-05 -0.00717397 0.0375847" quat="0.911516 0.411243 -0.00302177 -0.00303654" mass="0.403307" diaginertia="0.000219794 0.000195686 0.000169647" />
+                <joint name="right_joint5" pos="0 0 0" axis="0 0 1" range="-1.5708 1.5708" actuatorfrcrange="-10 10" armature="0.0012" damping="0.002" frictionloss="0.04" />
+                <geom pos="-0.0463995 0.0311519 0.0265" quat="0.499998 -0.5 -0.5 -0.500002" type="mesh" rgba="0.827451 0.623529 0.784314 1" mesh="link5" />
+                <body name="right_link6" pos="2.39858e-07 -0.0419481 0.0404996" quat="0.499998 -0.5 -0.5 -0.500002" gravcomp="1">
+                  <inertial pos="0 0 0" mass="1e-6" diaginertia="1e-9 1e-9 1e-9" />
+                  <joint name="right_joint6" pos="0 0 0" axis="0 0 -1" range="-2.0944 2.0944" actuatorfrcrange="-10 10" armature="0.0012" damping="0.002" frictionloss="0.04" />
+                  <body name="right_link_6" pos="0 0 0" quat="0 -1 1 0" gravcomp="1" childclass="yam">
+                    <inertial pos="-0.000217767 7.37059e-05 0.0270545" quat="1 1 0 0" mass="0.367476" diaginertia="0.000265958 0.000242686 0.000227409" />
+                    <geom class="visual" pos="0 -0.164101 -0.110597" quat="1 -1 0 0" mesh="model2__12" />
+                    <geom class="visual" pos="0 -0.164101 -0.110597" quat="1 -1 0 0" mesh="model2__13" />
+                    <geom class="collision" size="0.01 0.035" pos="0 0.039 0.052" quat="1 0 1 0" />
+                    <geom class="collision" size="0.030 0.005" pos="0 0.0 0.03" quat="1 0 0 1" />
+                    <geom class="collision" size="0.01 0.035" pos="0 -0.039 0.052" quat="1 0 1 0" />
+                    <site name="right_tcp_site" pos="0 0 0" quat="1 0 0 -1" size="0.005" rgba="1 0 0 1" group="4" />
+                    <site name="right_grasp_site" pos="0 0 0.1347" quat="1 0 0 -1" size="0.005" rgba="0 1 0 1" group="4" />
+                    <body name="right_camera_d405" pos="-0.0107 0.079729 0.066021" quat="0.906 0.423 0 0">
+                      <geom type="mesh" contype="0" conaffinity="0" group="3" density="0.001" mass="0.001" rgba="0 0 0 0" mesh="camera_d405" />
+                      <geom name="right_cam_col" type="sphere" size="0.02" pos="0 0 0" group="3" rgba="0 0 1 0.0" mass="0.001" />
+                      <body name="right_camera_frame" pos="0.009 0 0" quat="0 0 0 1">
+                        <camera name="right" pos="0 0 0" quat="0 1 0 0" fovy="58" />
+                      </body>
+                    </body>
+                    <body name="right_link_left_finger" pos="-0.037 0.0392 0.0605" quat="1 0 1 0" gravcomp="1">
+                      <inertial pos="-0.0192995 -0.0365902 0.039774" quat="0.757351 0.568898 -0.3199 0.0" mass="0.118" diaginertia="0.000159084 0.000154909 4.63655e-05" />
+                      <joint class="finger" name="right_left_finger" range="-0.00205 0.0475" />
+                      <geom class="visual" pos="0.171097 -0.203301 0.037" quat="1 -1 -1 -1" mesh="model2__14" />
+                      <geom class="visual" pos="0.171097 -0.203301 0.037" quat="1 -1 -1 -1" mesh="model2__15" />
+                      <body name="right_lf_rot" quat="1 -1 -1 1" pos="0.0 -0.0392 0.037" gravcomp="1">
+                        <geom class="collision" size="0.01 0.03" pos="0.0 -0.02 0.012" quat="1 0 1 0" rgba="0.381493 0.492734 0.780446 1" />
+                        <geom class="collision" size="0.01 0.02" pos="-0.02 -0.01 0.032" quat="1 0 2.5 0" rgba="0.381493 0.492734 0.780446 1" />
+                        <body name="right_lf_down" quat="1 0 0 0" pos="-0.044 0.0 0.0" gravcomp="1">
+                          <geom class="collision" size="0.01 0.01" pos="0.0 -0.020 0.012" quat="1 -0.1 0 0" rgba="0.381493 0.492734 0.780446 1" />
+                          <geom class="collision" size="0.003 0.022" pos="0.005 -0.014 0.04" quat="1 -0.2 0 0" rgba="0.381493 0.492734 0.780446 1" />
+                          <geom class="collision" size="0.003 0.022" pos="-0.005 -0.014 0.04" quat="1 -0.2 0 0" rgba="0.381493 0.492734 0.780446 1" />
+                          <geom class="collision" type="box" size="0.006 0.002 0.04" pos="0 -0.0024 0.046" quat="1 0 0 0" rgba="0.381493 0.492734 0.780446 1" />
+                          <geom class="collision" type="box" size="0.006 0.002 0.039" pos="0.027 -0.0024 0.053" quat="1 0 2.5 0" rgba="0.381493 0.492734 0.780446 1" />
+                          <geom class="sphere_collision" pos="0.003  -0.0004 0.078" />
+                          <geom class="sphere_collision" pos="-0.003 -0.0004 0.078" />
+                          <geom class="sphere_collision" pos="0.003  -0.0004 0.07" />
+                          <geom class="sphere_collision" pos="-0.003 -0.0004 0.07" />
+                          <geom class="sphere_collision" pos="0.003  -0.0004 0.06" />
+                          <geom class="sphere_collision" pos="-0.003 -0.0004 0.06" />
+                        </body>
+                      </body>
+                    </body>
+                    <body name="right_link_right_finger" pos="0.037 -0.0392 0.0605" quat="1 0 1 0" gravcomp="1">
+                      <inertial pos="-0.0192995 0.0365902 -0.039774" quat="-0.757351 0.568898 -0.3199 0" mass="0.118" diaginertia="0.000159084 0.000154909 4.63655e-05" />
+                      <joint class="finger" name="right_right_finger" range="-0.0475 0.00205" />
+                      <geom class="visual" pos="0.171097 -0.124901 -0.037" quat="1 -1 -1 -1" mesh="model2__16" />
+                      <geom class="visual" pos="0.171097 -0.124901 -0.037" quat="1 -1 -1 -1" mesh="model2__17" />
+                      <body name="right_rf_rot" quat="1 1 -1 -1" pos="0.0 0.0392 -0.037" gravcomp="1">
+                        <geom class="collision" size="0.01 0.03" pos="0.0 -0.02 0.012" quat="1 0 1 0" rgba="0.381493 0.492734 0.780446 1" />
+                        <geom class="collision" size="0.01 0.02" pos="0.02 -0.01 0.032" quat="1 0 -2.5 0" rgba="0.381493 0.492734 0.780446 1" />
+                        <body name="right_rf_down" quat="1 0 0 0" pos="0.044 0.0 0.0" gravcomp="1">
+                          <geom class="collision" size="0.01 0.01" pos="0.0 -0.020 0.012" quat="1 -0.1 0 0" rgba="0.381493 0.492734 0.780446 1" />
+                          <geom class="collision" size="0.003 0.022" pos="0.005 -0.014 0.04" quat="1 -0.2 0 0" rgba="0.381493 0.492734 0.780446 1" />
+                          <geom class="collision" size="0.003 0.022" pos="-0.005 -0.014 0.04" quat="1 -0.2 0 0" rgba="0.381493 0.492734 0.780446 1" />
+                          <geom class="collision" type="box" size="0.006 0.002 0.04" pos="0 -0.0024 0.046" quat="1 0 0 0" rgba="0.381493 0.492734 0.780446 1" />
+                          <geom class="collision" type="box" size="0.006 0.002 0.039" pos="-0.027 -0.0024 0.053" quat="1 0 -2.5 0" rgba="0.381493 0.492734 0.780446 1" />
+                          <geom class="sphere_collision" pos="0.003  -0.0004 0.078" />
+                          <geom class="sphere_collision" pos="-0.003 -0.0004 0.078" />
+                          <geom class="sphere_collision" pos="0.003  -0.0004 0.07" />
+                          <geom class="sphere_collision" pos="-0.003 -0.0004 0.07" />
+                          <geom class="sphere_collision" pos="0.003  -0.0004 0.06" />
+                          <geom class="sphere_collision" pos="-0.003 -0.0004 0.06" />
+                        </body>
+                      </body>
+                    </body>
+                  </body>
+                </body>
+              </body>
+            </body>
+          </body>
+        </body>
+      </body>
+    </body>
+    <body name="left_base" gravcomp="1" pos="0 0.17 0">
+      <geom pos="-0.0374966 -0.0464005 0.187501" quat="0.707105 0 0.707108 0" type="mesh" rgba="0.317647 0.121569 0.498039 1" mesh="base" />
+      <body name="left_link1" pos="0 0 0.067" quat="0.707105 0 0 -0.707108" gravcomp="1">
+        <inertial pos="-0.00261782 0.00744082 0.0237251" quat="0.602276 0.365837 0.642523 0.300984" mass="0.104154" diaginertia="0.000139023 0.000109628 4.8478e-05" />
+        <joint name="left_joint1" pos="0 0 0" axis="0 0 1" range="-2.61799 3.05433" actuatorfrcrange="-27 27" armature="0.0192" damping="0.032" frictionloss="0.12" />
+        <geom pos="-0.0464 0.0374968 0.119501" quat="0.499998 0.5 0.5 -0.500002" type="mesh" rgba="0.72549 0.45098 0.317647 1" mesh="link1" />
+        <body name="left_link2" pos="-0.0329 0.02 0.0455" quat="0.499998 0.5 -0.500002 -0.5" gravcomp="1">
+          <inertial pos="0.129165 0.000134495 -0.0321253" quat="0.499976 0.500008 0.500105 0.499911" mass="1.46908" diaginertia="0.0146686 0.014599 0.000800089" />
+          <joint name="left_joint2" pos="0 0 0" axis="0 0 1" range="0 3.65" actuatorfrcrange="-27 27" armature="0.0192" damping="0.032" frictionloss="0.12" />
+          <geom pos="-0.0174977 -0.0740001 -0.07925" quat="0.499998 0.5 0.500002 0.5" type="mesh" rgba="0 0.4 0.6 1" mesh="link2" />
+          <body name="left_link3" pos="0.264 4.08431e-07 -0.06375" quat="9.38184e-07 -0.707105 -0.707108 9.38187e-07" gravcomp="1">
+            <inertial pos="0.0556042 -0.135083 -0.0340514" quat="0.704407 0.697077 0.121918 -0.0550519" mass="0.982553" diaginertia="0.00765198 0.0076296 0.000876442" />
+            <joint name="left_joint3" pos="0 0 0" axis="0 0 1" range="0 3.66519" actuatorfrcrange="-27 27" armature="0.0192" damping="0.032" frictionloss="0.12" />
+            <geom pos="0.0740003 -0.281499 -0.0813" quat="9.38184e-07 9.38187e-07 -0.707108 -0.707105" type="mesh" rgba="0.552941 0.580392 0.203922 1" mesh="link3" />
+            <body name="left_link4" pos="0.0600003 -0.244999 -0.00205" quat="1.32679e-06 0 0 -1" gravcomp="1">
+              <inertial pos="-0.0543529 0.057068 -0.0332231" quat="0.636075 0.627088 0.370444 0.254833" mass="0.46678" diaginertia="0.000817855 0.000791274 0.000295776" />
+              <joint name="left_joint4" pos="0 0 0" axis="0 0 1" range="-1.5708 1.5708" actuatorfrcrange="-10 10" armature="0.0012" damping="0.002" frictionloss="0.04" />
+              <geom pos="-0.0138003 0.0364989 -0.0787882" quat="0.707105 0.707108 0 0" type="mesh" rgba="0.545098 0.52549 0.419608 1" mesh="link4" />
+              <body name="left_link5" pos="-0.0403003 0.0703851 -0.0323887" quat="9.38184e-07 -0.707105 -9.38187e-07 -0.707108" gravcomp="1">
+                <inertial pos="-3.55003e-05 -0.00717397 0.0375847" quat="0.911516 0.411243 -0.00302177 -0.00303654" mass="0.403307" diaginertia="0.000219794 0.000195686 0.000169647" />
+                <joint name="left_joint5" pos="0 0 0" axis="0 0 1" range="-1.5708 1.5708" actuatorfrcrange="-10 10" armature="0.0012" damping="0.002" frictionloss="0.04" />
+                <geom pos="-0.0463995 0.0311519 0.0265" quat="0.499998 -0.5 -0.5 -0.500002" type="mesh" rgba="0.827451 0.623529 0.784314 1" mesh="link5" />
+                <body name="left_link6" pos="2.39858e-07 -0.0419481 0.0404996" quat="0.499998 -0.5 -0.5 -0.500002" gravcomp="1">
+                  <inertial pos="0 0 0" mass="1e-6" diaginertia="1e-9 1e-9 1e-9" />
+                  <joint name="left_joint6" pos="0 0 0" axis="0 0 -1" range="-2.0944 2.0944" actuatorfrcrange="-10 10" armature="0.0012" damping="0.002" frictionloss="0.04" />
+                  <body name="left_link_6" pos="0 0 0" quat="0 -1 1 0" gravcomp="1" childclass="yam">
+                    <inertial pos="-0.000217767 7.37059e-05 0.0270545" quat="1 1 0 0" mass="0.367476" diaginertia="0.000265958 0.000242686 0.000227409" />
+                    <geom class="visual" pos="0 -0.164101 -0.110597" quat="1 -1 0 0" mesh="model2__12" />
+                    <geom class="visual" pos="0 -0.164101 -0.110597" quat="1 -1 0 0" mesh="model2__13" />
+                    <geom class="collision" size="0.01 0.035" pos="0 0.039 0.052" quat="1 0 1 0" />
+                    <geom class="collision" size="0.030 0.005" pos="0 0.0 0.03" quat="1 0 0 1" />
+                    <geom class="collision" size="0.01 0.035" pos="0 -0.039 0.052" quat="1 0 1 0" />
+                    <site name="left_tcp_site" pos="0 0 0" quat="1 0 0 -1" size="0.005" rgba="1 0 0 1" group="4" />
+                    <site name="left_grasp_site" pos="0 0 0.1347" quat="1 0 0 -1" size="0.005" rgba="0 1 0 1" group="4" />
+                    <body name="left_camera_d405" pos="-0.0107 0.079729 0.066021" quat="0.906 0.423 0 0">
+                      <geom type="mesh" contype="0" conaffinity="0" group="3" density="0.001" mass="0.001" rgba="0 0 0 0" mesh="camera_d405" />
+                      <geom name="left_cam_col" type="sphere" size="0.02" pos="0 0 0" group="3" rgba="0 0 1 0.0" mass="0.001" />
+                      <body name="left_camera_frame" pos="0.009 0 0" quat="0 0 0 1">
+                        <camera name="left" pos="0 0 0" quat="0 1 0 0" fovy="58" />
+                      </body>
+                    </body>
+                    <body name="left_link_left_finger" pos="-0.037 0.0392 0.0605" quat="1 0 1 0" gravcomp="1">
+                      <inertial pos="-0.0192995 -0.0365902 0.039774" quat="0.757351 0.568898 -0.3199 0.0" mass="0.118" diaginertia="0.000159084 0.000154909 4.63655e-05" />
+                      <joint class="finger" name="left_left_finger" range="-0.00205 0.0475" />
+                      <geom class="visual" pos="0.171097 -0.203301 0.037" quat="1 -1 -1 -1" mesh="model2__14" />
+                      <geom class="visual" pos="0.171097 -0.203301 0.037" quat="1 -1 -1 -1" mesh="model2__15" />
+                      <body name="left_lf_rot" quat="1 -1 -1 1" pos="0.0 -0.0392 0.037" gravcomp="1">
+                        <geom class="collision" size="0.01 0.03" pos="0.0 -0.02 0.012" quat="1 0 1 0" rgba="0.381493 0.492734 0.780446 1" />
+                        <geom class="collision" size="0.01 0.02" pos="-0.02 -0.01 0.032" quat="1 0 2.5 0" rgba="0.381493 0.492734 0.780446 1" />
+                        <body name="left_lf_down" quat="1 0 0 0" pos="-0.044 0.0 0.0" gravcomp="1">
+                          <geom class="collision" size="0.01 0.01" pos="0.0 -0.020 0.012" quat="1 -0.1 0 0" rgba="0.381493 0.492734 0.780446 1" />
+                          <geom class="collision" size="0.003 0.022" pos="0.005 -0.014 0.04" quat="1 -0.2 0 0" rgba="0.381493 0.492734 0.780446 1" />
+                          <geom class="collision" size="0.003 0.022" pos="-0.005 -0.014 0.04" quat="1 -0.2 0 0" rgba="0.381493 0.492734 0.780446 1" />
+                          <geom class="collision" type="box" size="0.006 0.002 0.04" pos="0 -0.0024 0.046" quat="1 0 0 0" rgba="0.381493 0.492734 0.780446 1" />
+                          <geom class="collision" type="box" size="0.006 0.002 0.039" pos="0.027 -0.0024 0.053" quat="1 0 2.5 0" rgba="0.381493 0.492734 0.780446 1" />
+                          <geom class="sphere_collision" pos="0.003  -0.0004 0.078" />
+                          <geom class="sphere_collision" pos="-0.003 -0.0004 0.078" />
+                          <geom class="sphere_collision" pos="0.003  -0.0004 0.07" />
+                          <geom class="sphere_collision" pos="-0.003 -0.0004 0.07" />
+                          <geom class="sphere_collision" pos="0.003  -0.0004 0.06" />
+                          <geom class="sphere_collision" pos="-0.003 -0.0004 0.06" />
+                        </body>
+                      </body>
+                    </body>
+                    <body name="left_link_right_finger" pos="0.037 -0.0392 0.0605" quat="1 0 1 0" gravcomp="1">
+                      <inertial pos="-0.0192995 0.0365902 -0.039774" quat="-0.757351 0.568898 -0.3199 0" mass="0.118" diaginertia="0.000159084 0.000154909 4.63655e-05" />
+                      <joint class="finger" name="left_right_finger" range="-0.0475 0.00205" />
+                      <geom class="visual" pos="0.171097 -0.124901 -0.037" quat="1 -1 -1 -1" mesh="model2__16" />
+                      <geom class="visual" pos="0.171097 -0.124901 -0.037" quat="1 -1 -1 -1" mesh="model2__17" />
+                      <body name="left_rf_rot" quat="1 1 -1 -1" pos="0.0 0.0392 -0.037" gravcomp="1">
+                        <geom class="collision" size="0.01 0.03" pos="0.0 -0.02 0.012" quat="1 0 1 0" rgba="0.381493 0.492734 0.780446 1" />
+                        <geom class="collision" size="0.01 0.02" pos="0.02 -0.01 0.032" quat="1 0 -2.5 0" rgba="0.381493 0.492734 0.780446 1" />
+                        <body name="left_rf_down" quat="1 0 0 0" pos="0.044 0.0 0.0" gravcomp="1">
+                          <geom class="collision" size="0.01 0.01" pos="0.0 -0.020 0.012" quat="1 -0.1 0 0" rgba="0.381493 0.492734 0.780446 1" />
+                          <geom class="collision" size="0.003 0.022" pos="0.005 -0.014 0.04" quat="1 -0.2 0 0" rgba="0.381493 0.492734 0.780446 1" />
+                          <geom class="collision" size="0.003 0.022" pos="-0.005 -0.014 0.04" quat="1 -0.2 0 0" rgba="0.381493 0.492734 0.780446 1" />
+                          <geom class="collision" type="box" size="0.006 0.002 0.04" pos="0 -0.0024 0.046" quat="1 0 0 0" rgba="0.381493 0.492734 0.780446 1" />
+                          <geom class="collision" type="box" size="0.006 0.002 0.039" pos="-0.027 -0.0024 0.053" quat="1 0 -2.5 0" rgba="0.381493 0.492734 0.780446 1" />
+                          <geom class="sphere_collision" pos="0.003  -0.0004 0.078" />
+                          <geom class="sphere_collision" pos="-0.003 -0.0004 0.078" />
+                          <geom class="sphere_collision" pos="0.003  -0.0004 0.07" />
+                          <geom class="sphere_collision" pos="-0.003 -0.0004 0.07" />
+                          <geom class="sphere_collision" pos="0.003  -0.0004 0.06" />
+                          <geom class="sphere_collision" pos="-0.003 -0.0004 0.06" />
+                        </body>
+                      </body>
+                    </body>
+                  </body>
+                </body>
+              </body>
+            </body>
+          </body>
+        </body>
+      </body>
+    </body>
+  </worldbody>
+  <equality>
+    <joint joint1="right_left_finger" joint2="right_right_finger" polycoef="0 -1 0 0 0" />
+    <joint joint1="left_left_finger" joint2="left_right_finger" polycoef="0 -1 0 0 0" />
+  </equality>
+  <actuator>
+    <position name="right_joint1" joint="right_joint1" class="dm4340" />
+    <position name="right_joint2" joint="right_joint2" class="dm4340" />
+    <position name="right_joint3" joint="right_joint3" class="dm4340" />
+    <position name="right_joint4" joint="right_joint4" class="dm4310" />
+    <position name="right_joint5" joint="right_joint5" class="dm4310" />
+    <position name="right_joint6" joint="right_joint6" class="dm4310" />
+    <position class="finger" name="right_gripper" joint="right_left_finger" />
+    <position name="left_joint1" joint="left_joint1" class="dm4340" />
+    <position name="left_joint2" joint="left_joint2" class="dm4340" />
+    <position name="left_joint3" joint="left_joint3" class="dm4340" />
+    <position name="left_joint4" joint="left_joint4" class="dm4310" />
+    <position name="left_joint5" joint="left_joint5" class="dm4310" />
+    <position name="left_joint6" joint="left_joint6" class="dm4310" />
+    <position class="finger" name="left_gripper" joint="left_left_finger" />
+  </actuator>
+</mujoco>

@@ -1,0 +1,4 @@
+#!/usr/bin/env bash
+# The command line onto the live page, with run/ pinned beside scene.py: the checkout's .venv, else $PYTHON or python3.
+here="$(dirname "$0")"; py="$here/../../.venv/bin/python"; [ -x "$py" ] || py="${PYTHON:-python3}"
+exec "$py" -m robosimstudio_real2sim_agent --run-dir "$here/run" "$@"

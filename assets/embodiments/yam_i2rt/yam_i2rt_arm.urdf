@@ -1,0 +1,52 @@
+<?xml version="1.0"?>
+<robot name="yam_i2rt_arm">
+  <link name="base_link"/>
+  <link name="link_1"/>
+  <link name="link_2"/>
+  <link name="link_3"/>
+  <link name="link_4"/>
+  <link name="link_5"/>
+  <link name="link_6"/>
+  <joint name="joint1" type="revolute">
+    <origin xyz="0 0 0.067" rpy="0 0 -1.57080057"/>
+    <parent link="base_link"/>
+    <child link="link_1"/>
+    <axis xyz="0 0 1"/>
+    <limit effort="27" velocity="10" lower="-2.61799" upper="3.05433"/>
+  </joint>
+  <joint name="joint2" type="revolute">
+    <origin xyz="-0.0329 0.02 0.0455" rpy="1.57080033 8.00004507e-12 -1.57080033"/>
+    <parent link="link_1"/>
+    <child link="link_2"/>
+    <axis xyz="0 0 1"/>
+    <limit effort="27" velocity="10" lower="0" upper="3.65"/>
+  </joint>
+  <joint name="joint3" type="revolute">
+    <origin xyz="0.264 4.08431e-07 -0.06375" rpy="-3.14159 -1.38622447e-12 1.57080057"/>
+    <parent link="link_2"/>
+    <child link="link_3"/>
+    <axis xyz="0 0 1"/>
+    <limit effort="27" velocity="10" lower="0" upper="3.66519"/>
+  </joint>
+  <joint name="joint4" type="revolute">
+    <origin xyz="0.0600003 -0.244999 -0.00205" rpy="0 0 -3.14159"/>
+    <parent link="link_3"/>
+    <child link="link_4"/>
+    <axis xyz="0 0 1"/>
+    <limit effort="27" velocity="10" lower="-1.5708" upper="1.5708"/>
+  </joint>
+  <joint name="joint5" type="revolute">
+    <origin xyz="-0.0403003 0.0703851 -0.0323887" rpy="2.32679519e-06 -1.57079208 -3.14159233"/>
+    <parent link="link_4"/>
+    <child link="link_5"/>
+    <axis xyz="0 0 1"/>
+    <limit effort="27" velocity="10" lower="-1.5708" upper="1.5708"/>
+  </joint>
+  <joint name="joint6" type="revolute">
+    <origin xyz="2.39858e-07 -0.0419481 0.0404996" rpy="1.57079433 -1.57079233 3.14159065"/>
+    <parent link="link_5"/>
+    <child link="link_6"/>
+    <axis xyz="0 0 -1"/>
+    <limit effort="27" velocity="10" lower="-2.0944" upper="2.0944"/>
+  </joint>
+</robot>

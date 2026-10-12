@@ -1,0 +1,69 @@
+{
+  "version": 3,
+  "meta": {
+    "name": "pick_place_retry",
+    "description": "Pick the cube with the jaws across its faces, check the grip and try once more if it missed, then set it down in the square."
+  },
+  "nodes": {
+    "pick": {"type": "subgraph", "ref": "pick_sg"},
+    "pick_again": {"type": "subgraph", "ref": "pick_sg"},
+    "place": {"type": "subgraph", "ref": "place_sg"},
+    "done": {"type": "end", "status": "success"},
+    "abort": {"type": "end", "status": "failure"}
+  },
+  "edges": [["START", "pick"]],
+  "conditional_edges": {
+    "pick": {"router_field": "exit", "mapping": {"held": "place", "missed": "pick_again"}},
+    "pick_again": {"router_field": "exit", "mapping": {"held": "place", "missed": "abort"}},
+    "place": {"router_field": "exit", "mapping": {"placed": "done", "failed": "abort"}}
+  },
+  "subgraphs": {
+    "pick_sg": {
+      "skill": "generic",
+      "inputs": {},
+      "outputs": {},
+      "nodes": {
+        "cube": {"type": "tool", "tool": "sim.get_object_pose", "inputs": {"object_name": "cube"}},
+        "plan": {"type": "script", "script": "scripts/plan_pick.py", "inputs": {"cube": {"$ref": "cube.pose"}}},
+        "open": {"type": "tool", "tool": "robot.set_grip", "inputs": {"preset": "open", "settle_steps": 10}},
+        "above": {"type": "tool", "tool": "robot.go_to_pose", "inputs": {"pose": {"$ref": "plan.above"}}},
+        "down": {"type": "tool", "tool": "robot.go_to_pose", "inputs": {"pose": {"$ref": "plan.grasp"}}},
+        "close": {"type": "tool", "tool": "robot.close_gripper", "inputs": {"settle_steps": 60}},
+        "lift": {"type": "tool", "tool": "robot.go_to_pose", "inputs": {"pose": {"$ref": "plan.above"}}},
+        "check": {"type": "script", "script": "scripts/check_grip.py", "inputs": {}},
+        "held": {"type": "noop"}
+      },
+      "edges": [
+        ["START", "cube"], ["cube", "plan"], ["plan", "open"], ["open", "above"],
+        ["above", "down"], ["down", "close"], ["close", "lift"], ["lift", "check"],
+        ["check", "held"], ["held", "END"]
+      ],
+      "conditional_edges": {},
+      "exit": {"router_field": null, "success_values": ["held"]},
+      "on_error": "missed"
+    },
+    "place_sg": {
+      "skill": "generic",
+      "inputs": {},
+      "outputs": {},
+      "nodes": {
+        "square": {"type": "tool", "tool": "sim.get_region_obb", "inputs": {"region_name": "square"}},
+        "hand": {"type": "tool", "tool": "robot.get_ee_pose", "inputs": {}},
+        "plan": {"type": "script", "script": "scripts/plan_place.py", "inputs": {"square": {"$ref": "square.obb"}, "hand": {"$ref": "hand.pose"}}},
+        "over": {"type": "tool", "tool": "robot.go_to_pose", "inputs": {"pose": {"$ref": "plan.over"}}},
+        "lower": {"type": "tool", "tool": "robot.go_to_pose", "inputs": {"pose": {"$ref": "plan.drop"}}},
+        "release": {"type": "tool", "tool": "robot.set_grip", "inputs": {"preset": "open", "settle_steps": 20}},
+        "away": {"type": "tool", "tool": "robot.go_to_pose", "inputs": {"pose": {"$ref": "plan.over"}}},
+        "placed": {"type": "noop"}
+      },
+      "edges": [
+        ["START", "square"], ["square", "hand"], ["hand", "plan"], ["plan", "over"],
+        ["over", "lower"], ["lower", "release"], ["release", "away"], ["away", "placed"],
+        ["placed", "END"]
+      ],
+      "conditional_edges": {},
+      "exit": {"router_field": null, "success_values": ["placed"]},
+      "on_error": "failed"
+    }
+  }
+}

@@ -1,0 +1,255 @@
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[project]
+name = "robosimstudio"
+dynamic = ["version"]
+description = "An interactive, agentic simulation toolkit for robot manipulation, built on Newton"
+readme = "README.md"
+license = "Apache-2.0"
+requires-python = ">=3.10"
+authors = [{ name = "Kaiyuan Chen" }]
+keywords = ["robotics", "simulation", "manipulation", "deformable", "newton", "real-to-sim"]
+classifiers = [
+    "Development Status :: 3 - Alpha",
+    "Intended Audience :: Science/Research",
+    "Operating System :: POSIX :: Linux",
+    "Programming Language :: Python :: 3",
+    "Programming Language :: Python :: 3.10",
+    "Programming Language :: Python :: 3.11",
+    "Programming Language :: Python :: 3.12",
+    "Topic :: Scientific/Engineering",
+]
+dependencies = [
+    # [sim] carries mujoco and mujoco-warp, which the default rigid solver needs
+    # at runtime; newton imports them lazily, so a bare "newton" resolves and
+    # then cannot step an arm.
+    "newton[sim]>=1.6,<1.7",
+    "numpy",
+    # ModelBuilder.approximate_meshes(method="convex_hull") imports scipy.spatial
+    # at call time, and every scene with a hand in it calls it.
+    "scipy>=1.11.0",
+    # The episode recorder and the studio's video export. The [ffmpeg] marker is
+    # the point: bare imageio imports and then cannot open an mp4.
+    "imageio[ffmpeg]",
+    # The browser page. rss.view(sim) is how a scene is looked at and taken hold
+    # of, so it is part of the base install.
+    "viser>=1.0.30",
+    # The YAM's fingertips are cut into convex pieces when the arm is built, so
+    # every scene with a YAM in it needs this. Pinned: the pieces, and with them
+    # the contact shapes, change between versions.
+    "coacd==1.0.11",
+    # The IK solver. Every arm is solved by PyRoKi from its URDF (jax, jaxls,
+    # yourdfpy come with it); an arm that ships no URDF falls back to Newton's
+    # own solver without being asked. Pinned to a commit because PyPI has no
+    # pyroki to name, which is also why this wheel cannot be published to an
+    # index until it does (hatch's allow-direct-references below).
+    "pyroki @ git+https://github.com/chungmin99/pyroki.git@95afccc22658c461ab1042a048ae4e9c24bc2a47",
+]
+
+[project.optional-dependencies]
+# The FEM engine behind rss.sponge: a CPU, fully implicit solver co-simulated
+# beside the Newton arm. It ships wheels for Python 3.12 only; on any other
+# interpreter the extra resolves to nothing and a sponge scene says so.
+superdex = ["superdex-physics==1.0.*; python_version == '3.12'"]
+# Genesis's IPC coupler as a second foreign engine. Install it in a virtual
+# environment of its own: it moves twenty packages, and trimesh is pinned below
+# 5 here because genesis-world otherwise drags it across a major version.
+genesis = [
+    "genesis-world==1.3.*",
+    "torch",
+    "trimesh<5",
+    "pyuipc>=0.0.26; sys_platform == 'linux' and platform_machine == 'x86_64'",
+]
+# The OVRTX path-traced renderer. Pinned: its render-var names and readback API
+# are private surface. pyglet is here because Newton's viewer camera imports
+# pyglet.math at call time.
+rtx = ["ovrtx==0.4.0.*", "usd-core", "pyglet"]
+# USD scene import.
+usd = ["newton[importers]"]
+# The Feetech motor bus behind leader-arm teleoperation.
+lerobot-feetech = ["lerobot[feetech]"]
+# The graph runtime robosimstudio_policy_agent runs a policy with, pinned by git below.
+# Importing its connector reads h5py and pydantic; transformers serves the
+# optional SAM 3 segmentation tool. The runtime itself requires torch and cuRobo,
+# so this extra is large.
+gap = [
+    "graph-as-policy",
+    "graph-as-policy-core",
+    "h5py",
+    "pydantic",
+    "msgpack",
+    "msgpack-numpy",
+    "transformers>=5.0",
+]
+# The collision-aware planner behind `motion="plan"`. [cu12] adds cuda-core,
+# which compiles its kernels at first use.
+curobo = ["nvidia-curobo[cu12]"]
+dev = ["ruff==0.16.1"]
+
+[project.urls]
+Repository = "https://github.com/robosimstudio/robosimstudio"
+Issues = "https://github.com/robosimstudio/robosimstudio/issues"
+
+# The version is stated once, in the package, and read from there.
+# pyroki is a git reference, which hatchling refuses to put in a wheel unless told
+# the project means it. It does: this wheel is installed from a checkout, not an index.
+[tool.hatch.metadata]
+allow-direct-references = true
+
+[tool.hatch.version]
+path = "robosimstudio/_version.py"
+
+# Five packages, one distribution: the library, the browser page over it, the
+# real-to-sim page a coding agent drives, the benchmark (tasks, goals, the run
+# harness) and the policy agent (a graph as the policy). Which may name which is
+# tests/test_import_direction.py.
+[tool.hatch.build.targets.wheel]
+packages = [
+    "robosimstudio",
+    "robosimstudio_bench",
+    "robosimstudio_policy_agent",
+    "robosimstudio_real2sim_agent",
+    "robosimstudio_studio",
+]
+
+# Robot assets sit beside the packages in a checkout, and so do the cloth and
+# soft implementations: one module each, in the example folder that runs it. A
+# wheel has no repository root to climb to, so it carries a copy where
+# robosimstudio/paths.py and robosimstudio/roots.py look last. The two modules
+# are mapped file by file, so the numbered example scripts beside them stay out
+# of the wheel.
+[tool.hatch.build.targets.wheel.force-include]
+"assets" = "robosimstudio/assets"
+"examples/02_cloth/cloth.py" = "robosimstudio/_domain_packs/cloth.py"
+"examples/03_soft/soft.py" = "robosimstudio/_domain_packs/soft.py"
+"examples/10_rope/rod" = "robosimstudio/_domain_packs/rod"
+
+[tool.hatch.build.targets.sdist]
+include = [
+    "/robosimstudio",
+    "/robosimstudio_bench",
+    "/robosimstudio_policy_agent",
+    "/robosimstudio_real2sim_agent",
+    "/robosimstudio_studio",
+    "/assets",
+    "/examples",
+    "/tests",
+    "/scripts",
+    "/README.md",
+    "/LICENSE",
+    "/NOTICE",
+    "/CITATION.cff",
+]
+
+# NVIDIA's index, for ovrtx only: PyPI does not carry it. Explicit, so nothing
+# else may come from it.
+[tool.uv.sources]
+ovrtx = { index = "nvidia" }
+# The graph runtime at the revision every graph here was measured against.
+graph-as-policy = { git = "https://github.com/KeplerC/graph-as-policy.git", rev = "09e45f8de27bc1a29629382ed7c2b9b4b384b3d6" }
+graph-as-policy-core = { git = "https://github.com/KeplerC/graph-as-policy.git", rev = "09e45f8de27bc1a29629382ed7c2b9b4b384b3d6", subdirectory = "gap-core" }
+nvidia-curobo = { git = "https://github.com/NVlabs/curobo.git", tag = "v0.8.0" }
+
+[[tool.uv.index]]
+name = "nvidia"
+url = "https://pypi.nvidia.com"
+explicit = true
+
+# The graph runtime also requires its own simulator stack (LIBERO, robosuite,
+# gym, bddl) and pins mujoco 3.6. Nothing robosimstudio_policy_agent imports from it
+# loads any of those, so they are dropped, and mujoco follows Newton.
+[tool.uv]
+override-dependencies = [
+    "PyOpenGL>=3.1.7",
+    "libero; sys_platform == 'never'",
+    "robosuite; sys_platform == 'never'",
+    "gym; sys_platform == 'never'",
+    "bddl; sys_platform == 'never'",
+    "mujoco~=3.12.0",
+]
+
+# Skill registries a graph's subgraphs may name, in gap's own convention: a
+# clone of open-robot-skills beside this checkout. A subgraph whose skill is
+# "generic" needs none. $GAP_SKILLS_PATH overrides it.
+[tool.gap]
+registries = ["../open-robot-skills"]
+
+# Ruff config is copied from Newton's own, so a file that lints clean here lints
+# clean there.
+[tool.ruff]
+cache-dir = ".cache/ruff"
+line-length = 120
+indent-width = 4
+
+[tool.ruff.lint]
+select = [
+    "E",   # pycodestyle errors
+    "I",   # isort
+    "F",   # pyflakes
+    "W",   # pycodestyle warnings
+    "B",   # flake8-bugbear
+    "C4",  # flake8-comprehensions
+    "NPY", # NumPy-specific rules
+    "PLC", # pylint convention
+    "PLE", # pylint error
+    "PLW", # pylint warning
+    "UP",  # pyupgrade
+    "RUF", # ruff-specific rules
+    "TID253", # banned module-level imports
+]
+ignore = [
+    "E501",   # long lines, as Newton does
+    # Function-local imports are this tree's convention, not a smell: every
+    # optional backend is imported inside the function that needs it so a base
+    # install never pays for it. What must not be imported where is checked
+    # structurally (tests/test_extras.py, tests/test_import_direction.py).
+    "PLC0415",
+    "E741",   # Warp often uses l as a variable name
+    "UP018",  # Warp kernels often use float(val) and int(val)
+    "RUF046", # Warp kernels often use int(val)
+    "F811",   # Warp kernel/function overloads
+    "TC001",
+    "TC002",
+    "TC003",
+    "F821",
+]
+
+[tool.ruff.lint.per-file-ignores]
+# Examples set env vars and pick GL platforms before importing, as Newton's do.
+"examples/**/*" = ["E402", "TID253"]
+
+[tool.ruff.lint.flake8-tidy-imports]
+# Everything optional is imported inside the function that needs it, so a base
+# install never pays for a backend it does not use.
+banned-module-level-imports = [
+    "coacd",
+    "collada",
+    "genesis",
+    "lerobot",
+    "pyroki",
+    "imgui_bundle",
+    "matplotlib",
+    "mujoco",
+    "mujoco_warp",
+    "ovrtx",
+    "PIL",
+    "pxr",
+    "pyglet",
+    "scipy",
+    "superdex",
+    "torch",
+    "trimesh",
+    "uipc",
+    "viser",
+]
+
+[tool.ruff.lint.pydocstyle]
+convention = "google"
+
+[tool.ruff.format]
+quote-style = "double"
+indent-style = "space"
+# Markdown is prose here, not source.
+exclude = ["*.md"]

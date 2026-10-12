@@ -1,0 +1,11 @@
+# TODO(release): complete the author list and fill in the arXiv identifier.
+cff-version: 1.2.0
+message: "If you use RoboSimStudio in your research, please cite it."
+title: "RoboSimStudio: An Interactive Agentic Simulation Toolkit"
+type: software
+authors:
+  - family-names: Chen
+    given-names: Kaiyuan
+license: Apache-2.0
+version: 0.1.0
+repository-code: "https://github.com/robosimstudio/robosimstudio"

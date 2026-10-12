@@ -1,0 +1,55 @@
+<?xml version="1.0"?>
+<!-- One i2rt YAM arm of yam_bimanual_arms.xml, transcribed body by body: the IK solver
+     calibrates it against the MJCF the scene steps and refuses drift. Regenerate with
+     the same recipe as the i2rt arm (body pos/quat as the joint origin, the joint axis and range, in chain order); do not edit by hand. -->
+<robot name="yam_bimanual_arm">
+  <link name="base_link"/>
+  <link name="link_1"/>
+  <link name="link_2"/>
+  <link name="link_3"/>
+  <link name="link_4"/>
+  <link name="link_5"/>
+  <link name="link_6"/>
+  <joint name="joint1" type="revolute">
+    <origin xyz="0 0 0.0631" rpy="0 0 1.57079633"/>
+    <parent link="base_link"/>
+    <child link="link_1"/>
+    <axis xyz="0 0 1"/>
+    <limit effort="27" velocity="10" lower="-2.61799" upper="3.05433"/>
+  </joint>
+  <joint name="joint2" type="revolute">
+    <origin xyz="2.5e-05 -0.02 0.0409" rpy="1.57079633 0 1.57079633"/>
+    <parent link="link_1"/>
+    <child link="link_2"/>
+    <axis xyz="0 0 1"/>
+    <limit effort="27" velocity="10" lower="0" upper="3.66519"/>
+  </joint>
+  <joint name="joint3" type="revolute">
+    <origin xyz="0.264 0 0" rpy="3.14159265 0 0"/>
+    <parent link="link_2"/>
+    <child link="link_3"/>
+    <axis xyz="0 0 1"/>
+    <limit effort="27" velocity="10" lower="0" upper="3.66519"/>
+  </joint>
+  <joint name="joint4" type="revolute">
+    <origin xyz="-0.245 -0.06 0" rpy="0 0 0"/>
+    <parent link="link_3"/>
+    <child link="link_4"/>
+    <axis xyz="0 0 1"/>
+    <limit effort="27" velocity="10" lower="-1.5708" upper="1.5708"/>
+  </joint>
+  <joint name="joint5" type="revolute">
+    <origin xyz="-0.074 -0.0395 2.5e-05" rpy="-1.57079633 1.57079633 0"/>
+    <parent link="link_4"/>
+    <child link="link_5"/>
+    <axis xyz="0 0 1"/>
+    <limit effort="27" velocity="10" lower="-1.5708" upper="1.5708"/>
+  </joint>
+  <joint name="joint6" type="revolute">
+    <origin xyz="0 0.0353 0.0395" rpy="-1.57079633 0 0"/>
+    <parent link="link_5"/>
+    <child link="link_6"/>
+    <axis xyz="0 0 1"/>
+    <limit effort="27" velocity="10" lower="-2.0944" upper="2.0944"/>
+  </joint>
+</robot>

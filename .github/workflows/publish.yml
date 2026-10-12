@@ -1,0 +1,46 @@
+name: publish
+
+# Builds the wheel and uploads it to PyPI when a GitHub release is created.
+# Needs the repository secret PYPI_TOKEN.
+
+on:
+  release:
+    types: [created]
+  workflow_dispatch:
+
+jobs:
+  deploy:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Install uv
+        uses: astral-sh/setup-uv@v5
+      - name: Fast tier must pass
+        run: uv run --extra dev --python 3.12 python scripts/testrun.py --tier fast
+      - name: Build
+        run: uv build
+      - name: Verify wheel contents
+        # Robot assets and the cloth, soft and rope kinds sit outside the usual
+        # Python-file packaging path; a wheel without them imports and then
+        # cannot build a scene.
+        run: |
+          python3 - <<'PY'
+          import glob
+          import zipfile
+
+          (wheel,) = glob.glob("dist/*.whl")
+          names = set(zipfile.ZipFile(wheel).namelist())
+          needed = [
+              "robosimstudio/assets/embodiments/panda/panda_standalone.xml",
+              "robosimstudio/_domain_packs/cloth.py",
+              "robosimstudio/_domain_packs/soft.py",
+              "robosimstudio/_domain_packs/rod/__init__.py",
+          ]
+          missing = [path for path in needed if path not in names]
+          assert not missing, f"Missing from {wheel}: {missing}"
+          print(f"{wheel} OK: {len(names)} files")
+          PY
+      - name: Publish
+        env:
+          UV_PUBLISH_TOKEN: ${{ secrets.PYPI_TOKEN }}
+        run: uv publish

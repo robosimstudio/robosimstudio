@@ -1,0 +1,108 @@
+{
+  "5AE6080553": {
+    "label": "right",
+    "joints": [
+      {
+        "name": "right_j0",
+        "ticks_per_radian": 651.8986469044033,
+        "sign": -1.0,
+        "offset_ticks": 2002.0,
+        "scale_source": "direct_drive"
+      },
+      {
+        "name": "right_j1",
+        "ticks_per_radian": 651.8986469044033,
+        "sign": -1.0,
+        "offset_ticks": 2034.0,
+        "scale_source": "direct_drive"
+      },
+      {
+        "name": "right_j2",
+        "ticks_per_radian": 651.8986469044033,
+        "sign": -1.0,
+        "offset_ticks": 2046.0,
+        "scale_source": "direct_drive"
+      },
+      {
+        "name": "right_j3",
+        "ticks_per_radian": 651.8986469044033,
+        "sign": -1.0,
+        "offset_ticks": 2064.0,
+        "scale_source": "direct_drive"
+      },
+      {
+        "name": "right_j4",
+        "ticks_per_radian": 651.8986469044033,
+        "sign": -1.0,
+        "offset_ticks": 1946.0,
+        "scale_source": "direct_drive"
+      },
+      {
+        "name": "right_j5",
+        "ticks_per_radian": 651.8986469044033,
+        "sign": -1.0,
+        "offset_ticks": 2102.0,
+        "scale_source": "direct_drive"
+      }
+    ],
+    "gripper": {
+      "name": "right_grip",
+      "open_ticks": 2128.0,
+      "closed_ticks": 2765.0
+    },
+    "note": "Sample: one physical right YAM leader, against the yam_bimanual model. ticks_per_radian is the direct-drive constant 4096/(2*pi) of an STS3215 rather than a per-joint fit; offset_ticks and the gripper endpoints were captured on this unit and do not transfer to another arm or another adapter. Calibrate your own with scripts/calibrate_leader_arms.py."
+  },
+  "5AE6080669": {
+    "label": "left",
+    "joints": [
+      {
+        "name": "left_j0",
+        "ticks_per_radian": 651.8986469044033,
+        "sign": -1.0,
+        "offset_ticks": 2064.0,
+        "scale_source": "direct_drive"
+      },
+      {
+        "name": "left_j1",
+        "ticks_per_radian": 651.8986469044033,
+        "sign": -1.0,
+        "offset_ticks": 2048.0,
+        "scale_source": "direct_drive"
+      },
+      {
+        "name": "left_j2",
+        "ticks_per_radian": 651.8986469044033,
+        "sign": -1.0,
+        "offset_ticks": 2050.0,
+        "scale_source": "direct_drive"
+      },
+      {
+        "name": "left_j3",
+        "ticks_per_radian": 651.8986469044033,
+        "sign": -1.0,
+        "offset_ticks": 2003.0,
+        "scale_source": "direct_drive"
+      },
+      {
+        "name": "left_j4",
+        "ticks_per_radian": 651.8986469044033,
+        "sign": -1.0,
+        "offset_ticks": 2057.0,
+        "scale_source": "direct_drive"
+      },
+      {
+        "name": "left_j5",
+        "ticks_per_radian": 651.8986469044033,
+        "sign": -1.0,
+        "offset_ticks": 2027.0,
+        "scale_source": "direct_drive"
+      }
+    ],
+    "gripper": {
+      "name": "left_grip",
+      "open_ticks": 1604.0,
+      "closed_ticks": 2365.0
+    },
+    "note": "Sample: one physical left YAM leader, against the yam_bimanual model. ticks_per_radian is the direct-drive constant 4096/(2*pi) of an STS3215 rather than a per-joint fit; offset_ticks and the gripper endpoints were captured on this unit and do not transfer to another arm or another adapter. Calibrate your own with scripts/calibrate_leader_arms.py."
+  }
+}

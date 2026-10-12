@@ -1,0 +1,73 @@
+{
+  "version": 3,
+  "meta": {
+    "name": "pick_place_camera",
+    "description": "The check-and-retry pick and place, seeing the cube and the pad through the overhead camera: no sim.* tool is called.",
+    "observation_mode": "on_demand"
+  },
+  "nodes": {
+    "pick": {"type": "subgraph", "ref": "pick_sg"},
+    "pick_again": {"type": "subgraph", "ref": "pick_sg"},
+    "place": {"type": "subgraph", "ref": "place_sg"},
+    "done": {"type": "end", "status": "success"},
+    "abort": {"type": "end", "status": "failure"}
+  },
+  "edges": [["START", "pick"]],
+  "conditional_edges": {
+    "pick": {"router_field": "exit", "mapping": {"held": "place", "missed": "pick_again"}},
+    "pick_again": {"router_field": "exit", "mapping": {"held": "place", "missed": "abort"}},
+    "place": {"router_field": "exit", "mapping": {"placed": "done", "failed": "abort"}}
+  },
+  "subgraphs": {
+    "pick_sg": {
+      "skill": "generic",
+      "inputs": {},
+      "outputs": {},
+      "nodes": {
+        "clear": {"type": "tool", "tool": "robot.go_home", "inputs": {}},
+        "observe": {"type": "tool", "tool": "robot.get_observation", "inputs": {}},
+        "locate": {"type": "script", "script": "scripts/locate.py", "inputs": {"cameras": {"$ref": "observe.cameras"}}},
+        "plan": {"type": "script", "script": "scripts/plan_pick.py", "inputs": {"cube": {"$ref": "locate.cube"}}},
+        "open": {"type": "tool", "tool": "robot.set_grip", "inputs": {"preset": "open", "settle_steps": 10}},
+        "above": {"type": "tool", "tool": "robot.go_to_pose", "inputs": {"pose": {"$ref": "plan.above"}}},
+        "down": {"type": "tool", "tool": "robot.go_to_pose", "inputs": {"pose": {"$ref": "plan.grasp"}}},
+        "close": {"type": "tool", "tool": "robot.close_gripper", "inputs": {"settle_steps": 60}},
+        "lift": {"type": "tool", "tool": "robot.go_to_pose", "inputs": {"pose": {"$ref": "plan.above"}}},
+        "check": {"type": "script", "script": "scripts/check_grip.py", "inputs": {}},
+        "held": {"type": "noop"}
+      },
+      "edges": [
+        ["START", "clear"], ["clear", "observe"], ["observe", "locate"], ["locate", "plan"],
+        ["plan", "open"], ["open", "above"], ["above", "down"], ["down", "close"],
+        ["close", "lift"], ["lift", "check"], ["check", "held"], ["held", "END"]
+      ],
+      "conditional_edges": {},
+      "exit": {"router_field": null, "success_values": ["held"]},
+      "on_error": "missed"
+    },
+    "place_sg": {
+      "skill": "generic",
+      "inputs": {},
+      "outputs": {},
+      "nodes": {
+        "observe": {"type": "tool", "tool": "robot.get_observation", "inputs": {}},
+        "locate": {"type": "script", "script": "scripts/locate.py", "inputs": {"cameras": {"$ref": "observe.cameras"}, "want": "target"}},
+        "hand": {"type": "tool", "tool": "robot.get_ee_pose", "inputs": {}},
+        "plan": {"type": "script", "script": "scripts/plan_place.py", "inputs": {"square": {"$ref": "locate.target"}, "hand": {"$ref": "hand.pose"}}},
+        "over": {"type": "tool", "tool": "robot.go_to_pose", "inputs": {"pose": {"$ref": "plan.over"}}},
+        "lower": {"type": "tool", "tool": "robot.go_to_pose", "inputs": {"pose": {"$ref": "plan.drop"}}},
+        "release": {"type": "tool", "tool": "robot.set_grip", "inputs": {"preset": "open", "settle_steps": 20}},
+        "away": {"type": "tool", "tool": "robot.go_to_pose", "inputs": {"pose": {"$ref": "plan.over"}}},
+        "placed": {"type": "noop"}
+      },
+      "edges": [
+        ["START", "observe"], ["observe", "locate"], ["locate", "hand"], ["hand", "plan"],
+        ["plan", "over"], ["over", "lower"], ["lower", "release"], ["release", "away"],
+        ["away", "placed"], ["placed", "END"]
+      ],
+      "conditional_edges": {},
+      "exit": {"router_field": null, "success_values": ["placed"]},
+      "on_error": "failed"
+    }
+  }
+}
