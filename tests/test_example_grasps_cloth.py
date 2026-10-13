@@ -24,7 +24,7 @@ from tests.fixtures.examples import _run
 from tests.fixtures.grasp import drag_to_grasp, open_session, tick
 
 TIER = "medium"
-"""Builds the towel example and steps it through a page with no browser on it: about 40 s."""
+"""Builds the two cloth examples and steps each through a page with no browser on it: about 80 s."""
 
 FINGERTIPS = 0.0175
 """Where the gesture puts the tool centre over the bench [m]: the pads end 16.7 mm under it."""
@@ -95,6 +95,58 @@ class TestTheTowelExamplePinchesItsEdge(unittest.TestCase):
         solver.step(state_in, state_out, pipeline.control, None, pipeline.sim_dt)
         np.testing.assert_array_equal(before.numpy(), state_in.body_q.numpy())
         self.assertGreater(float(np.abs(state_out.body_q.numpy() - before.numpy()).max()), 0.0, "the arm did not move")
+
+
+class TestYourOwnClothExamplePinchesItsHem(unittest.TestCase):
+    """``02_cloth/04_your_own_cloth``: the Panda down onto the draped hem, Grip amount 0.95, up 100 mm."""
+
+    HEM = (0.0, -0.095, 0.05)
+    """Where the tool centre closes, in the bench's work-surface frame [m]: on the free hem of the -y side."""
+
+    @classmethod
+    def setUpClass(cls) -> None:
+        import robosimstudio as rss
+
+        cls.sim, kwargs = _run("02_cloth/04_your_own_cloth.py")
+        cls.session = open_session(cls.sim, 9501, kwargs.get("page"))
+        # The page's reset puts the sheet back flat over the ball, which is where it was built.
+        tick(cls.session, 180)
+        origin = np.array(rss.get_cell("bench_075").surface_frame[:3])
+        ids = np.asarray(cls.sim["sheet"].entity.particles, dtype=np.int64)
+        cls.lying = cls.sim.state.particle_q.numpy().astype(np.float64)[ids]
+        (cls.arm,) = cls.session.arms
+        cls.home = np.asarray(cls.session.arms[cls.arm].ik.home_pose[0], dtype=np.float64)
+        at = origin + np.array(cls.HEM)
+        cls.hem = ids[np.linalg.norm(cls.lying - at, axis=1) < 0.020]
+        cls.at = at
+
+        def hem():
+            return cls.sim.state.particle_q.numpy().astype(np.float64)[cls.hem]
+
+        # 0.95 of the slider is 5 mm between the pads: the sheet's 4 mm contact thickness. Shut
+        # (Close, 0 mm) they squeezed the hem out and it slid 37 mm down the hand; at 0.90 (9 mm) it fell.
+        cls.grasp = drag_to_grasp(cls.session, cls.arm, hem, at=at, hover=0.06, lift=0.10, grip=0.95)
+        hand = cls.session.arms[cls.arm].ik.ee_pose(cls.sim.state)[0]
+        cls.held = float((np.linalg.norm(hem() - hand, axis=1) < 0.025).mean())
+        print(f"\n[hem] {cls.grasp} held {cls.held:.3f} of {len(cls.hem)}", flush=True)
+
+    @classmethod
+    def tearDownClass(cls) -> None:
+        cls.session.teardown()
+
+    def test_the_hand_starts_over_the_hem(self) -> None:
+        self.assertLess(float(np.linalg.norm(self.home[:2] - self.at[:2])), 0.005)
+        self.assertGreater(float(self.home[2] - self.at[2]), 0.10)
+
+    def test_the_hem_comes_up_with_the_hand(self) -> None:
+        self.assertTrue(self.grasp.finite)
+        self.assertLess(self.grasp.reached, 0.010, "the hand did not get to the top of the lift")
+        self.assertGreater(self.grasp.rise, 0.06, "the hem stayed down")
+
+    def test_it_stays_in_the_fingers(self) -> None:
+        self.assertGreaterEqual(len(self.hem), 3, "nothing under the jaws")
+        self.assertGreaterEqual(self.held, 0.5, "the hem slipped out of the jaws")
+        self.assertLess(self.grasp.drift, 0.02, "the hem slid in the jaws during the hold")
 
 
 if __name__ == "__main__":

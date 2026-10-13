@@ -8,7 +8,9 @@ cell through Newton's builder; the library's particle storage does the rest,
 from the handle the studio pins to the state a reset returns to. The stock
 :class:`robosimstudio.ClothSpec` describes the sheet, and its ``entity=`` field
 asks for this class instead of the shipped one. In the studio, click the sheet
-to pin a patch and drag it, or close the gripper on its hem and lift it.
+to pin a patch and drag it, or drag the hand straight down onto the hem below it,
+set **Grip amount** to 0.95 and lift: the fingers hold the hem by friction. Not
+**Close**: shut, the pads squeeze the sheet out from between them.
 Limits: a flat grid only; a fabric's thickness and contact numbers are not read.
 
 **Key features:**
@@ -17,6 +19,7 @@ Limits: a flat grid only; a fabric's thickness and contact numbers are not read.
 * :class:`robosimstudio.Entity` and its ``build``, where particles and triangles go into Newton's builder
 * ``ParticleMixin`` for bind, handle, reset and reading, shared by every kind made of particles
 * :class:`robosimstudio.ClothSpec` with ``entity="my_cloth"`` to say "use mine"
+* :func:`robosimstudio.coupler` and :class:`robosimstudio.CollisionSpec` ``force_sdf`` for fingers that can hold it
 """
 
 import newton
@@ -25,6 +28,7 @@ import warp as wp
 
 import robosimstudio as rss
 from robosimstudio.domains.capabilities import ParticleMixin
+from robosimstudio.robots.registry import get_embodiment
 
 
 # Loading this file twice in one process under the same module name is safe:
@@ -84,9 +88,23 @@ def main() -> None:
     size = 0.30  # edge of the square sheet [m]
     cells = 20  # quads along an edge: 441 particles, 800 triangles
     radius = 0.07  # of the ball the sheet lands on [m]
+    # The Panda's joints [rad] with its tool centre 150 mm over the hem on the -y side,
+    # pointing down, jaws closing along the hem: across it they would meet on the ball.
+    # Solved once with ``sim.arm("right").solve_q_full``.
+    over_hem = (-0.234, 0.591, 0.262, -2.010, -0.270, 2.569, -0.571)
 
-    scene = rss.Scene(cell="bench_075", name="your_own_cloth")
-    scene.add(rss.robot("panda"))
+    # One-way coupling and contact over the sheet's faces, so the fingers can hold it; the
+    # Panda's colliders are meshes, which that contact needs a signed-distance field on.
+    physics = rss.replace(
+        rss.GENERIC,
+        coupling=rss.coupler("one_way"),
+        collision=rss.CollisionSpec(full_surface_contact=True, force_sdf=True),
+    )
+
+    scene = rss.Scene(cell="bench_075", physics=physics, name="your_own_cloth")
+    panda = get_embodiment("panda")
+    (arm,) = panda.arms
+    scene.add(rss.robot(rss.replace(panda, arms=(rss.replace(arm, home_q=over_hem),))))
     # A ball welded to the bench top. Round on purpose: contact is at the sheet's
     # vertices, and a sharp rim shows through between them.
     ball = rss.ShapeSpec(kind="sphere", radius=radius)
