@@ -31,13 +31,6 @@ class SolverSuperdex(SolverHost):
             mirrored colliders -- the knob that decides whether a gripper
             presses a deformable or sinks into it. See
             :func:`~robosimstudio.engines.superdex.mirror.build_mirror_actors`.
-        mirror_friction_falloff: ``friction_falloff_vel`` [m/s] on the
-            mirrors. It does not reach a contact: against a static collider,
-            which every mirror is, SuperDex uses the deformable's own falloff.
-            See :func:`~robosimstudio.engines.superdex.mirror.build_mirror_actors`.
-        hand_friction_falloff: The same on the mirrors a robot's hand carries
-            alone, or ``None`` for ``mirror_friction_falloff``, and inert for
-            the same reason; set ``friction_falloff`` on the deformable.
         mirror_threshold: ``penalty_threshold_default`` [m] on the mirrors, or
             ``None`` for the engine's 1 mm -- the stand-off at which a pad starts
             pushing, which the collider's side of a pair decides.
@@ -70,7 +63,6 @@ class SolverSuperdex(SolverHost):
         shell_poisson: float = 0.3,
         mirror_smoothing: float = 5.0e-4,
         mirror_friction_falloff: float = 1.0e-2,
-        hand_friction_falloff: float | None = None,
         mirror_threshold: float | None = None,
         mirror_padding: float = 0.0,
         mirror_exact_boxes: bool = True,
@@ -104,7 +96,6 @@ class SolverSuperdex(SolverHost):
             pose_source=str(pose_source),
             mirror_smoothing=float(mirror_smoothing),
             mirror_friction_falloff=float(mirror_friction_falloff),
-            hand_friction_falloff=None if hand_friction_falloff is None else float(hand_friction_falloff),
             mirror_threshold=None if mirror_threshold is None else float(mirror_threshold),
             mirror_padding=float(mirror_padding),
             mirror_exact_boxes=bool(mirror_exact_boxes),

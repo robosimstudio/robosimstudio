@@ -222,11 +222,6 @@ class SuperdexBridge:
             Coulomb cap, below which a held object creeps. See
             :func:`~robosimstudio.engines.superdex.mirror.build_mirror_actors`
             for the pinch that measured it.
-        hand_friction_falloff: The same, for the mirrors a robot's hand
-            carries alone (a record's ``hand``), or ``None`` for
-            ``mirror_friction_falloff`` on them too. Neither reaches a contact
-            while the mirrors are static: SuperDex then uses the deformable's
-            falloff. See :func:`build_mirror_actors`.
         mirror_smoothing: ``penalty_smoothing_half_distance`` [m] for every
             mirrored collider -- see :func:`build_mirror_actors`. The engine's
             own 5 mm lets a fingertip sit 2 mm inside a foam block; this
@@ -287,7 +282,6 @@ class SuperdexBridge:
         pose_source: str = "fresh",
         mirror_smoothing: float = 5.0e-4,
         mirror_friction_falloff: float = 1.0e-2,
-        hand_friction_falloff: float | None = None,
         mirror_threshold: float | None = None,
         mirror_padding: float = 0.0,
         mirror_exact_boxes: bool = True,
@@ -305,7 +299,6 @@ class SuperdexBridge:
         self.pose_source = str(pose_source)
         self.mirror_smoothing = float(mirror_smoothing)
         self.mirror_friction_falloff = float(mirror_friction_falloff)
-        self.hand_friction_falloff = None if hand_friction_falloff is None else float(hand_friction_falloff)
         self.mirror_threshold = None if mirror_threshold is None else float(mirror_threshold)
         self.mirror_padding = float(mirror_padding)
         self.mirror_exact_boxes = bool(mirror_exact_boxes)
@@ -395,7 +388,6 @@ class SuperdexBridge:
             shapes=list(recipe.get("mirrors", ())),
             contact_smoothing=self.mirror_smoothing,
             friction_falloff=self.mirror_friction_falloff,
-            hand_friction_falloff=self.hand_friction_falloff,
             contact_threshold=self.mirror_threshold,
             contact_padding=self.mirror_padding,
             exact_boxes=self.mirror_exact_boxes,
