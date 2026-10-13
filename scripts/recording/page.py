@@ -460,5 +460,10 @@ class Page:
             self.page.mouse.wheel(0, dy / n)
             self.advance()
 
+    def rest(self, seconds: float = 0.6) -> None:
+        """Take the pointer off the sidebar to the 3D view's lower right, out of what is being watched."""
+        left, top, width, height = self.js("canvasRect")
+        self.glide(left + width * 0.85, top + height * 0.85, seconds)
+
     def text(self, label: str, within: str = "") -> str:
         return str(self.js("text", label, within) or "")

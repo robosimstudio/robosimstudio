@@ -426,6 +426,7 @@ class Run(Beat):
         panel = film.routine()
         name = self.routine or next(iter(panel.routines))
         film.page.press_button(name, "Routine")
+        film.page.rest()
         seen = []
 
         def ended(f) -> bool:
@@ -437,6 +438,33 @@ class Run(Beat):
         film.hold(frames / film.take.fps, until=ended)
         film.ended = film.page.text("Playing", "Routine")
         return {"routine": name, "ended": film.ended, "started": bool(seen)}
+
+
+@dataclass(frozen=True)
+class Policy(Beat):
+    """Press **Run** in the task page's Policy folder and film the run to its end, at most ``timeout`` s of scene.
+
+    The end is the runner's own: ``running`` true once and false again, which
+    includes the settle steps the page gives a finished graph before it scores.
+    """
+
+    timeout: float = 90.0
+
+    def play(self, film):
+        driver = film.session.driver
+        if driver is None:
+            raise RuntimeError("this page has no Policy folder: it is not showing a task")
+        film.page.press_button("Run", "Policy")
+        film.page.rest()
+        seen = []
+
+        def ended(f) -> bool:
+            if driver.running:
+                seen.append(True)
+            return bool(seen) and not driver.running and not driver.start_requested
+
+        film.hold(self.timeout / film.take.speed, until=ended)
+        return {"started": bool(seen), "policy": film.page.text("Policy", "Policy"), "steps": driver.steps}
 
 
 @dataclass(frozen=True)
