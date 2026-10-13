@@ -14,8 +14,10 @@ Drive the simulated YAM from a real leader arm, read only.
 Each control step the script reads every connected leader, converts servo ticks
 to joint angles through a calibration file, and applies them as one
 `joint_position` action. Nothing is written to a servo, so nothing can push
-back on your hand. `--simulate` swaps the arm for a scripted hand that sweeps
-both arms and works the jaws, over a table of registers instead of a bus.
+back on your hand. The cube is on the arm's own engine, `rss.MUJOCO_500HZ`, so
+jaws you close on it hold it by friction. `--simulate` swaps the arm for a
+scripted hand that sweeps both arms and works the jaws, over a table of
+registers instead of a bus.
 
 **Key features:**
 

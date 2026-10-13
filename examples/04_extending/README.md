@@ -17,8 +17,9 @@ arm (`joint_names`, in order), which body is its wrist (`ee_body_name`),
 which registered hand sits on it (`gripper`) and where it starts (`home_q`);
 `base_offset` is where the base stands in the work-surface frame. Handing the
 spec to `rss.robot` builds it exactly as a registered name
-would: an arm panel with a gizmo, IK, and a cube to reach for. Point `asset`
-at your own MJCF or URDF and rename the joints.
+would: an arm panel with a gizmo, IK, and a hand that grips. The cube sits under
+it: drag the gizmo down, press **Close** and lift. Point `asset` at your own
+MJCF or URDF and rename the joints.
 
 **Key features:**
 

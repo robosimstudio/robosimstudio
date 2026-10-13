@@ -16,13 +16,14 @@ its own panels are built, and `studio.gui` is viser's GUI API, so anything
 written for a bare `ViserServer` drops in. One rule: a viser callback runs on
 the server's thread and may only assign; the calls that touch the simulation go
 in `studio.each_step`, which runs on the main thread once per control step.
+The arm can pick the cube up too: drag its gizmo over it and down, press **Close** and lift.
 
 **Key features:**
 
 * `page=` on `rss.view` for controls of your own beside the studio's
 * `studio.gui.add_folder`, `add_slider`, `add_button` and `add_number`, viser's own
 * `studio.each_step` for the work that touches the simulation
-* `rss.Ref.bodies` and `rss.Ref.position` to reach the cube's state
+* `model.joint_child` and `joint_qd_start` to find the cube's free joint, and `state.joint_qd` to toss it
 
 ```bash
 uv run examples/05_studio/00_your_own_panel.py
