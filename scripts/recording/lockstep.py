@@ -85,14 +85,16 @@ class Lockstep:
 
     Args:
         session: The studio session, begun.
-        fps: Film frames per second of *sim* time.
+        fps: Film frames per second of clip.
+        speed: Seconds of scene per second of clip: 1 is real time, 2.5 plays a
+            routine that takes a minute in 24 s.
     """
 
-    def __init__(self, session, fps: int) -> None:
+    def __init__(self, session, fps: int, speed: float = 1.0) -> None:
         self.session = session
         self.fps = int(fps)
         self.hz = control_hz(session)
-        self.per_frame = Fraction(self.hz).limit_denominator(100000) / self.fps
+        self.per_frame = Fraction(self.hz).limit_denominator(100000) * Fraction(speed).limit_denominator(100) / self.fps
         """Control steps per film frame; a fraction, so the count never drifts."""
         self.frame = -1
         """The last frame presented; ``-1`` before the first."""
@@ -204,6 +206,10 @@ class Film:
         self.unsynced = 0
         """Drag frames whose gizmo pose the server never confirmed (each waited a second)."""
         self.error = ""
+        self.ended = ""
+        """What a routine's ``Playing`` line said when it ended."""
+        self.sliders: dict[tuple[str, str], float] = {}
+        """Each slider's value before the take first moved it, for a drag back."""
         self.screenshot: bytes = b""
 
     # ---------------------------------------------------------------- the run
@@ -223,7 +229,7 @@ class Film:
         from . import page as browser_page
 
         take = self.take
-        self.lock = Lockstep(self.session, take.fps)
+        self.lock = Lockstep(self.session, take.fps, take.speed)
         # Untimed and unfilmed: whatever the scene does before anyone looks at it.
         self.lock.step(round(take.warmup * self.lock.hz))
         with sync_playwright() as pw:
@@ -312,11 +318,18 @@ class Film:
         self.captions.append(self.caption)
 
     def hold(self, seconds: float, until=None) -> None:
-        """Let the scene run ``seconds``, filmed; stop early once ``until(film)`` holds."""
+        """Let the scene run ``seconds`` of clip, filmed; stop early once ``until(film)`` holds."""
         for _ in range(max(1, round(seconds * self.take.fps))):
             self.advance()
             if until is not None and until(self):
                 break
+
+    def routine(self):
+        """The page's Routine panel: the Run buttons ``rss.view(routines=...)`` put there."""
+        for panel in self.session.panels:
+            if type(panel).__name__ == "PanelRoutine":
+                return panel
+        raise RuntimeError("this page has no Routine folder: the example passes no routines= to rss.view")
 
     # ------------------------------------------------------------ the camera
     def aim(self, eye, look_at, fov: float) -> None:
@@ -343,6 +356,7 @@ class Film:
 
     # ------------------------------------------------------------ the scene
     def _points(self, name: str):
+        """Where a thing is: a deformable's particles, a chain's bodies, or one body's origin [m]."""
         import numpy as np
 
         ref = self.sim[name]
@@ -351,6 +365,10 @@ class Film:
                 return np.asarray(ref.particle_q, dtype=np.float64).reshape(-1, 3)
         except Exception:
             pass
+        bodies = np.asarray(ref.bodies, dtype=np.int64).reshape(-1)
+        if len(bodies) > 1:
+            # A rope of capsules, a chain of links: its first body's origin is one end.
+            return np.asarray(self.sim.state.body_q.numpy(), dtype=np.float64)[bodies, :3]
         return np.asarray(ref.position, dtype=np.float64).reshape(1, 3)
 
     def position(self, name: str) -> tuple[float, float, float]:
@@ -376,6 +394,12 @@ class Film:
             return float(points[:, 2].max() - points[:, 2].min())
         return 2.0 * self._half_height(name)
 
+    def spread(self, name: str) -> float:
+        """How far a thing's points lie from its middle across the bench: the xy radius of gyration [m]."""
+        points = self._points(name)
+        xy = points[:, :2] - points[:, :2].mean(axis=0)
+        return float((xy**2).sum(axis=1).mean() ** 0.5)
+
     def corner(self, name: str, sx: int, sy: int, inset: float) -> tuple[float, float, float]:
         import numpy as np
 
@@ -400,17 +424,26 @@ class Film:
     def hand(self, arm: str) -> tuple[float, float, float]:
         return tuple(float(v) for v in self.session.arms[arm].ik.ee_pose(self.sim.state)[0])
 
+    def nearest_arm(self, name: str) -> str:
+        """The arm whose hand is nearest the thing."""
+        there = self.position(name)
+        return min(self.session.arms, key=lambda arm: math.dist(self.hand(arm), there))
+
     def held(self) -> list[str]:
         return list(self.session.held())
 
     def mark(self, name: str) -> None:
         """What the expectations will ask about, as it is now."""
-        names = {n for e in self.take.expect for n in e.things()}
+        from .beats import resolve
+
+        wanted = {n for e in self.take.expect for n in e.things()}
+        names = [n for n in wanted if isinstance(n, str)]
         self.marks[name] = {
             "frame": len(self.frames) - 1,
             "sim_s": round(self.lock.sim_time, 3),
-            "things": {n: self.position(n) for n in names},
+            "things": {n: self.position(n) for n in names} | {str(t): resolve(t, self) for t in wanted - set(names)},
             "heights": {n: self.height(n) for n in names},
+            "spreads": {n: self.spread(n) for n in names},
             "hands": {arm: self.hand(arm) for arm in self.session.arms},
         }
 

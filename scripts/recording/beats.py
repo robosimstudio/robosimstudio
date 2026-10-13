@@ -13,7 +13,8 @@ few lines that do it:
   ``examples/``: a slipped grasp must never ship.
 
 A beat plays against the film (:class:`recording.lockstep.Film`): its page, its
-clock and its scene. Nothing here imports the library or a browser, so the take
+clock and its scene. Its seconds are the clip's, which at a take's ``speed`` of 1
+are the scene's too. Nothing here imports the library or a browser, so the take
 table can be read by a test with neither.
 """
 
@@ -201,7 +202,7 @@ class Beat:
 
 @dataclass(frozen=True)
 class Wait(Beat):
-    """Let the scene run for ``seconds``, or until ``until(film)`` holds."""
+    """Let the scene run for ``seconds`` of clip, or until ``until(film)`` holds."""
 
     seconds: float = 1.0
     until: Callable[[Any], bool] | None = None
@@ -295,6 +296,43 @@ class DragTo(Beat):
 
 
 @dataclass(frozen=True)
+class Grasp(Beat):
+    """The gesture the examples promise: over it, straight down onto it, **Close**, drag up.
+
+    ``arm`` empty takes the hand nearest the thing. ``at`` is where the tool
+    centre closes (the thing's position by default); a hand not already over
+    it is first taken ``clearance`` [m] above that point. Leaves the marks
+    ``closed`` and ``lifted``.
+    """
+
+    thing: str = ""
+    arm: str = ""
+    at: Any = None
+    clearance: float = 0.10
+    lift: float = 0.12
+    seconds_per_m: float = 9.0
+
+    def play(self, film):
+        arm = self.arm or film.nearest_arm(self.thing)
+        name = film.gizmo(arm)
+        film.settle(arm)
+        there = resolve(self.at if self.at is not None else At(self.thing), film)
+        here = film.where(name)
+        done = []
+        if math.dist(here[:2], there[:2]) > 0.01:
+            over = (there[0], there[1], max(here[2], there[2] + self.clearance))
+            done.append(DragTo(arm, over, seconds_per_m=self.seconds_per_m).play(film))
+        done.append(Drag(arm, "z", to=there, seconds=1.2).play(film))
+        Press(text="Close", within=f"Arm: {arm}").play(film)
+        film.hold(0.8)
+        film.mark("closed")
+        done.append(Drag(arm, "z", self.lift, seconds=1.2).play(film))
+        film.hold(0.6)
+        film.mark("lifted")
+        return {"arm": arm, "drags": done}
+
+
+@dataclass(frozen=True)
 class Press(Beat):
     """Click the button reading ``text``, inside the folder whose title starts with ``within``."""
 
@@ -341,15 +379,23 @@ class Fold(Beat):
 
 @dataclass(frozen=True)
 class Slider(Beat):
-    """Drag the slider labelled ``text`` to ``value``, in the slider's own units, over ``seconds``."""
+    """Drag the slider labelled ``text`` to ``value``, in the slider's own units, over ``seconds``.
+
+    ``value=None`` drags it back to where it was before this take first moved it.
+    """
 
     text: str = ""
-    value: float = 0.0
+    value: float | None = None
     seconds: float = 1.0
     within: str = ""
 
     def play(self, film):
-        return {"value": film.page.slider(self.text, self.value, self.seconds, self.within)}
+        now = film.page.js("slider", self.text, self.within)
+        if now is None:
+            raise RuntimeError(f"no slider labelled {self.text!r}")
+        start = film.sliders.setdefault((self.text, self.within), float(now["value"]))
+        value = start if self.value is None else self.value
+        return {"from": float(now["value"]), "value": film.page.slider(self.text, value, self.seconds, self.within)}
 
 
 @dataclass(frozen=True)
@@ -361,6 +407,36 @@ class Scroll(Beat):
 
     def play(self, film):
         film.page.scroll(self.pixels, self.seconds)
+
+
+@dataclass(frozen=True)
+class Run(Beat):
+    """Press a routine's **Run** button and film it to its end, at most ``timeout`` seconds of scene.
+
+    ``routine`` is the button's text; the page's first routine when empty. The
+    end is the panel's own: its generator gone, its ``Playing`` line reading
+    ``<name>: done`` -- or ``stopped: ...``, which the timeline keeps and an
+    expectation can refuse.
+    """
+
+    routine: str = ""
+    timeout: float = 240.0
+
+    def play(self, film):
+        panel = film.routine()
+        name = self.routine or next(iter(panel.routines))
+        film.page.press_button(name, "Routine")
+        seen = []
+
+        def ended(f) -> bool:
+            if panel.gen is not None:
+                seen.append(True)
+            return bool(seen) and panel.gen is None and panel.requested is None
+
+        frames = round(self.timeout * film.take.fps / film.take.speed)
+        film.hold(frames / film.take.fps, until=ended)
+        film.ended = film.page.text("Playing", "Routine")
+        return {"routine": name, "ended": film.ended, "started": bool(seen)}
 
 
 @dataclass(frozen=True)
@@ -392,9 +468,14 @@ class Expectation:
 
 @dataclass(frozen=True)
 class Rose(Expectation):
-    """``name`` was at least ``by`` [m] higher at mark ``at`` than at mark ``since``."""
+    """``name`` was at least ``by`` [m] higher at mark ``at`` than at mark ``since``.
 
-    name: str
+    ``name`` is a thing (a body's origin, a deformable's centroid) or a
+    :class:`Target` -- ``Segment("cable", 0.5)`` for the middle of a span
+    whose ends are tied down, which is where a lift shows.
+    """
+
+    name: str | Target
     by: float
     at: str = "end"
     since: str = "start"
@@ -403,10 +484,11 @@ class Rose(Expectation):
         return (self.name,)
 
     def judge(self, film):
-        rise = film.marks[self.at]["things"][self.name][2] - film.marks[self.since]["things"][self.name][2]
+        key = str(self.name)
+        rise = film.marks[self.at]["things"][key][2] - film.marks[self.since]["things"][key][2]
         return (
             rise >= self.by,
-            f"{self.name} rose {rise * 1000:.1f} mm from {self.since} to {self.at} (need {self.by * 1000:.0f})",
+            f"{key} rose {rise * 1000:.1f} mm from {self.since} to {self.at} (need {self.by * 1000:.0f})",
         )
 
 

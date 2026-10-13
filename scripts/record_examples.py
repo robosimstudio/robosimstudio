@@ -52,16 +52,22 @@ CHILD_TIMEOUT_S = 1800
 """A take that has not finished in half an hour is stuck, not slow."""
 
 
-def free_port() -> int:
-    """A free port in 9100-9199, the range this box gives recorders."""
-    for port in range(9100, 9200):
+PORTS = range(9100, 9200)
+"""Where the pages serve. Each child is handed its own by the parent: a child that looked
+for a free one would look long before viser binds it, and two started together would both
+find the same."""
+
+
+def free_port(start: int = PORTS.start) -> int:
+    """The first port from ``start`` that nothing is listening on."""
+    for port in range(start, PORTS.stop):
         with socket.socket() as s:
             try:
                 s.bind(("127.0.0.1", port))
             except OSError:
                 continue
             return port
-    raise RuntimeError("no free port in 9100-9199")
+    raise RuntimeError(f"no free port in {PORTS.start}-{PORTS.stop - 1}")
 
 
 # =============================================================================
@@ -69,7 +75,9 @@ def free_port() -> int:
 # =============================================================================
 
 
-def film_one(take: Take, out_root: Path, *, software: bool, probe: bool, install: bool, kmax: int, frames: bool) -> int:
+def film_one(
+    take: Take, out_root: Path, *, port: int, software: bool, probe: bool, install: bool, kmax: int, frames: bool
+) -> int:
     """Run the take's example under the hooks and write what it filmed. 0 when it may ship."""
     from recording import encode, lockstep
 
@@ -80,13 +88,13 @@ def film_one(take: Take, out_root: Path, *, software: bool, probe: bool, install
     def log(message: str) -> None:
         print(f"[{take.key} {time.perf_counter() - t0:6.1f}s] {message}", flush=True)
 
-    port = free_port()
+    port = free_port(port)
     film = lockstep.Film(take, port=port, scratch=out_root, software=software, probe=probe, log=log)
     lockstep.install(film, port=port, out=str(out / "studio"), overrides=dict(take.config))
-    script = REPO / "examples" / take.example
+    script = REPO / take.example
     sys.path.insert(0, str(script.parent))
     sys.argv = [str(script), *take.argv]
-    log(f"examples/{take.example} {' '.join(take.argv)}".rstrip())
+    log(f"{take.example} {' '.join(take.argv)}".rstrip())
     try:
         runpy.run_path(str(script), run_name="__main__")
     except SystemExit as exc:
@@ -121,6 +129,7 @@ def film_one(take: Take, out_root: Path, *, software: bool, probe: bool, install
         "beats": film.spans,
         "marks": film.marks,
         "expect": verdicts,
+        "routine_ended": film.ended,
         "error": film.error,
         "wall_s": round(time.perf_counter() - t0, 1),
     }
@@ -186,6 +195,7 @@ def run_all(chosen: list[Take], args) -> int:
             out = args.out / take.key
             out.mkdir(parents=True, exist_ok=True)
             cmd = [sys.executable, str(Path(__file__).resolve()), "--child", take.key, "--out", str(args.out)]
+            cmd += ["--port", str(PORTS.start + (dealt - 1) % len(PORTS))]
             cmd += ["--kmax", str(args.kmax)]
             flags = {
                 "--software": args.software,
@@ -237,7 +247,7 @@ def list_takes() -> None:
         state = f"pending: {take.pending}" if take.pending else "final"
         extras = f" [needs {', '.join(take.needs)}]" if take.needs else ""
         argv = f" {' '.join(take.argv)}" if take.argv else ""
-        print(f"{take.key:34s} examples/{take.example}{argv}{extras}  ({state})")
+        print(f"{take.key:34s} {take.example}{argv}{extras}  ({state})")
     for key, reason in KEPT.items():
         print(f"{key:34s} kept: {reason}")
 
@@ -260,6 +270,7 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--kmax", type=int, default=9, help="most frames between WebP key frames")
     parser.add_argument("--frames", action="store_true", help="also keep every frame as a PNG under the take's frames/")
     parser.add_argument("--child", default="", help=argparse.SUPPRESS)
+    parser.add_argument("--port", type=int, default=PORTS.start, help=argparse.SUPPRESS)
     args = parser.parse_args(argv)
     args.out = args.out.resolve()
 
@@ -267,6 +278,7 @@ def main(argv: list[str] | None = None) -> int:
         return film_one(
             find(args.child),
             args.out,
+            port=args.port,
             software=args.software,
             probe=args.probe,
             install=args.install,

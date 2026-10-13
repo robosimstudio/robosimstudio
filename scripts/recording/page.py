@@ -437,10 +437,14 @@ class Page:
         # The top of the range is reached by running past the track's end, where the thumb clamps.
         self.glide(track["x"] + track["w"] * min(max(frac, 0.0), 1.0) + (6 if frac >= 0.999 else 0), y, seconds)
         self.up()
-        for _ in range(40):
+        best = math.inf
+        for _ in range(60):
             now = float(self.js("slider", label, within)["value"])
-            step = abs(hi - lo) / 1000.0
-            if abs(now - value) <= step:
+            if abs(now - value) >= best:  # a step past it: one back, and that is as close as it goes
+                self.page.keyboard.press("ArrowLeft" if now > value else "ArrowRight")
+                break
+            best = abs(now - value)
+            if best < 1e-9:
                 break
             self.page.keyboard.press("ArrowRight" if now < value else "ArrowLeft")
         self.advance()
