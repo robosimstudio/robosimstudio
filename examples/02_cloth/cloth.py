@@ -1244,14 +1244,17 @@ register_atom(
         reads_scene=True,
         provenance=(
             "The cloth half of the repo's held_particles predicate, which reports a kinematic "
-            "latch where there is one and a pinch radius where there is not. Closing two rigid "
-            "fingers on a sheet does not reliably grip it, which is why the latch exists."
+            "latch where there is one and a pinch radius where there is not. Two rigid fingers "
+            "grip a sheet by friction under one-way coupling with full-surface contact; the "
+            "latch is for a task that wants the strip held whatever the fingers do."
         ),
         calibration=AtomCalibration(
             positives="A latched carry holds the whole declared strip -- 93 particles on the towel's edge row.",
             negatives=(
-                "A top-down jaw on a flat sheet carries 0 of those 93: the pads bottom out on the "
-                "bench before the pinch line reaches the cloth."
+                "A top-down jaw on a flat sheet carried 0 of those 93 while the one-way coupler "
+                "handed VBD the arm's new pose as its previous one too, so friction saw the pads "
+                "stand still. With the motion, a jaw closed with its fingertips at the bench keeps "
+                "15 of 15 pinched particles through a 100 mm lift."
             ),
             gate=None,
             bench="a towel folded in half by two arms",

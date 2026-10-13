@@ -101,6 +101,7 @@ def drag_to_grasp(
     close: float = 1.0,
     hold: float = 2.0,
     speed: float | None = None,
+    grip: float = 1.0,
 ) -> Grasp:
     """Down onto it, **Close**, up, and hold: the gesture the examples ask for.
 
@@ -114,6 +115,8 @@ def drag_to_grasp(
         close: Seconds of stepping with the grip asked for, before the lift.
         hold: Seconds held at the top, over which ``drift`` is measured.
         speed: Drag the cursor at this speed [m/s] rather than jumping it (see :func:`go`).
+        grip: What the hand closes to: 1.0 is the **Close** button, anything less the
+            **Grip amount** slider.
     """
     hz = float(session.env.request.physics.control_hz)
 
@@ -128,7 +131,7 @@ def drag_to_grasp(
     if hover:
         go(session, arm, target + np.array([0.0, 0.0, hover]), speed=speed)
     go(session, arm, target, speed=speed)
-    session.arms[arm].grip_request = 1.0
+    session.arms[arm].grip_request = float(grip)
     tick(session, round(close * hz))
     offset = centroid() - hand()
     top = hand() + np.array([0.0, 0.0, lift])

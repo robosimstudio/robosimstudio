@@ -228,14 +228,19 @@ def build_admm(ctx: CouplerBuild) -> Any:
 class SolverOneWay:
     """Two solvers over one model, the rigid one leading: a kinematic mirror, no feedback.
 
-    The ordering the tape peel was validated at, as one solver with the standard
-    ``step`` signature: the rigid solver steps with its own contacts, its new
-    body poses are copied onto the state the deformable solver reads (VBD takes
-    the previous poses from ``state_in`` and the new ones from ``state_out``, so
-    the copy is what makes it collide against *this* substep's arm), the
-    collision pipeline runs over those poses, and the deformable solver steps
-    with ``integrate_with_external_rigid_solver=True`` -- the robot is a moving
-    boundary it never pushes back on.
+    One solver with the standard ``step`` signature: the rigid solver steps with
+    its own contacts, the collision pipeline runs over its new body poses, and
+    the deformable solver steps with ``integrate_with_external_rigid_solver=True``
+    -- the robot is a moving boundary it never pushes back on.
+
+    VBD reads the new poses off ``state_out`` and the previous ones off
+    ``state_in``, and its friction is the particle's slip against the difference:
+    how far the pad under a particle moved this substep. So ``state_in`` keeps
+    the previous poses for the solve, and gets the new ones only while the
+    collision pipeline runs, which must find this substep's arm. Handing VBD the
+    new pose twice made every finger stand still to friction: a closed jaw
+    lifting a towel's edge dragged it back down, and kept 0 of the 15 particles
+    it pinched; with the motion it keeps all 15 through a 100 mm lift.
 
     Why it exists beside the proxy coupler rather than instead of it: Newton's
     proxy harvest consumes per-particle contact records only, and refuses
@@ -260,6 +265,8 @@ class SolverOneWay:
         self.contacts = collision.contacts()
         self.names = names
         self.device = model.device
+        # Allocated here, not on the first step: a step may be captured into a graph.
+        self._body_q_prev = wp.clone(model.body_q) if model.body_count else None
 
     def solver(self, name: str):
         return {self.names[0]: self.rigid, self.names[1]: self.soft}[name]
@@ -273,11 +280,18 @@ class SolverOneWay:
 
     def step(self, state_in, state_out, control, contacts, dt: float) -> None:
         del contacts
+        if self._body_q_prev is None:
+            self.rigid.step(state_in, state_out, control, None, dt)
+            self.collision.collide(state_in, self.contacts)
+            self.soft.step(state_in, state_out, control, self.contacts, dt)
+            return
+        wp.copy(self._body_q_prev, state_in.body_q)
         self.rigid.step(state_in, state_out, control, None, dt)
-        # Load bearing: the deformable reads the rigid poses off ``state_in``
-        # while the rigid solver has just written them to ``state_out``.
+        # The pipeline collides ``state_in``: this substep's arm against the particles where they start.
         wp.copy(state_in.body_q, state_out.body_q)
         self.collision.collide(state_in, self.contacts)
+        # And VBD's friction is the pad's motion from ``state_in`` to ``state_out``, so put it back.
+        wp.copy(state_in.body_q, self._body_q_prev)
         self.soft.step(state_in, state_out, control, self.contacts, dt)
 
     def notify_model_changed(self, flags) -> None:
