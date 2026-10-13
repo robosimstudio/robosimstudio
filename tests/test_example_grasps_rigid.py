@@ -12,7 +12,8 @@ a pass is friction's.
 
 The panel example also tosses its cube, and that is checked here because it
 broke with the move: MuJoCo steps joint coordinates and ignores ``body_qd``,
-which is what the toss used to write.
+which is what the toss used to write. And the first task's page is carried
+through by hand, gizmo and Grip only, until its goal turns true.
 """
 
 from __future__ import annotations
@@ -133,6 +134,38 @@ class TestTheLeaderArmFollowerLiftsTheCube(_Lift, unittest.TestCase):
             _load(cls.EXAMPLE).main(["--simulate"])
         ((sim, _),) = opened
         return sim, None
+
+
+class TestTheFirstTaskByHand(unittest.TestCase):
+    """``07_tasks/00_your_first_task``: the gizmo carries the cube into the square, and the goal turns true.
+
+    The task's page, as :func:`robosimstudio.view` opens it: its goal panel is
+    there to turn, and the hand is the only thing that moves the cube."""
+
+    def test_pick_carry_and_let_go_in_the_square(self) -> None:
+        env, _ = _run("07_tasks/00_your_first_task.py")
+        session = open_session(env, 9215)
+        try:
+            self.assertIsNotNone(session.goal_panel, "the goal beside the scene")
+            tick(session, 25)
+            cube = env["cube"]
+            lift = 0.10
+            grasp = drag_to_grasp(session, "right", lambda: cube.position, lift=lift, hover=0.10, hold=0.5)
+            self.assertGreater(grasp.rise, 0.08, "the cube stayed behind")
+            self.assertLess(grasp.drift, 0.010)
+            self.assertFalse(env.evaluate()[-1]["success"], "carried, not yet placed")
+            # Over the square's middle at the carry height, then down by the lift. The
+            # square is x 0.05..0.15, y -0.20..-0.10 on a bench whose middle is world (0.6, 0).
+            over = np.array([0.6 + 0.10, -0.15, cube.position[2]])
+            self.assertLess(go(session, "right", over), 0.010)
+            self.assertLess(go(session, "right", over - np.array([0.0, 0.0, lift])), 0.010)
+            session.arms["right"].grip_request = 0.0  # Open
+            tick(session, 25)
+            go(session, "right", over)
+            tick(session, 60)
+            self.assertTrue(env.evaluate()[-1]["success"], f"the cube is at {cube.position.round(3)}")
+        finally:
+            session.teardown()
 
 
 class TestThePanelTossesTheCube(unittest.TestCase):
