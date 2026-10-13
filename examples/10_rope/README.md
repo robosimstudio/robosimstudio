@@ -3,8 +3,8 @@
 Cables and ropes: a chain of capsules by default, or a Cosserat rod on
 SuperDex with one line of physics. How a cable is built, part by part:
 [`rod/`](rod/), the implementation `rss.rod` builds. The cable demo,
-[route the cable](../09_demos/README.md#route-the-cable), is this kind under a
-Panda.
+[route the cable](../../demo/route_the_cable/README.md), is this kind under two
+YAM hands that hold it by friction alone.
 
 <!-- examples:start: written by scripts/example_readmes.py from each script's docstring -->
 

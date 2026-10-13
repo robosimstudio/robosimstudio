@@ -6,10 +6,10 @@ engine adds a collider's ``penalty_threshold_extra_padding`` to the stand-off
 only against such a point-cloud actor. Unpadded, a 5 mm cable rested with its
 axis 0.93 mm over the bench, half of it inside the wood, and a clip's prong came
 within 2.6 mm of the axis -- inside the prong. ``mirror_padding`` on the backend
-pads every mirror; ``examples/09_demos/01_route_the_cable.py`` pads by one radius
-less the engine's own 1 mm, and the cable rests on its skin. That physical claim
-is :mod:`tests.test_demo_route_the_cable`'s; this module holds the option itself
-against a stand-in engine, so it runs with no GPU and no ``[superdex]`` wheel.
+pads every mirror, and padded by one radius less the engine's own 1 mm the same
+cable rested with its axis 2.43 mm up, on its skin (measured on the SuperDex cable
+demo this tree used to ship). This module holds the option itself against a
+stand-in engine, so it runs with no GPU and no ``[superdex]`` wheel.
 """
 
 from __future__ import annotations
