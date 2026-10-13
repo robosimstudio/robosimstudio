@@ -46,8 +46,12 @@ uv run --extra superdex examples/03_soft/00_sponge.py         # Plus FEM soft bo
 uv run --extra gap examples/08_policies/00_pick_and_place.py  # Plus the graph runtime: a policy picks a cube.
 ```
 
-Every script under `examples/` runs the same way. Python 3.12 is required;
-`uv` picks it from `.python-version`.
+Every script under `examples/` runs the same way. The first run also installs
+the path tracer (`ovrtx`, 1.8 GB from NVIDIA's index); a GPU without RT cores
+(A100, H100, B200) draws with Newton's tiled tracer instead, and
+`UV_NO_GROUP=rtx` skips the download. See
+[Rendering](examples/05_studio/README.md#rendering). Python 3.12 is
+required; `uv` picks it from `.python-version`.
 
 RoboSimStudio is not on PyPI (its IK dependency, PyRoKi, is installed from
 git). To install it into an existing environment with pip:

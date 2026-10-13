@@ -5,7 +5,8 @@
 the frame set, the scene flattening, the palette -- and these are the
 implementations of it: ``rtx``, the OVRTX path tracer every picture is made
 with, and ``tiled``, Newton's tiled ray tracer, which draws the colliders alone
-and serves where ``ovrtx`` is not installed. Core reaches them by dotted path
+and serves where ``rtx`` cannot: no ``ovrtx`` installed, or a GPU without RT
+cores (:func:`choose_renderer` has the rule). Core reaches them by dotted path
 through ``RENDERERS`` and imports neither, so a checkout without the ``[rtx]``
 extra still imports core and finds out only when it asks for a frame.
 """
@@ -14,6 +15,7 @@ from __future__ import annotations
 
 import importlib
 import importlib.util
+import os
 from typing import Any
 
 import newton
@@ -24,15 +26,20 @@ from robosimstudio.core.render.spec import RenderSpec, merge_render_kwargs
 from robosimstudio.registry import register_alias
 
 __all__ = [
+    "AUTO",
+    "ENV",
     "FALLBACK",
     "PUBLIC",
     "RENDERERS",
+    "RT_ARCHES",
     "backend_class",
+    "choose_renderer",
     "create_renderer",
     "default_renderer",
     "list_renderers",
     "look_kwargs",
     "register_renderer",
+    "rt_cores",
     "rtx_available",
     "supported_channels",
 ]
@@ -46,9 +53,9 @@ RENDERERS: dict[str, str] = {
 **The renderer is ``rtx``**, the OVRTX path tracer: the one that draws the room,
 the materials and the lights, and the only one a page, a snapshot or a video
 is made with. ``tiled`` -- Newton's tiled ray tracer, colliders only -- stays
-registered as the fallback :func:`create_renderer` reaches for where ``ovrtx``
-is not installed, and as the thing a test renders through; it is not offered
-by :func:`list_renderers` and nothing user-facing takes its name.
+registered as the fallback :func:`choose_renderer` picks where ``rtx`` cannot
+run, and as the thing a test renders through; it is not offered by
+:func:`list_renderers`, though :data:`ENV` and a name in code may ask for it.
 
 Held as **strings**, which is what keeps the table free: a base install pays
 for nothing until something actually asks for a renderer.
@@ -78,7 +85,7 @@ PUBLIC = "rtx"
 """The renderer every picture is made with."""
 
 FALLBACK = "tiled"
-"""What stands in for it where ``ovrtx`` does not import. Never offered by name."""
+"""What stands in for it where ``rtx`` cannot run. Never offered by name."""
 
 
 def list_renderers() -> tuple[str, ...]:
@@ -91,6 +98,31 @@ def list_renderers() -> tuple[str, ...]:
     return tuple(alias for alias in RENDERERS if alias != FALLBACK)
 
 
+AUTO = "auto"
+"""The name for "pick for me": :func:`choose_renderer` decides from the machine."""
+
+ENV = "ROBOSIMSTUDIO_RENDERER"
+"""The environment variable that names the renderer for a whole machine or shell.
+
+A registered alias, a dotted path, or ``auto``. A name passed in code wins over it.
+"""
+
+RT_ARCHES = frozenset({75, 86, 89, 120, 121})
+"""CUDA architectures whose GPUs carry RT cores, which OVRTX needs.
+
+Turing (7.5: T4, Quadro RTX, RTX 20), Ampere's graphics parts (8.6: A10, A40,
+RTX A6000, RTX 30), Ada (8.9: L4, L40S, RTX 6000 Ada, RTX 40) and Blackwell's
+graphics parts (12.0 and 12.1: RTX PRO 6000, RTX 50, GB10). The compute parts
+have none: V100 (7.0), A100 (8.0), Orin (8.7), H100 and H200 (9.0), B200 and
+B300 (10.x). Neither ovrtx nor NVML can be asked directly, so this is a list of
+known parts; an architecture it has not heard of gets ``tiled``, and
+``ROBOSIMSTUDIO_RENDERER=rtx`` overrides it.
+"""
+
+_NO_RT_NAMES = ("GTX", " MX")
+"""Turing chips without RT cores: GTX 16 and the MX laptop parts share 7.5."""
+
+
 def rtx_available() -> bool:
     """Whether the path tracer would import, without importing it."""
     try:
@@ -99,9 +131,77 @@ def rtx_available() -> bool:
         return False
 
 
-def default_renderer() -> str:
-    """``rtx`` where it is installed, else the fallback -- the name :meth:`Sim.render` builds."""
-    return PUBLIC if rtx_available() else FALLBACK
+def rt_cores(device: Any = None) -> tuple[bool, str]:
+    """Whether the GPU a renderer would run on has RT cores, and which GPU it is.
+
+    Read off Warp's device table, which costs nothing: importing ovrtx to ask it
+    builds CUDA state, and a failed ovrtx start on a part with no RT cores is not
+    a clean exception to catch.
+
+    Args:
+        device: A Warp device or its alias; ``None`` is Warp's default.
+    """
+    import warp as wp
+
+    try:
+        gpu = wp.get_device(device)
+    except Exception as exc:
+        return False, f"no CUDA device ({exc})"
+    if not gpu.is_cuda:
+        return False, f"{gpu.alias} is not a CUDA device"
+    label = f"{gpu.name} (sm_{gpu.arch})"
+    if gpu.arch not in RT_ARCHES or any(tag in gpu.name for tag in _NO_RT_NAMES):
+        return False, f"{label} has no RT cores"
+    return True, label
+
+
+def choose_renderer(requested: str = "", device: Any = None) -> tuple[str, str]:
+    """Which renderer to build, and why, in this order:
+
+    1. ``requested``, when it names one -- a renderer named in code;
+    2. :data:`ENV`, when it names one -- a renderer named for the machine;
+    3. otherwise ``rtx`` where ovrtx is installed and ``device`` has RT cores,
+       else ``tiled``.
+
+    Empty and ``auto`` name nothing, at either level. A name is used as given:
+    ``rtx`` asked for on a GPU without RT cores is tried, not swapped for
+    ``tiled``.
+
+    Args:
+        requested: A registered alias, a dotted path, ``auto`` or empty.
+        device: The Warp device the renderer will run on; ``None`` is Warp's default.
+
+    Returns:
+        ``(backend, why)``. ``why`` is a short phrase for a log line or a readout.
+
+    Raises:
+        ValueError: If a name is neither a registered alias nor a dotted path.
+        ImportError: If ``rtx`` is named but ovrtx is not installed.
+    """
+    for given, source in ((requested, "asked for"), (os.environ.get(ENV, ""), ENV)):
+        name = given.strip()
+        if not name or name == AUTO:
+            continue
+        if name not in RENDERERS and "." not in name:
+            where = f"{ENV}={name!r}" if source == ENV else repr(name)
+            raise ValueError(f"unknown renderer {where}: choose {AUTO!r}, {list(RENDERERS)} or a dotted path")
+        if name == PUBLIC and not rtx_available():
+            raise ImportError(
+                f"renderer {PUBLIC!r} was {'set by ' + ENV if source == ENV else 'asked for'} but ovrtx is not "
+                f"installed: `uv sync` installs it, as does pip install "
+                f"'robosimstudio[rtx] @ git+https://github.com/robosimstudio/robosimstudio' "
+                f"--extra-index-url https://pypi.nvidia.com; or leave it unset to pick by the machine"
+            )
+        return name, f"{ENV}={name}" if source == ENV else "asked for"
+    if not rtx_available():
+        return FALLBACK, "ovrtx is not installed"
+    capable, gpu = rt_cores(device)
+    return (PUBLIC if capable else FALLBACK), gpu
+
+
+def default_renderer(device: Any = None) -> str:
+    """The renderer :func:`choose_renderer` picks when nothing is asked for in code."""
+    return choose_renderer("", device)[0]
 
 
 def backend_class(backend: str) -> type[RendererBase]:

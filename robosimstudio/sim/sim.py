@@ -43,12 +43,6 @@ from robosimstudio.specs import ActionSpec, CameraSpec, replace
 
 __all__ = ["Sim"]
 
-_NO_RTX = (
-    "[sim] the path tracer is not installed (install the rtx extra: from a checkout `uv sync --extra rtx`; "
-    "with pip see examples/05_studio/README.md); drawing the colliders"
-)
-"""Said once per ``Sim`` when a render falls back to the collider tracer."""
-
 
 class Sim(EnvBase):
     """A compiled scene, its controllers, its cameras and the loop over them.
@@ -61,7 +55,9 @@ class Sim(EnvBase):
         control_mode: Which control mode starts active. Empty takes the first.
         max_steps: Control steps before an episode truncates. 0 never truncates,
             which is right for a scene with nothing to succeed at.
-        renderer: Backend name for the observation rig, or ``""`` for none.
+        renderer: Backend name for the observation rig, ``"auto"`` for the
+            machine's (see :func:`~robosimstudio.solvers.render.choose_renderer`),
+            or ``""`` for none.
         render_every: Render on one step in this many.
         renderer_kwargs: Forwarded to the backend.
         verbose: Print what could not be built rather than silently doing without.
@@ -338,9 +334,11 @@ class Sim(EnvBase):
     ) -> dict[str, np.ndarray]:
         """One frame of the scene as it stands, through the renderer.
 
-        The picture is path traced (``rtx``) -- the room, the materials and the
-        lights -- where the ``[rtx]`` extra is installed, and drawn from the
-        colliders alone where it is not, with one printed line saying so. The
+        The renderer is :func:`~robosimstudio.solvers.render.choose_renderer`'s:
+        ``ROBOSIMSTUDIO_RENDERER`` where it names one, else path traced
+        (``rtx``) -- the room, the materials and the lights -- where ovrtx is
+        installed and this scene's GPU has RT cores, and drawn from the colliders
+        alone (``tiled``) where not, with one printed line saying why. The
         renderer is built on the first call and kept for the next one with the
         same camera, so a loop that photographs every few steps pays for the
         stage once.
@@ -360,17 +358,15 @@ class Sim(EnvBase):
             frame = sim.render()
             imageio.imwrite("still.png", frame["rgb"])
         """
-        from robosimstudio.solvers.render import FALLBACK, default_renderer
+        from robosimstudio.solvers.render import FALLBACK, choose_renderer
 
         spec = self._camera_for(camera)
-        backend = default_renderer()
+        backend, why = choose_renderer(device=self.model.device)
         key = (backend, spec, tuple(channels))
         if self._still_renderer is None or self._still_key != key:
             if self._still_renderer is not None:
                 self._still_renderer.close()
-            if backend == FALLBACK and not self._fallback_said:
-                self._fallback_said = True
-                print(_NO_RTX)
+            self._say_fallback(backend, why)
             self._still_renderer = self.make_renderer(backend, cameras=[spec], channels=list(channels))
             self._still_key = key
             if backend != FALLBACK:
@@ -564,6 +560,15 @@ class Sim(EnvBase):
             )
         return tuple(rig)
 
+    def _say_fallback(self, backend: str, why: str) -> None:
+        """Say once per ``Sim`` that pictures are colliders only, and why."""
+        from robosimstudio.solvers.render import ENV, FALLBACK
+
+        if backend == FALLBACK and not self._fallback_said:
+            self._fallback_said = True
+            hint = "" if why.startswith(ENV) or why == "asked for" else f" ({ENV}=rtx to override)"
+            print(f"[sim] rendering with {FALLBACK}, the colliders alone: {why}{hint}")
+
     def _make_renderer(self, backend: str) -> RendererBase:
         """The observation rig, which this object owns and closes.
 
@@ -572,16 +577,13 @@ class Sim(EnvBase):
         display setting, so a policy evaluated here sees the reference's own
         exposure and not the backend's default.
         """
-        from robosimstudio.solvers.render import FALLBACK, PUBLIC, rtx_available
+        from robosimstudio.solvers.render import choose_renderer
 
-        if backend == PUBLIC and not rtx_available():
-            # The rig is asked for by the one public name; where the path
-            # tracer is not installed the collider tracer stands in, said once,
-            # rather than the build raising on a missing extra.
-            if not self._fallback_said:
-                self._fallback_said = True
-                print(_NO_RTX)
-            backend = FALLBACK
+        # ``auto`` is resolved here, against this scene's GPU; a name is taken
+        # as given, so ``rtx`` without ovrtx raises rather than quietly
+        # becoming a different picture.
+        backend, why = choose_renderer(backend, device=self.model.device)
+        self._say_fallback(backend, why)
         kwargs = dict(self.renderer_kwargs)
         render = kwargs.pop("render", None)
         kwargs.setdefault("cameras", self._observable_rig(backend))
