@@ -16,7 +16,8 @@ Usage, from the repository root::
     uv run python scripts/example_readmes.py --check   # exit 1 if a README is out of date
 
 ``--check`` also refuses a clip in a ``media/`` folder that no page under
-``examples/`` shows, and a numbered folder with no README to write into.
+``examples/`` shows, a page that shows a clip that is not there, and a numbered
+folder with no README to write into.
 """
 
 from __future__ import annotations
@@ -133,6 +134,22 @@ def unshown_media() -> list[str]:
     return [str(p.relative_to(REPO)) for p in clips if p.resolve() not in shown]
 
 
+def dangling_media() -> list[str]:
+    """Clips a page under ``examples/`` shows that are not on disk: ``page -> clip``.
+
+    The other half of :func:`unshown_media`. A clip renamed or moved -- an
+    extra clip a recorder take now writes under a new name, a demo moved to
+    its own folder -- leaves the page pointing at nothing, and GitHub draws
+    that as a broken image with the alt text beside it.
+    """
+    missing = []
+    for page in sorted(EXAMPLES.rglob("*.md")):
+        for ref in SHOWN.findall(page.read_text(encoding="utf-8")):
+            if not (page.parent / ref).is_file():
+                missing.append(f"{page.relative_to(REPO)} -> {ref}")
+    return missing
+
+
 def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(description=__doc__.split("\n\n")[0])
     parser.add_argument("--check", action="store_true", help="exit 1 if a README is out of date; write nothing")
@@ -146,12 +163,14 @@ def main(argv: list[str] | None = None) -> int:
             if not args.check:
                 (folder / "README.md").write_text(should, encoding="utf-8")
     if args.check:
-        unshown = unshown_media()
+        unshown, dangling = unshown_media(), dangling_media()
         for path in stale:
             print(f"{path} is out of date: run scripts/example_readmes.py", file=sys.stderr)
         for path in unshown:
             print(f"{path} is shown by no page under examples/", file=sys.stderr)
-        return 1 if stale or unshown else 0
+        for shown in dangling:
+            print(f"{shown} shows a clip that is not there", file=sys.stderr)
+        return 1 if stale or unshown or dangling else 0
     for path in stale:
         print(f"wrote {path}")
     return 0
