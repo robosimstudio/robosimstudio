@@ -100,11 +100,15 @@ Tried, over 30 more takes while tuning, none of which held the slip under 10 mm:
 | sponge friction 2.0 (from 0.9) | lost |
 | soft foam (the clip's) | the jaws closed through it on the pick |
 
-The likeliest cause is the fingertips' collision: the YAM's tips are 48 and 52
-convex pieces each, and SuperDex mirrors every piece as a collider of its own,
-where the Panda's pads -- which lift a sponge in `examples/03_soft/00_sponge.py`
-with 1.7 mm of slip -- are one box each. That is a hypothesis; the
-readings above are what was measured.
+**Not the fingertips' decomposition.** The YAM's tips are 48 and 52 convex
+pieces each, and SuperDex mirrors every piece as a collider of its own, where
+the Panda's pads are one box each. Mirrored instead as one convex hull of each
+tip's last 30-60 mm, the jaws lift and hold the sponge as they do now (3 s of
+hold: 0.11-0.14 mm of slip against 0.10 mm; a 10 s idle: 0.11-0.13 mm against
+0.10 mm), and three wipes still lost it: cleaned 0.65, 0.81 and 0.71, the foam
+sliding 680, 192 and 599 mm in the jaws. One hull of a whole tip is worse: it
+takes in the tip's L-shaped root, and the jaws stopped 55.7 mm apart on the 50 mm
+sponge and lifted it 10 mm.
 
 ## Tests
 
