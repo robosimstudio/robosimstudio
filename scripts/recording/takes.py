@@ -438,7 +438,26 @@ DRAFTS = (
     ),
     grasp("examples/02_cloth/02_engines.py", "towel", at=Corner("towel", -1, -1, 0.03), lift=0.10),
     grasp("examples/02_cloth/04_your_own_cloth.py", "sheet", at=Corner("sheet", -1, -1, 0.03), lift=0.10),
-    grasp("examples/03_soft/00_sponge.py", "sponge", lift=0.08),
+    Take(
+        "examples/03_soft/00_sponge.py",
+        # The sponge under the Panda's tool-down hand, from the bench's open side.
+        camera=Camera(eye=(0.80, -0.50, 1.02), look_at=(0.457, -0.115, 0.80)),
+        warmup=1.0,  # the foam settles on the bench before the first frame
+        beats=(
+            Wait(seconds=0.5, label="the hand, open, over the sponge"),
+            # The tool centre 20 mm over the bench: the pads span 11-27 mm of the 35 mm foam.
+            Drag("right", "z", to=Bench(-0.143, -0.115, 0.020), seconds=1.6, label="drag the gizmo down onto it"),
+            Wait(seconds=0.3),
+            Press(text="Close", within=RIGHT, label="Close: the pads squeeze the foam"),
+            Wait(seconds=1.0, mark="closed", label="friction holds it"),
+            Drag("right", "z", 0.10, seconds=1.4, label="drag it up 100 mm"),
+            Wait(seconds=1.5, mark="lifted", label="held"),
+            Press(text="Open", within=RIGHT, label="Open: it drops"),
+            Wait(seconds=1.5),
+        ),
+        # tests/test_example_grasps_soft.py measured 98.7 mm of rise and 1.7 mm of slip.
+        expect=(Rose("sponge", 0.07, at="lifted"), Held("sponge", since="closed", at="lifted", tolerance=0.01)),
+    ),
     Take(
         "examples/03_soft/00_sponge.py",
         name="press_sponge",
