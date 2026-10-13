@@ -198,9 +198,12 @@ class PanelArm(Panel):
     The fingers are the slider and nothing else. There is no propose-a-grasp
     step and no scripted approach: what the hand ends up holding is whatever its
     friction and the contact settings let it hold, which is the thing this stack
-    exists to show. On cloth in particular that is the honest question -- a
-    frictional pinch on a sheet is not a solved problem here, and a button that
-    said "Grasp" implied it was.
+    exists to show, and why the button says "Close" and not "Grasp". Whether it
+    holds is the scene's physics: a rigid body under ``MUJOCO_500HZ``, a sheet
+    under one-way coupling with full-surface contact, a rope with sticky
+    contacts and a sponge with its own friction falloff all lift by friction
+    (``examples/PHYSICS.md`` has the measurements); under ``GENERIC`` a hand
+    pushes a free body and does not pinch it.
 
     **Not collision aware.** The arm goes where the gizmo is put: asked to
     descend through a bin rim, the hand descends through the bin rim.
@@ -235,6 +238,8 @@ class PanelArm(Panel):
         writing a widget from viser's threadpool is the one thing the panel
         contract forbids."""
         self.cursor_pos, self.cursor_quat = self.ik.home_pose
+        self._seated: np.ndarray | None = None
+        """The cursor the gizmo was last put back on the hand at, so it is put back once per move."""
         self.dragging = False
         self.suspended = False
         self.status = ""
@@ -370,11 +375,19 @@ class PanelArm(Panel):
         # handle while the browser is dragging it fights the client. And never
         # when the arm has *not* caught up -- a gizmo quietly walked back off an
         # unreachable target would hide the one thing worth reporting.
+        #
+        # Once per move, not on every tick. A hand carrying something sits a few
+        # millimetres under its target, and re-seating the cursor there each
+        # step made that sag the next target: a lifted 50 mm cube sank 41 mm in
+        # two seconds while the page said "on target". Seated once, the target
+        # stays where the gizmo was put and the servo holds the load against it.
         with prof.phase(f"iter.drain.{self.profile_name}.gizmo"):
             gap = float(np.linalg.norm(position - self.cursor_pos))
             if not self.dragging and gap < POS_TOLERANCE:
-                self._sync_cursor(position, quat)
-                self.cursor_pos, self.cursor_quat = position, quat
+                if self._seated is None or not np.array_equal(self._seated, self.cursor_pos):
+                    self._sync_cursor(position, quat)
+                    self.cursor_pos, self.cursor_quat = position, quat
+                    self._seated = np.array(position, dtype=np.float64)
                 self.status = "on target"
             elif not self.dragging:
                 self.status = f"{gap * 1000:.0f} mm behind the gizmo"
@@ -384,12 +397,27 @@ class PanelArm(Panel):
         """Put the gizmo on the tool centre and start tracking from there."""
         position, quat = self.ik.ee_pose(self.env.state)
         self.cursor_pos, self.cursor_quat = position, quat
+        self._seated = np.array(position, dtype=np.float64)
         self.law.reset(position, quat)
         self._last_commanded = None
         self.dragging = False
         self._sync_cursor(position, quat)
         if self.gizmo is not None:
             self.gizmo.visible = not self.suspended
+
+    def aim(self, position, quat=None, *, moving: bool = True) -> None:
+        """Put the cursor somewhere from code, the way a drag of the gizmo does: the gizmo moves with it.
+
+        ``moving`` is the drag's phase. While it is true the cursor stays where
+        it is put, as it does mid-gesture; false ends the drag, after which the
+        cursor is put back on the hand once the hand arrives. Main thread only,
+        like every other write to a widget.
+        """
+        self.cursor_pos = np.asarray(position, dtype=np.float64)
+        if quat is not None:
+            self.cursor_quat = np.asarray(quat, dtype=np.float64)
+        self.dragging = bool(moving)
+        self._sync_cursor(self.cursor_pos, self.cursor_quat)
 
     def _sync_cursor(self, position: np.ndarray, quat: np.ndarray) -> None:
         if self.gizmo is None:

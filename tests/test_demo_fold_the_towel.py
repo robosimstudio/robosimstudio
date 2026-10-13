@@ -1,41 +1,45 @@
 # SPDX-License-Identifier: Apache-2.0
-"""``examples/09_demos/02_fold_the_towel.py``: the towel starts in the hand, and carrying the hand folds it.
+"""``demo/fold_the_towel``: from the home pose to a towel folded in half, held by friction alone.
 
-The example ends by opening the studio, so :func:`robosimstudio.view` is replaced
-(:mod:`tests.fixtures.examples`) and the hand is driven here the way the page drives it
-when the wrist gizmo is dragged: an operational-space setpoint walked towards a cursor and
-solved to joint targets once per control step (``PanelArm._drive``). The cursor goes over
-in an arc about the towel's crease, which is the gesture that folds a towel in half.
+The demo's routine is played the way its page plays it: through the Run button, with
+the arm panels taking each step (:mod:`tests.fixtures.grasp`), so the gizmos move, the
+arms follow through their IK and setpoint law, and the towel comes over because the
+pads hold it. Nothing in the scene is pinned to a hand.
 
-The assertions are physical rather than about the page: the patch in the hand stays in
-the hand, the half lying on the bench stays lying, the fingers never go into the bench,
-the sheet stays finite, and it ends folded. Measured on Newton 1.5 and 1.6 alike: the
-patch drifts 2.3 mm from the tool centre (the hand turning a little on the way over), the
-near edge lifts 12 mm and slides 10 mm, the fingertips stay 8.6 mm over the bench, and the
-span across the fold closes from 0.300 m to 0.175 m.
-
-The seam the example stands on, ``rss.sheet(held_by=...)``, is
-:class:`~robosimstudio.domains.cloth.EntityHeldCloth`, and its rules are checked here too:
-a held patch weighs nothing, only what hangs from the holder stops touching particles, and
-the hold survives a reset because it is a hook the entity contributed at build.
+The assertions are the cloth_fold suite's goal -- the span across the fold at most 0.6
+of the settled span, a fold score of at least 0.85, the towel lying still and released
+-- and the physical ones the old, latched demo was held to: the edge in the hand stays
+in the hand to the top of the arc, the near half stays on the bench, the fingers do not
+go through it, and the sheet stays finite.
 """
 
 from __future__ import annotations
 
 import ast
+import importlib.util
+import sys
 import unittest
 
 import numpy as np
 
-from tests.fixtures.examples import EXAMPLES, _run
+from tests.fixtures.examples import ROOT
+from tests.fixtures.grasp import open_session, tick
 
 TIER = "medium"
-"""Builds the towel scene once on a GPU, settles it and carries the edge over: about 30 s."""
+"""Builds the towel scene and plays the 22 s fold through a page with no browser on it: about 75 s."""
 
-REL = "09_demos/02_fold_the_towel.py"
-CELL = "bench_0728"
-CREASE_Y = 0.06
-"""The towel's centreline across the fold, in the bench's work-surface frame [m]."""
+DEMO = ROOT / "demo" / "fold_the_towel" / "fold_the_towel.py"
+
+
+def _load():
+    name = "_rss_demo_fold_the_towel"
+    if name in sys.modules:
+        return sys.modules[name]
+    spec = importlib.util.spec_from_file_location(name, DEMO)
+    module = importlib.util.module_from_spec(spec)
+    sys.modules[name] = module
+    spec.loader.exec_module(module)
+    return module
 
 
 def _lowest(sim, shapes) -> float:
@@ -62,172 +66,171 @@ def _lowest(sim, shapes) -> float:
             low = min(low, centre[2] - abs(up[2]) * scale[1] - scale[0])
         elif kind == int(newton.GeoType.BOX):
             low = min(low, float((centre[2] + (corners * scale) @ up).min()))
-        else:
-            raise AssertionError(f"a finger shape of kind {kind} that this measure does not read")
     return float(low)
 
 
-class TestTheTowelFolds(unittest.TestCase):
-    """One build, and every test starts from ``sim.reset()``, which is what the page does when it opens."""
+class TestTheRoutineFoldsTheTowel(unittest.TestCase):
+    """One build, one press of Run, and every reading taken along the way."""
 
     @classmethod
     def setUpClass(cls) -> None:
         import robosimstudio as rss
 
-        cls.sim, cls.kwargs = _run(REL)
-        cls.surface = rss.get_cell(CELL).surface_z
-        cls.towel = cls.sim["towel"]
-        cls.entity = cls.towel.entity
-        cls.held = np.asarray(cls.entity.held, dtype=np.int64)
-        cls.ids = np.asarray(cls.entity.particles, dtype=np.int64)
+        demo = cls.demo = _load()
+        sim = cls.sim = demo.build()
+        cls.surface = rss.get_cell(demo.CELL).surface_z
+        ids = np.asarray(sim["towel"].entity.particles, dtype=np.int64)
+        model = sim.model
+        labels = [str(label).rsplit("/", 1)[-1] for label in model.body_label]
+        bodies = model.shape_body.numpy()
+        fingers = [
+            s
+            for s in range(model.shape_count)
+            if bodies[s] >= 0 and labels[bodies[s]].startswith("left_link_") and "finger" in labels[bodies[s]]
+        ]
+
+        session = cls.session = open_session(sim, 9590)
+        session.add_routines({"Fold the towel": demo.routine})
+        panel = session.panels[-1]
+        left = session.arms["left"]
+        hz = float(sim.request.physics.control_hz)
+
+        def particles() -> np.ndarray:
+            return sim.state.particle_q.numpy().astype(np.float64)[ids]
+
+        def tool() -> np.ndarray:
+            return np.asarray(left.ik.ee_pose(sim.state)[0], dtype=np.float64)
+
+        tick(session, 5)
+        rest = cls.rest = particles()
+        near = rest[:, 1] < rest[:, 1].min() + 0.012  # the edge across from the hand
+        r = cls.readings = {"near_lift": 0.0, "near_slide": 0.0, "fingers": np.inf, "top_z": -np.inf}
+        panel.requested = "Fold the towel"
+        tick(session, 1)
+        squeezed_at, steps, pinched = None, 0, None
+        while panel.gen is not None and steps < round(60 * hz):
+            tick(session, 1)
+            steps += 1
+            q, hand = particles(), tool()
+            if squeezed_at is None and left.gripper_command == demo.SQUEEZE:
+                squeezed_at = steps
+            # What the pads hold once the squeeze has risen and settled (0.2 + 0.3 + 1.0 s in the routine).
+            if squeezed_at is not None and pinched is None and steps == squeezed_at + round(1.5 * hz):
+                pinched = np.flatnonzero(np.linalg.norm(q - hand, axis=1) < 0.020)
+                r["pinched"] = len(pinched)
+            if pinched is not None and left.gripper_command == demo.SQUEEZE and hand[2] > r["top_z"]:
+                r["top_z"] = float(hand[2])
+                r["held_top"] = float((np.linalg.norm(q[pinched] - hand, axis=1) < 0.025).mean())
+                r["rise_top"] = float(q[pinched, 2].mean() - rest[pinched, 2].mean())
+            if steps % 5 == 0:
+                r["near_lift"] = max(r["near_lift"], float(q[near, 2].max() - cls.surface))
+                r["near_slide"] = max(
+                    r["near_slide"], float(np.linalg.norm(q[near, :2] - rest[near, :2], axis=1).max())
+                )
+                r["fingers"] = min(r["fingers"], _lowest(sim, fingers) - cls.surface)
+                r["finite"] = bool(np.isfinite(q).all()) and r.get("finite", True)
+        r["seconds"] = steps / hz
+        r["said"] = str(panel._status.value) if panel._status is not None else ""
+        r["open"] = left.gripper_command == 0.0
+        cls.end = particles()
+        cls.pinched = pinched if pinched is not None else np.zeros(0, dtype=np.int64)
+        cls.measures = demo.fold_measures(sim)
+        print(f"\n[fold] {cls.readings} {cls.measures}", flush=True)
 
     @classmethod
     def tearDownClass(cls) -> None:
-        cls.sim.close()
+        cls.session.teardown()
 
-    def setUp(self) -> None:
-        self.sim.reset()
-        self.arm = self.sim.arm("left")
+    def test_the_routine_plays_to_its_end(self) -> None:
+        self.assertIn("done", self.readings["said"])
+        self.assertTrue(self.readings["finite"] and self.sim.state_is_finite())
 
-    # ------------------------------------------------------------- readings
-    def particles(self) -> np.ndarray:
-        return self.sim.state.particle_q.numpy().astype(np.float64)
+    def test_the_towel_is_folded_in_half_and_put_down(self) -> None:
+        """The cloth_fold suite's goal, read at the end of the routine's five still seconds."""
+        m = self.measures
+        self.assertLessEqual(m["fold_extent"], 0.6, "the span across the fold did not halve")
+        self.assertGreaterEqual(m["fold_score"], 0.85, "the far half did not land on the near one")
+        self.assertLess(m["settle_speed"], 0.02, "the towel is still moving")
+        self.assertTrue(self.readings["open"], "the hand still holds it")
 
-    def tool(self) -> np.ndarray:
-        return np.asarray(self.arm.ee_pose(self.sim.state)[0], dtype=np.float64)
+    def test_the_pads_held_the_edge_to_the_top_of_the_arc(self) -> None:
+        r = self.readings
+        self.assertGreater(r["pinched"], 10, "the pads closed on nothing")
+        self.assertGreaterEqual(r["held_top"], 0.5, "the edge slipped out of the hand")
+        self.assertGreater(r["rise_top"], 0.06, "the edge did not come up with the hand")
 
-    def drive(self, path, every, check) -> None:
-        """Walk the hand along ``path`` as the page walks it to the gizmo, calling ``check`` every few steps."""
-        from robosimstudio.solvers import OscSetpoint
+    def test_the_held_edge_was_carried_over_the_crease_and_laid_down(self) -> None:
+        """Past the crease by 0.10 m: the edge is laid 12.5 mm short of its mirror, where the
+        latched demo carried it to the mirror (0.12 m) -- a slab's crease loop takes up cloth."""
+        edge = self.end[self.pinched].mean(axis=0)
+        self.assertLess(edge[1], self.demo.CREASE_Y - 0.10)
+        self.assertLess(edge[2] - self.surface, 0.025)
 
-        sim, arm = self.sim, self.arm
-        _, quat0 = arm.ee_pose(sim.state)
-        law = OscSetpoint(control_dt=1.0 / sim.request.physics.control_hz)
-        law.reset(*arm.ee_pose(sim.state))
-        for k, cursor in enumerate(path):
-            position, quat = arm.ee_pose(sim.state)
-            arm.set_target(*law.advance(position, quat, cursor, quat0))
-            arm.solve_into(sim.state.joint_q, sim.control.joint_target_q)
-            sim.run(1)
-            if k % every == 0 or k == len(path) - 1:
-                sim.sync()
-                check(cursor)
+    def test_the_near_half_stayed_on_the_bench(self) -> None:
+        """Lifted no more than the latched demo's 12 mm, and dragged only by the squeeze.
 
-    # ---------------------------------------------------------------- tests
-    def test_the_edge_starts_in_the_hand_and_the_rest_lies_on_the_bench(self) -> None:
-        from robosimstudio.domains.cloth import EntityHeldCloth, HeldClothSpec
+        The squeeze drags the near edge's free corner 26-31 mm: the inner pad sweeps 47 mm of
+        towel as the jaws close, and the press holds the other side. A hand half shut before it
+        came down swept less, and pinched nothing at 0.4-0.6 of its grip. The fold itself moves
+        the near half 4-7 mm on average, the suite's drag term."""
+        r = self.readings
+        self.assertLess(r["near_lift"], 0.02, "the half on the bench was lifted")
+        self.assertLess(r["near_slide"], 0.035, "and was dragged along")
+        self.assertLess(self.measures["fixation_dist"], 0.01)
 
-        self.assertIsInstance(self.towel.spec, HeldClothSpec, "rss.sheet(held_by=...) is a held sheet")
-        self.assertIsInstance(self.entity, EntityHeldCloth)
-        self.assertEqual(28, len(self.held), "7 columns along the edge, 2 rows into it, on both faces")
-        mass = self.sim.model.particle_mass.numpy()
-        self.assertTrue(np.all(mass[self.held] == 0.0), "a held particle is kinematic")
-        self.assertTrue(np.all(mass[np.setdiff1d(self.ids, self.held)] > 0.0), "and only a held one")
+    def test_the_fingers_rest_on_the_bench_and_go_no_further(self) -> None:
+        """The pinch is made with the fingertips on the bench, so they touch it: MuJoCo lets them in 0.3 mm."""
+        self.assertGreater(self.readings["fingers"], -0.001)
 
-        q, tool = self.particles(), self.tool()
-        patch = q[self.held].mean(axis=0)
-        self.assertLess(float(np.linalg.norm(patch[:2] - tool[:2])), 0.01, "the patch is under the tool centre")
-        self.assertTrue(0.01 < tool[2] - patch[2] < 0.04, "and just below the fingertips")
-        bottom = q[self.ids[: len(self.ids) // 2], 2] - self.surface  # a slab's first half is its bottom face
-        self.assertAlmostEqual(0.00125, float(np.median(bottom)), delta=0.001, msg="the towel lies on the bench")
-        self.assertGreater(_lowest(self.sim, self.entity.freed) - self.surface, 0.005, "fingertips clear of the towel")
 
-    def test_the_page_opens_looking_at_the_towel(self) -> None:
+class TestThePage(unittest.TestCase):
+    def test_the_page_opens_looking_at_the_towel_and_offers_the_fold(self) -> None:
         """viser's default view is from outside the room the studio draws, so the page sets its own."""
         from types import SimpleNamespace
 
-        camera = SimpleNamespace()
-        self.kwargs["page"](SimpleNamespace(server=SimpleNamespace(initial_camera=camera)))
-        middle = self.particles()[self.ids].mean(axis=0)
-        np.testing.assert_allclose(camera.look_at, middle, atol=0.01)
-        eye = np.asarray(camera.position) - middle
-        self.assertGreater(eye[0], 0.3, "from the bench's open side, across from the arms")
-        self.assertGreater(eye[2], 0.2, "and from above")
-        self.assertEqual((0.0, 0.0, 1.0), tuple(camera.up))
+        import robosimstudio as rss
 
-    def test_only_what_hangs_from_the_wrist_stops_touching_the_cloth(self) -> None:
-        import newton
-
-        model = self.sim.model
-        bit = int(newton.ShapeFlags.COLLIDE_PARTICLES)
-        flags, bodies = model.shape_flags.numpy(), model.shape_body.numpy()
-        labels = [str(label).rsplit("/", 1)[-1] for label in model.body_label]
-        freed = {labels[int(bodies[s])] for s in self.entity.freed}
-        self.assertEqual({"left_link_left_finger", "left_link_right_finger"}, freed)
-        self.assertTrue(all(not flags[s] & bit for s in self.entity.freed))
-        for keeps in ("left_link_6", "right_link_left_finger", "right_link_right_finger"):
-            shapes = [s for s in range(model.shape_count) if labels[int(bodies[s])] == keeps and bodies[s] >= 0]
-            with self.subTest(body=keeps):
-                self.assertTrue(any(flags[s] & bit for s in shapes), f"{keeps} still touches the cloth")
-
-    def test_the_hold_survives_a_reset(self) -> None:
-        """The page resets when it opens and on its Reset button; a hook added after the build would be gone."""
-        start = self.tool()
-        rest = self.particles()[self.held]
-        lift = [start + np.array([0.0, 0.0, 0.05 * min(1.0, k / 40.0)]) for k in range(60)]
-        self.drive(lift, every=59, check=lambda cursor: None)
-        self.assertGreater(float(self.particles()[self.held, 2].mean() - rest[:, 2].mean()), 0.03, "it lifted")
-        self.sim.reset()
-        np.testing.assert_allclose(self.particles()[self.held], rest, atol=1e-5)
-        self.drive(lift, every=59, check=lambda cursor: None)
-        self.assertGreater(float(self.particles()[self.held, 2].mean() - rest[:, 2].mean()), 0.03, "and again")
-
-    def test_carrying_the_edge_over_folds_the_towel(self) -> None:
-        sim, entity, held = self.sim, self.entity, self.held
-        hz = sim.request.physics.control_hz
-        start = self.tool()
-        q0 = self.particles()
-        near = self.ids[q0[self.ids, 1] < q0[self.ids, 1].min() + 0.012]  # the edge across from the hand
-        span0 = float(np.ptp(q0[self.ids, 1]))
-        offset0 = q0[held] - start
-        shape0 = np.linalg.norm(q0[held][:, None] - q0[held][None], axis=2)
-        # Over in a half circle about the crease, landing a centimetre higher than it started.
-        radius = start[1] - CREASE_Y
-        arc = [np.pi * u * u * (3.0 - 2.0 * u) for u in np.linspace(0.0, 1.0, int(3.0 * hz))]
-        path = [start + np.array([0.0, -radius * (1 - np.cos(a)), radius * np.sin(a) + 0.01 * a / np.pi]) for a in arc]
-        path += [path[-1]] * int(1.5 * hz)
-
-        worst = {"pin": 0.0, "drift": 0.0, "lift": 0.0, "slide": 0.0, "fingers": np.inf}
-
-        def check(cursor) -> None:
-            q = self.particles()
-            shape = np.linalg.norm(q[held][:, None] - q[held][None], axis=2)
-            worst["pin"] = max(worst["pin"], float(np.abs(shape - shape0).max()))
-            worst["drift"] = max(worst["drift"], float(np.abs(q[held] - self.tool() - offset0).max()))
-            worst["lift"] = max(worst["lift"], float(q[near, 2].max() - self.surface))
-            worst["slide"] = max(worst["slide"], float(np.linalg.norm(q[near, :2] - q0[near, :2], axis=1).max()))
-            worst["fingers"] = min(worst["fingers"], _lowest(sim, entity.freed) - self.surface)
-            self.assertTrue(np.isfinite(q[self.ids]).all(), "the towel went non-finite")
-
-        self.drive(path, every=5, check=check)
-        self.assertTrue(sim.state_is_finite())
-        self.assertLess(worst["pin"], 1.0e-4, "the patch in the hand moved as one piece")
-        self.assertLess(worst["drift"], 0.005, "the held edge followed the hand")
-        self.assertLess(worst["lift"], 0.02, "the half on the bench stayed on it")
-        self.assertLess(worst["slide"], 0.025, "and was not dragged along")
-        self.assertGreater(worst["fingers"], 0.0, "the fingers went into the bench")
-
-        q = self.particles()
-        edge = q[held].mean(axis=0)
-        self.assertLess(edge[1], CREASE_Y - 0.12, "the held edge was carried over the crease")
-        self.assertLess(edge[2] - self.surface, 0.025, "and laid down")
-        self.assertLess(float(np.ptp(q[self.ids, 1])), 0.65 * span0, "the towel is folded across its middle")
+        demo = _load()
+        opened = []
+        real = rss.view
+        rss.view = lambda sim, **kwargs: opened.append((sim, kwargs))
+        try:
+            demo.main()
+        finally:
+            rss.view = real
+        sim, kwargs = opened[0]
+        try:
+            self.assertEqual(["Fold the towel"], list(kwargs["routines"]))
+            camera = SimpleNamespace()
+            kwargs["page"](SimpleNamespace(server=SimpleNamespace(initial_camera=camera)))
+            middle = sim["towel"].particle_q.mean(axis=0)
+            np.testing.assert_allclose(camera.look_at, middle, atol=0.01)
+            eye = np.asarray(camera.position) - middle
+            self.assertGreater(eye[0], 0.3, "from the bench's open side, across from the arms")
+            self.assertGreater(eye[2], 0.2, "and from above")
+            self.assertLess(float(np.linalg.norm(eye)), 0.6)
+            self.assertEqual((0.0, 0.0, 1.0), tuple(camera.up))
+        finally:
+            sim.close()
 
 
-class TestTheExampleHasTheShapeOfOne(unittest.TestCase):
+class TestTheDemoHasTheShapeOfOne(unittest.TestCase):
     """The rules ``tests/test_examples.py`` holds the numbered examples to, at a demo's length."""
 
-    MAX_LINES = 150
+    MAX_LINES = 300
+    """A demo that finishes its job carries its routine and its measure, so it runs longer than a scene."""
 
     def setUp(self) -> None:
-        self.source = (EXAMPLES / REL).read_text()
+        self.source = DEMO.read_text()
         self.tree = ast.parse(self.source)
 
     def test_it_is_a_script_with_a_main_that_ends_on_the_studio(self) -> None:
         self.assertLessEqual(len(self.source.splitlines()), self.MAX_LINES)
         self.assertNotIn("argparse", self.source)
-        for withheld in ("examples.tasks", "taskbuild", "solutions", "rgbs", "vabar", "routine"):
+        for withheld in ("examples.tasks", "taskbuild", "robosimstudio_bench", "solutions", "rgbs", "vabar"):
             self.assertNotIn(withheld, self.source, "a demo stands on the public library alone")
+        for latch in ("held_by", "ParticleDragger", "latch("):
+            self.assertNotIn(latch, self.source, "nothing holds the towel but the fingers")
         main = next(n for n in self.tree.body if isinstance(n, ast.FunctionDef) and n.name == "main")
         self.assertEqual([], main.args.args)
         self.assertEqual("rss.view", ast.unparse(main.body[-1].value.func))

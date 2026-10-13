@@ -14,8 +14,9 @@ Both examples are loaded by file path and run through their own ``main()`` with
 ``--simulate``, the way a reader without a rig runs them. Only the page is
 replaced -- :func:`robosimstudio.view` for the first, ``StudioSession`` for the
 second -- and the clock the scripted hand and the page read is a virtual one,
-so the result does not depend on how fast this machine is: the page steps at
-60 Hz and each leader loop at 100 Hz, on a 300 Hz base.
+so the result does not depend on how fast this machine is: the first example's
+page steps at its scene's 50 Hz, and the second's at 60 Hz with each leader loop
+at 100 Hz, on a 300 Hz base.
 
 What is claimed, per example:
 
@@ -139,8 +140,9 @@ class TestTheLeaderArmExample(unittest.TestCase):
         per = space.per_arm
         cls.names = arm_slots(cls.sim)
         cls.rows: list[tuple[float, dict, dict]] = []
-        for k in range(int(cls.SECONDS * 60)):
-            clock.t = k / 60.0
+        hz = cls.sim.request.physics.control_hz  # 50 under the example's MUJOCO_500HZ: the hand plays in sim time
+        for k in range(int(cls.SECONDS * hz)):
+            clock.t = k / hz
             for fn in studio.steps:
                 fn()
             applied = np.asarray(space.target_action(cls.sim.control), dtype=np.float64)

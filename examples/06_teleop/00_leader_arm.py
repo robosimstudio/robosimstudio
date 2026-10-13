@@ -6,8 +6,10 @@ Drive the simulated YAM from a real leader arm, read only.
 Each control step the script reads every connected leader, converts servo ticks
 to joint angles through a calibration file, and applies them as one
 ``joint_position`` action. Nothing is written to a servo, so nothing can push
-back on your hand. ``--simulate`` swaps the arm for a scripted hand that sweeps
-both arms and works the jaws, over a table of registers instead of a bus.
+back on your hand. The cube is on the arm's own engine, ``rss.MUJOCO_500HZ``, so
+jaws you close on it hold it by friction. ``--simulate`` swaps the arm for a
+scripted hand that sweeps both arms and works the jaws, over a table of
+registers instead of a bus.
 
 **Key features:**
 
@@ -52,9 +54,13 @@ def main(argv=None) -> None:
     else:
         leaders = resolve_leaders(parse_leader_ports(args.leader), args.calibration)
 
-    scene = rss.Scene(cell="bench_075", name="leader_arm")
+    # The arm and the cube in one MuJoCo island, so the jaws hold it by friction.
+    # Under the default the cube is on another engine that a hand pushes and cannot pinch.
+    scene = rss.Scene(cell="bench_075", name="leader_arm", physics=rss.MUJOCO_500HZ)
     scene.add(rss.robot(YAM_FOLLOWER, arm=YAM_TELEOP_ARM, gripper=YAM_TELEOP_GRIP))
-    scene.add(rss.box(name="cube", half=(0.025, 0.025, 0.025), at=(0.10, -0.25, 0.025)))
+    # In front of the right arm, where a hand turned to point down lifts it 150 mm. At
+    # (0.10, -0.25) the fourth joint is at its -90 degree limit 60 mm up, and a lift stops there.
+    scene.add(rss.box(name="cube", half=(0.025, 0.025, 0.025), at=(0.0, -0.20, 0.025)))
     sim = scene.build(control_mode="joint_position")
 
     check_leaders(sim, leaders)

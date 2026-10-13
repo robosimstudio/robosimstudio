@@ -33,6 +33,9 @@ tier on a GPU machine before a change that touches simulation.
   `main()`. A looping clip of it goes in that folder's `media/` as
   `<script>.webp`; then `uv run python scripts/example_readmes.py` writes its
   section of the folder's README.
+- **A clip** is a take in `scripts/recording/takes.py`: the example, the camera,
+  what the cursor does and what the physics must have done; then
+  `scripts/record_examples.py <name>` films it (see [`scripts/README.md`](scripts/README.md#media)).
 - **A new kind of thing** or **a new robot** registers itself; the library is not
   edited. See `examples/04_extending/`.
 - **A task** is a document and **a policy** is a graph folder; neither needs a

@@ -8,16 +8,18 @@ How to assemble a scene, build it, step it and read it back.
 
 ![Hello world](media/00_hello_world.webp)
 
-The smallest RoboSimStudio program: a bench, a cube released above it and a robot arm.
+The smallest RoboSimStudio program: a bench, a robot arm, and a cube that lands under its hand.
 
 `build()` turns the scene into a simulation, 150 steps let the cube land, and
-the last line opens the studio in a browser: click the cube to drag it, or drag
-the gizmo on the hand to drive the arm.
+the last line opens the studio in a browser. Drag the gizmo on the hand straight
+down onto the cube, press **Close** and drag it up: the fingers lift the cube by
+friction, which `rss.MUJOCO_500HZ` is there for. Or click the cube to drag it.
 
 **Key features:**
 
 * `rss.Scene` and `rss.Scene.add` to declare what stands where
 * `rss.box` and `rss.robot` for a free body and a registered robot
+* `rss.MUJOCO_500HZ` for physics a hand can pick a rigid body up in
 * `rss.Sim.run` to step and `rss.view` to open the browser studio
 
 ```bash
@@ -33,12 +35,12 @@ Source: [`00_hello_world.py`](00_hello_world.py)
 A scene you declare, a sim that runs it, and a ref on each thing you added.
 
 A `rss.Scene` is a list of specs in a named place and simulates
-nothing. `rss.Scene.build` compiles it into a
-`rss.Sim`, which owns the state and steps it. Each `add`
-returns a `rss.Ref`, a name that reads the live state.
-
-Every `at=` is measured from the middle of the place's work surface, so the
-same two specs are built here on a bench and again on a bare floor.
+nothing; `rss.Scene.build` compiles it into a
+`rss.Sim`, which owns the state and steps it; each `add`
+returns a `rss.Ref`, a name that reads the live state. Every
+`at=`, the robot's mount included, is measured from the middle of the place's
+work surface, so the cube lands under the hand on a bench and on a bare floor
+alike. On the page, drag the hand down onto it, press **Close** and lift.
 
 **Key features:**
 
@@ -145,6 +147,9 @@ print(sim.time)    # 3.5 (seconds simulated since the build)
 ```
 
 - A control step is 1/60 s by default. See [Physics and engines](../PHYSICS.md) to change it.
+- The two scripts here stage `physics=rss.MUJOCO_500HZ`, which steps at 50 Hz and
+  puts the arm and the cube in one engine, so the hand can close on the cube and
+  lift it. Under the default a hand can push a free body but not pinch one.
 - `sim.run` returns the sim, so `sim.run(60).sync()` chains.
 - `sim.step(action, mode="joint_position")` advances one control step with a
   command for the robot.

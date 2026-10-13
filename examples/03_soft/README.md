@@ -9,21 +9,24 @@ is built, section by section: [`soft.py`](soft.py), the implementation
 
 <!-- examples:start: written by scripts/example_readmes.py from each script's docstring -->
 
-## Press a sponge
+## Lift a sponge
 
-![Press a sponge](media/00_sponge.webp)
+![Lift a sponge](media/00_sponge.webp)
 
-A foam sponge under a Panda arm: drag the wrist gizmo down and the top face gives way under the fingertips.
+A foam sponge under an open Panda hand: drag the hand down onto it, press **Close** and lift.
 
-The arm is Newton's and the sponge is a volumetric FEM body that SuperDex steps.
-The default arrangement already routes soft bodies there, so the script says
-nothing about engines. Needs the `[superdex]` extra (Python 3.12).
+The hand starts pointing down over the sponge. Drag its gizmo straight down until
+the fingertips are a centimetre over the bench, press **Close**, and drag it up:
+the pads squeeze the foam and it comes up by friction alone, nothing pinned. The
+arm is Newton's and the sponge is a volumetric FEM body that SuperDex steps,
+which is why three settings below are the sponge's and the engine's, each with
+what it measured. Needs the `[superdex]` extra (Python 3.12).
 
 **Key features:**
 
-* `rss.sponge` for a soft block
-* `rss.robot` with `"panda"` for a single arm
-* `rss.Scene` with `cell="bench_075"` for a bench to stand them on
+* `rss.sponge` with a foam whose `friction_falloff` lets a pinch hold it
+* `rss.ActuationSpec` `effort_limit` for a grip that squeezes and stops
+* `rss.backend` `("superdex", feedback_dv_max=...)` for foam that pushes the fingers back
 * `rss.view` to drive the arm from the page
 
 ```bash

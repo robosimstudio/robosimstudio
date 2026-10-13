@@ -99,8 +99,13 @@ dev = ["ruff==0.16.1"]
 # than a base dependency, because pip needs NVIDIA's index named to find ovrtx.
 # ovrtx ships wheels for Linux (glibc 2.35+, x86_64 and aarch64) and Windows only,
 # so the marker keeps a macOS checkout installable.
+#
+# media: the clips the example READMEs show; scripts/record_examples.py films the
+# studio page in a headless Chromium. Never part of the package, and not a
+# default group, so a plain `uv sync` leaves it out.
 [dependency-groups]
 rtx = ["robosimstudio[rtx]; sys_platform == 'linux' or sys_platform == 'win32'"]
+media = ["playwright>=1.55", "pillow"]
 
 [project.urls]
 Repository = "https://github.com/robosimstudio/robosimstudio"

@@ -193,6 +193,26 @@ every selection keeps it, because a page you cannot stop is not a page. The
 ``Appearance`` fold is built inline too but *is* gated, through
 :meth:`StudioSession._wants`, because how the bench is shaded is a decision made
 once a session and a page showing one rope never makes it.
+
+A task's page keeps :data:`DOCUMENT_PANELS` as well, under any named selection.
+"""
+
+DOCUMENT_PANELS: tuple[str, ...] = ("goal", "solution", "regions")
+"""What a named selection keeps on a *task's* page, on top of its own keys.
+
+A selection is named for what a page is showing, and on a task the document is
+that: what is asked (``goal``), the regions it is asked about (``regions``),
+and the policies that answer it (``solution``, the Policy folder and its Run).
+``drive`` was written for hand-assembled scenes and dropped all three, so
+:func:`robosimstudio.view` on a task -- whose default is ``drive`` -- opened a
+page with a cube, a hand and no square to put it in, no clause to turn true and
+no Run to press. A bare scene has no document, and there a selection is
+exactly its keys.
+
+``task``, the menu, is not one of them: it swaps the page onto another
+document, and a page opened on one task is about that task. Keys given
+explicitly are taken as they are, because a caller who listed them has said
+exactly what the page is for.
 """
 
 
@@ -295,7 +315,8 @@ class StudioConfig:
 
     ``all`` is every panel the scene warrants, which is what a launcher and the
     benchmark want. :func:`robosimstudio.view` passes ``drive`` instead --
-    see its docstring for why the two doors default differently.
+    see its docstring for why the two doors default differently. A name keeps
+    :data:`DOCUMENT_PANELS` too on a task's page.
     """
     port: int = 8080
     share: bool = False
@@ -1076,7 +1097,12 @@ class StudioSession:
         return not wanted or key in wanted
 
     def _wanted_panels(self) -> tuple[str, ...]:
-        """The selection as keys. Empty means everything."""
+        """The selection as keys. Empty means everything.
+
+        Asked of the environment being built, not once per session: a page can
+        load a task over a bare scene and back, and :data:`DOCUMENT_PANELS` go
+        with the document.
+        """
         asked = self.config.panels
         if not isinstance(asked, str):
             return tuple(asked)
@@ -1085,6 +1111,8 @@ class StudioSession:
             raise ValueError(
                 f"unknown panel set {asked!r}; the names are {sorted(PANEL_SETS)}, or pass the panel keys themselves"
             )
+        if wanted and hasattr(getattr(self, "env", None), "task"):
+            return (*wanted, *DOCUMENT_PANELS)
         return wanted
 
     def _selected(self, panels: list[Panel]) -> list[Panel]:
@@ -1617,6 +1645,21 @@ class StudioSession:
         on a step the page did not take: paused is paused.
         """
         self._each_step.append(fn)
+
+    def add_routines(self, routines) -> None:
+        """A **Run** button per routine, a Stop, and what is playing: see :mod:`robosimstudio_studio.routine`.
+
+        ``routines`` is one callable or a dict of name to callable. Each takes the
+        scene (and, to drive the arm panels as a person does, the page as
+        ``session``) and returns a generator that yields once per control step.
+        """
+        from .routine import PanelRoutine
+
+        if callable(routines):
+            routines = {"Run": routines}
+        panel = PanelRoutine(self, routines)
+        panel.build(self.server.gui)
+        self.panels.append(panel)
 
     def run(self, *, steps: int = 0, warmup: int = 0) -> None:
         """Serve until the browser goes away or the page says stop.

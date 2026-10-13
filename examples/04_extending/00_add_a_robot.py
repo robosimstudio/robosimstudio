@@ -9,8 +9,9 @@ arm (``joint_names``, in order), which body is its wrist (``ee_body_name``),
 which registered hand sits on it (``gripper``) and where it starts (``home_q``);
 ``base_offset`` is where the base stands in the work-surface frame. Handing the
 spec to :func:`robosimstudio.robot` builds it exactly as a registered name
-would: an arm panel with a gizmo, IK, and a cube to reach for. Point ``asset``
-at your own MJCF or URDF and rename the joints.
+would: an arm panel with a gizmo, IK, and a hand that grips. The cube sits under
+it: drag the gizmo down, press **Close** and lift. Point ``asset`` at your own
+MJCF or URDF and rename the joints.
 
 **Key features:**
 
@@ -44,8 +45,10 @@ def main() -> None:
         ),
     )
 
-    scene = rss.Scene(cell="bench_075", name="add_a_robot")
-    scene.add(rss.box(name="cube", half=(0.025, 0.025, 0.025), at=(0.0, 0.0, 0.2)))
+    # MUJOCO_500HZ puts the arm and the cube in one engine, so the fingers hold by friction.
+    scene = rss.Scene(cell="bench_075", name="add_a_robot", physics=rss.MUJOCO_500HZ)
+    # On the bench, under the hand: ``home`` points the tool centre down from 231 mm over this spot.
+    scene.add(rss.box(name="cube", half=(0.025, 0.025, 0.025), at=(-0.143, -0.115, 0.025)))
     scene.add(rss.robot(my_panda))
     sim = scene.build(control_mode="joint_position")
 

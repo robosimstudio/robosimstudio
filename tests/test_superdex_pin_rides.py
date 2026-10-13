@@ -7,9 +7,10 @@ cable's end trailed the hand by a whole step's travel (5.2 mm at 0.3 m/s on the
 cable demo). ``bridge.ride(pin, body, local)`` hands the pin to the tick, which
 aims it from the body's pose swept through the control step the way it sweeps
 the mirrors: each substep's target is the pose ``(k + 1) / substeps`` of the way
-from where the body was at the last tick to where it is now. The physical claim
-is :mod:`tests.test_demo_route_the_cable`'s; this module holds the arithmetic
-against a stand-in engine, so it runs with no GPU and no ``[superdex]`` wheel.
+from where the body was at the last tick to where it is now (2.1 mm of trail at
+the same speed, measured then). No shipped demo pins a cable any more -- the route
+demo holds its cable by friction -- so this module, which holds the arithmetic
+against a stand-in engine with no GPU and no ``[superdex]`` wheel, is the pin's check.
 """
 
 from __future__ import annotations

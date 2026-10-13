@@ -66,9 +66,11 @@ A public share link is made only when asked for (`share=True`).
 
 ## Demos
 
-The live demos from the project page run from [`examples/09_demos/`](examples/09_demos/):
-wipe a grab bar with a sponge, route a cable into clips, and fold a towel, each
-by dragging the robot's hand in the studio.
+The live demos from the project page each have a folder under [`demo/`](demo/README.md):
+wipe a grab bar with a sponge, route a cable past two spools into a port, and
+fold a towel in half. Each opens with the robot at home and its hands open, and
+a **Run** button plays the whole job on the studio page, the gizmos moving as a
+person would move them; or drive the arms yourself.
 
 ## Citation
 

@@ -219,9 +219,10 @@ class SuperdexBridge:
             docstring's step 1.
         mirror_friction_falloff: ``friction_falloff_vel`` [m/s] for every
             mirror -- the speed at which regularised friction reaches its
-            Coulomb cap, below which a held object creeps. See
-            :func:`~robosimstudio.engines.superdex.mirror.build_mirror_actors`
-            for the pinch that measured it.
+            Coulomb cap, below which a held object creeps. It reaches no
+            contact while the mirrors are static: SuperDex then uses the
+            deformable's falloff. See
+            :func:`~robosimstudio.engines.superdex.mirror.build_mirror_actors`.
         mirror_smoothing: ``penalty_smoothing_half_distance`` [m] for every
             mirrored collider -- see :func:`build_mirror_actors`. The engine's
             own 5 mm lets a fingertip sit 2 mm inside a foam block; this

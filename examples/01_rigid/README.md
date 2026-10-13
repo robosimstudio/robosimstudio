@@ -8,19 +8,21 @@ Boxes, spheres, capsules and bodies loaded from a file.
 
 ![Drag rigid bodies](media/00_drag_things.webp)
 
-A box, a ball, a capsule and two arms on the floor: click any of them and drag it.
+A cube under an open hand, a ball and a capsule on a bench: drag the hand down onto the cube, close it and lift.
 
-A click puts a handle on a body, and the body stays fully dynamic under it, so
-you can push one shape with another or tug on something a hand is holding. Drag
-an arm's gizmo to move it through IK. Poses are in the work-surface frame; in
-the `void` cell that surface is the floor, so `z` is a height above ground.
+The right hand starts pointing down over the cube. Drag its gizmo straight down,
+press **Close**, and drag it up: the fingers hold the cube by friction alone, so
+a grip that slips is a grip that slips. That needs `rss.MUJOCO_500HZ`, which
+puts the arm and every free body in one MuJoCo island; the default physics lets
+a hand push a body but not pinch one. A click on any body puts a handle on it
+instead, and the body stays fully dynamic under it.
 
 **Key features:**
 
 * `rss.Scene` and `rss.Scene.add` to put things in a place
 * `rss.box`, `rss.sphere` and `rss.capsule` for shapes with no asset file
-* `rss.robot` for the arms
-* `rss.Scene.build` for a running sim
+* `rss.MUJOCO_500HZ` for physics a hand can pick a rigid body up in
+* `rss.ArmSpec` `home_q` for a hand that starts over the cube
 * `rss.view` to open the studio page on it
 
 ```bash

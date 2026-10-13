@@ -186,6 +186,7 @@ def view(
     *,
     panels: Any = _UNSET,
     page: Any = None,
+    routines: Any = None,
     render_every: int = _UNSET,
     port: int = _UNSET,
     share: bool = _UNSET,
@@ -210,7 +211,10 @@ def view(
 
     The panels that need a *document* -- the task menu, the goal readout, the
     policy runner -- are skipped when there is no task, because there is nothing
-    for them to say.
+    for them to say. On a task the goal, its regions and the runner's **Run**
+    are kept under ``drive`` too
+    (:data:`~robosimstudio_studio.session.DOCUMENT_PANELS`): they are what a
+    task's page shows. The menu is not, since it swaps the page onto another task.
 
     Args:
         sim: A :class:`~robosimstudio.sim.Sim`, a registered task id, or a
@@ -235,6 +239,19 @@ def view(
 
             ``studio.gui`` and ``studio.scene`` are viser's own, so a component
             written against a bare ``ViserServer`` works here unchanged.
+        routines: A **Run** button for each: one callable, or a dict of name to
+            callable. ``routine(sim, session)`` returns a generator that yields
+            once per control step and drives the arms through their panels --
+            :func:`robosimstudio_studio.routine.reach` glides a gizmo,
+            :func:`~robosimstudio_studio.routine.grip` presses Grip -- so the job
+            plays on the page the way a person would do it, and holds only what
+            the fingers hold::
+
+                def routine(sim, session):
+                    yield from reach(session, "right", above)
+                    yield from grip(session, "right", 1.0)
+
+                rss.view(sim, routines={"Pick it up": routine})
         render_every: Draw one frame per this many control steps. **1 here**, and
             4 on :class:`~robosimstudio_studio.StudioConfig` -- the other default
             that differs between the two doors, and the one with a measurement
@@ -309,6 +326,8 @@ def view(
     settings = dataclasses.replace(config, **changes)
 
     session = StudioSession(sim, config=settings, **kwargs)
+    if routines:
+        session.add_routines(routines)
     if page is not None:
         page(session)
     session.run()

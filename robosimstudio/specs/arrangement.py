@@ -5,7 +5,8 @@ A document stages physics by a versioned **name** and never by a number, and
 what the name stands for is an :class:`ArrangementSpec`: rates, a
 :class:`BackendSpec` per domain, a :class:`CouplerSpec`, a :class:`CollisionSpec`.
 Built with :func:`backend` and :func:`coupler`; :data:`GENERIC` is what a scene
-gets when nobody has staged one.
+gets when nobody has staged one, and :data:`MUJOCO_500HZ` is the one a hand can
+lift a rigid body in.
 
 One of the four modules :mod:`~robosimstudio.specs.physics` was split into. It
 reads the registries for one helper -- the parameter freezing a registered
@@ -24,6 +25,7 @@ from .registries import _frozen_params
 
 __all__ = [
     "GENERIC",
+    "MUJOCO_500HZ",
     "ArrangementSpec",
     "BackendSpec",
     "CollisionSpec",
@@ -291,7 +293,7 @@ class ArrangementSpec:
 
 
 # ---------------------------------------------------------------------------
-# The one arrangement the library ships
+# The arrangements the library ships
 # ---------------------------------------------------------------------------
 
 GENERIC = ArrangementSpec(
@@ -372,4 +374,27 @@ cloth example::
 
     physics=replace(GENERIC, coupling=coupler("one_way"),
                     collision=CollisionSpec(full_surface_contact=True))
+"""
+
+
+MUJOCO_500HZ = ArrangementSpec(
+    control_hz=50.0,
+    substeps=10,
+    backends=(("*", backend("mujoco", nconmax=512, njmax=512, enable_multiccd=True)),),
+    collision=CollisionSpec(contact_ke=6.0e4, contact_kd=500.0, rigid_gap=2.0e-3),
+)
+"""The arm and every free rigid body in one MuJoCo island, 50 Hz control over 500 Hz.
+
+**The arrangement a hand can pick a rigid body up in.** :data:`GENERIC` puts free
+bodies on VBD behind a proxy coupler, which pushes and cannot pinch: a Panda
+closing on a 50 mm cube there lets it slide out or flings it. Here the fingers
+stall on the faces and friction carries it, so a gripper closed from the
+studio's Grip button holds what it closed on. The rates and the contact law are
+the tool-sorting benchmark's own, measured there; tasks stage it by the name
+``mujoco_500hz@v1``.
+
+It is for rigid bodies. A sheet or a capsule-chain rope has no MuJoCo solver and
+belongs on :data:`GENERIC`'s VBD island. A sponge joins it on its own engine::
+
+    physics=MUJOCO_500HZ.with_backend("soft", backend("superdex", substeps=2))
 """
