@@ -16,13 +16,14 @@ its own panels are built, and `studio.gui` is viser's GUI API, so anything
 written for a bare `ViserServer` drops in. One rule: a viser callback runs on
 the server's thread and may only assign; the calls that touch the simulation go
 in `studio.each_step`, which runs on the main thread once per control step.
+The arm can pick the cube up too: drag its gizmo over it and down, press **Close** and lift.
 
 **Key features:**
 
 * `page=` on `rss.view` for controls of your own beside the studio's
 * `studio.gui.add_folder`, `add_slider`, `add_button` and `add_number`, viser's own
 * `studio.each_step` for the work that touches the simulation
-* `rss.Ref.bodies` and `rss.Ref.position` to reach the cube's state
+* `model.joint_child` and `joint_qd_start` to find the cube's free joint, and `state.joint_qd` to toss it
 
 ```bash
 uv run examples/05_studio/00_your_own_panel.py
@@ -103,10 +104,14 @@ Recorded from the page in a browser.
 - Click a patch of cloth to pin it to a handle. A second click elsewhere adds a
   second handle, and **Move together** carries both as one.
 - Drag an arm's gizmo to move the arm through IK. **Grip** opens and closes its
-  fingers.
+  fingers. What they close on stays in them only by friction, and that needs
+  `physics=rss.MUJOCO_500HZ` (arm and rigid bodies in one engine); under the
+  default a hand pushes a free body and cannot pinch one.
 - **Pause**, **Speed** and **Reset** are in the Simulation folder.
 
-`rss.view` opens with the `drive` panels, which are the ones above.
+`rss.view` opens with the `drive` panels, which are the ones above. On a task
+it keeps the task's own as well: the **Goal**, the regions it is about, and the
+**Policy** folder with **Run** ([Tasks](../07_tasks/README.md)).
 `rss.view(sim, panels="all")` adds the rest:
 
 | Folder | What it does |

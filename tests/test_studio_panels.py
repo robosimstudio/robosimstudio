@@ -23,10 +23,13 @@ the thing you are looking at.
 
 from __future__ import annotations
 
+import importlib.util
 import unittest
 
 TIER = "medium"
 """Compiles scenes and starts a viser server on a spare port."""
+
+HAS_GAP = importlib.util.find_spec("gap") is not None
 
 DRIVE = ("inspector", "arm", "object", "cloth")
 """What ``panels="drive"`` keeps: the things you take hold of, and what is behind
@@ -136,6 +139,94 @@ class TestTheSceneStillDecidesWhatExists(unittest.TestCase):
             self.assertEqual({"object"}, _keys(session))
             self.assertIsNone(session.deformables)
         finally:
+            session.teardown()
+
+
+class TestATaskPageKeepsItsDocument(unittest.TestCase):
+    """``rss.view`` on a task: ``drive``, and still the goal, its square and Run.
+
+    ``drive`` was written for hand-assembled scenes and filtered a task's page
+    down to the same four keys, so ``examples/07_tasks`` opened with no goal
+    beside the scene and no square to drag the cube into, and the policy pages
+    in ``examples/08_policies`` had no Run. Opened through :func:`robosimstudio.view`
+    itself, with only the blocking loop replaced, so the door's own default is
+    what is under test.
+    """
+
+    @staticmethod
+    def _view(env, port: int):
+        from unittest import mock
+
+        import robosimstudio as rss
+        from robosimstudio_studio.session import StudioSession
+
+        opened: list = []
+        # A bound list.append would take no self here: the lambda is what makes it a method.
+        with mock.patch.object(StudioSession, "run", lambda self: opened.append(self)):  # noqa: PLW0108
+            rss.view(env, port=port, share=False, speed="max")
+        (session,) = opened
+        return session
+
+    def test_the_goal_its_regions_and_the_runner_stay(self) -> None:
+        import inspect
+
+        import robosimstudio as rss
+        from tests.fixtures.examples import _run
+
+        self.assertEqual("drive", inspect.signature(rss.view).parameters["panels"].default)
+        env, _ = _run("07_tasks/00_your_first_task.py")
+        session = self._view(env, 9220)
+        try:
+            keys = _keys(session)
+            self.assertLessEqual({"goal", "regions", "solution"}, keys, "the document's panels")
+            self.assertLessEqual(set(DRIVE) - {"cloth"}, keys, "and what drive keeps on any page")
+            for key in ("task", "scene", "video", "record", "camera", "overlay"):
+                with self.subTest(dropped=key):
+                    self.assertNotIn(key, keys)
+            self.assertIn("containment", session.goal_panel._tree_text(), "the clause, beside the scene")
+            self.assertIn("square", session.env.handles.regions)
+            self.assertIsNotNone(session.driver, "the Policy folder, which holds Run")
+        finally:
+            session.teardown()
+
+    def test_a_bare_scene_under_drive_is_unchanged(self) -> None:
+        """The other half: no document, nothing added -- the same four keys as ever."""
+        session = self._view(_sim(cloth=True), 9221)
+        try:
+            self.assertEqual(set(DRIVE), _keys(session))
+        finally:
+            session.teardown()
+
+    def test_keys_given_explicitly_are_taken_as_they_are(self) -> None:
+        from tests.fixtures.examples import _run
+
+        env, _ = _run("07_tasks/00_your_first_task.py")
+        session = _session(env, 9222, panels=("object",))
+        try:
+            self.assertEqual({"object"}, _keys(session))
+            self.assertIsNone(session.goal_panel)
+        finally:
+            session.teardown()
+
+    @unittest.skipUnless(HAS_GAP, "the graph runtime is not installed (the [gap] extra)")
+    def test_run_places_the_cube_from_the_policy_page(self) -> None:
+        """What the 08 clips press: Run, and the page's own graph picks and places."""
+        from tests.fixtures.examples import _run
+
+        env, _ = _run("08_policies/00_pick_and_place.py")
+        session = self._view(env, 9223)
+        try:
+            self.assertIn("pick", session.driver.choices)
+            session.driver.start_requested = True  # what the Run button's callback writes
+            session.tick()
+            self.assertTrue(session.driver.running, session.driver.message)
+            for _ in range(1500):  # the document's max-steps; the graph takes about 600
+                if not session.driver.running:
+                    break
+                session.tick()
+            self.assertIn("SUCCESS", session.driver.message)
+        finally:
+            session.driver.stop("")
             session.teardown()
 
 

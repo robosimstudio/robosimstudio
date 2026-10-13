@@ -330,8 +330,8 @@ class EntityRodSuperdex(ParticleMixin, Centerline, Entity):
         the rest it restores never had. And a hold is an offset from where the
         hand *was*: the reset sends the hand home, and a pin re-made from that
         offset would drag the node across the scene to it. A caller that wants
-        the cable in the hand from the start takes it again after the reset --
-        on the first step, as ``examples/09_demos/01_route_the_cable.py`` does.
+        the cable in the hand from the start takes it again after the reset, on
+        the first step.
 
         Asked rather than remembered because this rod's record of its pins
         outlived the engine's: ``held`` read 1.0 after a reset with nothing
