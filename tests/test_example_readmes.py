@@ -47,10 +47,14 @@ class TestTheExampleReadmes(unittest.TestCase):
             self.assertEqual(["examples/00_x/README.md -> media/gone.webp"], tool.dangling_media())
 
     def test_every_demo_shows_its_clip(self) -> None:
-        """The demos are what a visitor from the project page looks for: each one is seen running."""
-        demos = REPO / "examples" / "09_demos"
-        readme = (demos / "README.md").read_text(encoding="utf-8")
-        for script in sorted(demos.glob("[0-9][0-9]_*.py")):
-            with self.subTest(script=script.name):
-                self.assertTrue((demos / "media" / f"{script.stem}.webp").is_file(), "no clip in media/")
-                self.assertIn(f"(media/{script.stem}.webp)", readme)
+        """The demos are what a visitor from the project page looks for: each one is seen running.
+
+        A demo is a folder under ``demo/`` holding a script of its own name, and
+        its README shows ``media/<name>.webp``, which is there."""
+        demos = sorted(p for p in (REPO / "demo").iterdir() if (p / f"{p.name}.py").is_file())
+        self.assertTrue(demos, "no demo folders under demo/")
+        for folder in demos:
+            with self.subTest(demo=folder.name):
+                readme = (folder / "README.md").read_text(encoding="utf-8")
+                self.assertTrue((folder / "media" / f"{folder.name}.webp").is_file(), "no clip in media/")
+                self.assertIn(f"(media/{folder.name}.webp)", readme)

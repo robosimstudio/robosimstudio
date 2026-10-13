@@ -163,6 +163,12 @@ def _folded(film) -> tuple[bool, str]:
     return ok, f"extent {m['fold_extent']:.3f} (need <= 0.6), score {m['fold_score']:.3f} (need >= 0.85)"
 
 
+def _wiped(film) -> tuple[bool, str]:
+    """The wipe demo's own measure: the share of the marker stripe the sponge cleaned."""
+    cleaned = float(film.sim["stripe"].entity.cleaned)
+    return cleaned >= 0.9, f"{cleaned:.3f} of the stripe clean (need 0.9)"
+
+
 def _succeeded(film) -> tuple[bool, str]:
     """The task's own verdict on the scene as the take left it."""
     result = film.sim.evaluate()[-1]
@@ -547,7 +553,7 @@ DRAFTS = (
         needs=("superdex",),
         camera=ROPE_VIEW,
     ),
-    routine("demo/wipe_the_bar/wipe_the_bar.py", speed=2.0, success="the bar is wiped:"),
+    routine("demo/wipe_the_bar/wipe_the_bar.py", speed=2.0, success="the bar is wiped:", done=_wiped),
     routine("demo/route_the_cable/route_the_cable.py", speed=2.0, success="the cable is routed:", done=_routed),
     routine("demo/fold_the_towel/fold_the_towel.py", speed=2.0, success="the towel is folded:", done=_folded),
 )
@@ -561,7 +567,6 @@ KEPT: dict[str, str] = {
     "live/live_page": "the live page rebuilding on a save of scene.py: a file being edited, not a scene being driven",
     "06_teleop/leader_sim": "the --simulate page 06_teleop/00_leader_arm films; kept until the README shows one of the two",
     "06_teleop/force_feedback_sim": "the --simulate page 06_teleop/01_force_feedback films; kept until the README shows one",
-    "09_demos/00_wipe_the_bar": "moving to demo/wipe_the_bar/, whose take films it there",
 }
 """Clips no take films, each with why its existing file stands. Keyed like :attr:`Take.key`."""
 
