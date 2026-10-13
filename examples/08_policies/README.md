@@ -67,7 +67,7 @@ and place as the retry example. Needs the `[gap]` extra.
 **Key features:**
 
 * `SolutionGraph(..., privileged=False)`: no `sim.*` tool, only what a rig would have
-* a camera rig the task names, rendered by `bench.Env(..., renderer="rtx")`
+* a camera rig the task names, rendered by `bench.Env(..., renderer="auto")`: path traced where the GPU can, colliders where not
 * a script node that back-projects a depth image into world points
 
 ```bash

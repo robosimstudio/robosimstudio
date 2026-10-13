@@ -211,7 +211,8 @@ class PanelCamera(Panel):
         # The environment's own frames when it has a rig to read, else the
         # renderer. Not a choice: a page shows what the scene is photographed
         # as, and a picture is made with one renderer.
-        self.backends = ((SOURCE_OBS,) if self.env.renderer is not None else ()) + (default_renderer(),)
+        device = getattr(getattr(self.env, "model", None), "device", None)
+        self.backends = ((SOURCE_OBS,) if self.env.renderer is not None else ()) + (default_renderer(device),)
         self.backend = self.backend if self.backend in self.backends else self.backends[0]
 
         self._renderer = None

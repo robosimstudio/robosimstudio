@@ -105,7 +105,9 @@ class Env(Sim):
             :func:`~robosimstudio_bench.taskbuild.matrix.admits` decides and the
             binding records.
         episode: Which episode to start at.
-        renderer: Backend name for the camera rig, or ``""`` for no rendering.
+        renderer: Backend name for the camera rig, ``"auto"`` for the machine's
+            (see :func:`~robosimstudio.solvers.render.choose_renderer`), or ``""``
+            for no rendering.
         render_every: Render one control step in this many. A policy that only
             looks at pixels every fourth step should not pay for four renders.
         renderer_kwargs: Forwarded to the backend.

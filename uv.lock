@@ -4540,6 +4540,9 @@ media = [
     { name = "pillow" },
     { name = "playwright" },
 ]
+rtx = [
+    { name = "robosimstudio", extra = ["rtx"], marker = "sys_platform == 'linux' or sys_platform == 'win32'" },
+]
 
 [package.metadata]
 requires-dist = [
@@ -4577,6 +4580,7 @@ media = [
     { name = "pillow" },
     { name = "playwright", specifier = ">=1.55" },
 ]
+rtx = [{ name = "robosimstudio", extras = ["rtx"], marker = "sys_platform == 'linux' or sys_platform == 'win32'" }]
 
 [[package]]
 name = "robosuite"

@@ -66,7 +66,9 @@ genesis = [
 ]
 # The OVRTX path-traced renderer. Pinned: its render-var names and readback API
 # are private surface. pyglet is here because Newton's viewer camera imports
-# pyglet.math at call time.
+# pyglet.math at call time. A checkout run through uv installs it without being
+# asked -- the `rtx` group below -- and a GPU without RT cores renders with
+# `tiled` either way (robosimstudio.solvers.render.choose_renderer).
 rtx = ["ovrtx==0.4.0.*", "usd-core", "pyglet"]
 # USD scene import.
 usd = ["newton[importers]"]
@@ -90,10 +92,19 @@ gap = [
 curobo = ["nvidia-curobo[cu12]"]
 dev = ["ruff==0.16.1"]
 
+# What `uv sync` and `uv run` install from a checkout without being asked
+# (default-groups below): the [rtx] extra, so a GPU that can path trace does.
+# It is 1.8 GB from NVIDIA's index; on a GPU without RT cores it is never
+# imported, and UV_NO_GROUP=rtx (or --no-group rtx) leaves it out. A group rather
+# than a base dependency, because pip needs NVIDIA's index named to find ovrtx.
+# ovrtx ships wheels for Linux (glibc 2.35+, x86_64 and aarch64) and Windows only,
+# so the marker keeps a macOS checkout installable.
+#
+# media: the clips the example READMEs show; scripts/record_examples.py films the
+# studio page in a headless Chromium. Never part of the package, and not a
+# default group, so a plain `uv sync` leaves it out.
 [dependency-groups]
-# The clips the example READMEs show: scripts/record_examples.py films the
-# studio page in a headless Chromium. A group, not an extra: never part of the
-# package, never installed by a plain `uv sync`.
+rtx = ["robosimstudio[rtx]; sys_platform == 'linux' or sys_platform == 'win32'"]
 media = ["playwright>=1.55", "pillow"]
 
 [project.urls]
@@ -169,6 +180,7 @@ explicit = true
 # gym, bddl) and pins mujoco 3.6. Nothing robosimstudio_policy_agent imports from it
 # loads any of those, so they are dropped, and mujoco follows Newton.
 [tool.uv]
+default-groups = ["rtx"]
 override-dependencies = [
     "PyOpenGL>=3.1.7",
     "libero; sys_platform == 'never'",

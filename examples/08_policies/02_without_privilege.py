@@ -12,7 +12,7 @@ and place as the retry example. Needs the ``[gap]`` extra.
 **Key features:**
 
 * ``SolutionGraph(..., privileged=False)``: no ``sim.*`` tool, only what a rig would have
-* a camera rig the task names, rendered by ``bench.Env(..., renderer="rtx")``
+* a camera rig the task names, rendered by ``bench.Env(..., renderer="auto")``: path traced where the GPU can, colliders where not
 * a script node that back-projects a depth image into world points
 """
 
@@ -46,7 +46,7 @@ def main() -> None:
     register_asset(Body.from_spec(pad, name="pad_120mm"))
     bench.register_camera_rig("overhead@v1", (OVERHEAD,))
 
-    env = bench.Env(bench.task(TASK), renderer="rtx")
+    env = bench.Env(bench.task(TASK), renderer="auto")
     result = bench.rollout(env, SolutionGraph(env, graph="look", privileged=False, roll="held"))
     print(f"success={result.success} after {result.steps} steps")
 

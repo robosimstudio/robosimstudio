@@ -15,7 +15,10 @@ raises.
 
 from __future__ import annotations
 
+import os
+import types
 import unittest
+from unittest.mock import patch
 
 import numpy as np
 
@@ -73,6 +76,12 @@ class TestRendererChannels(unittest.TestCase):
         self.assertTrue(issubclass(backend_class(FALLBACK), RendererBase))
         self.assertIn(default_renderer(), (PUBLIC, FALLBACK))
 
+    def test_the_default_is_the_rules_pick_with_nothing_asked(self):
+        from robosimstudio.solvers.render import ENV, choose_renderer, default_renderer
+
+        with patch.dict(os.environ, {ENV: ""}):
+            self.assertEqual(default_renderer(), choose_renderer()[0])
+
     def test_the_override_narrows_what_a_camera_asked_for(self):
         """A channel override wins over the camera's own list."""
         camera = CameraSpec(name="cam", width=8, height=8, channels=("rgb", "depth", "seg"))
@@ -89,6 +98,82 @@ class TestRendererChannels(unittest.TestCase):
         camera = CameraSpec(name="cam", width=8, height=8, channels=("rgb", "seg"))
         with self.assertRaises(ValueError):
             self._Backend([camera])
+
+
+def _gpu(name: str, arch: int, cuda: bool = True):
+    """A Warp device as :func:`rt_cores` reads one."""
+    return types.SimpleNamespace(name=name, arch=arch, is_cuda=cuda, alias="cuda:0" if cuda else "cpu")
+
+
+class TestTheRendererRule(unittest.TestCase):
+    """Named in code, else named for the machine, else what the machine can run.
+
+    No GPU and no ovrtx: what the machine has is patched, which is the point --
+    the rule has to come out right on an A100 and on a laptop without either
+    being in the room.
+    """
+
+    def choose(self, requested="", *, env="", installed=True, gpu=None):
+        from robosimstudio.solvers.render import ENV, choose_renderer
+
+        gpu = gpu or _gpu("NVIDIA RTX PRO 6000 Blackwell Server Edition", 120)
+        with (
+            patch.dict(os.environ, {ENV: env}),
+            patch("robosimstudio.solvers.render.rtx_available", return_value=installed),
+            patch("warp.get_device", return_value=gpu),
+        ):
+            return choose_renderer(requested)
+
+    def test_a_gpu_with_rt_cores_gets_the_path_tracer(self):
+        for name, arch in (("Tesla T4", 75), ("NVIDIA A40", 86), ("NVIDIA L40S", 89), ("NVIDIA GeForce RTX 5090", 120)):
+            self.assertEqual(self.choose(gpu=_gpu(name, arch))[0], "rtx", name)
+
+    def test_a_gpu_without_them_gets_tiled_and_says_which(self):
+        for name, arch in (("NVIDIA A100-SXM4-80GB", 80), ("NVIDIA H100 80GB HBM3", 90), ("NVIDIA B200", 100)):
+            backend, why = self.choose(gpu=_gpu(name, arch))
+            self.assertEqual(backend, "tiled", name)
+            self.assertIn(name, why)
+            self.assertIn("no RT cores", why)
+
+    def test_turing_without_rt_cores_is_told_apart_by_name(self):
+        """GTX 16 and MX share sm_75 with the T4 and RTX 20, and have none."""
+        self.assertEqual(self.choose(gpu=_gpu("NVIDIA GeForce GTX 1660 Ti", 75))[0], "tiled")
+
+    def test_an_architecture_nobody_listed_gets_tiled(self):
+        self.assertEqual(self.choose(gpu=_gpu("NVIDIA Future", 130))[0], "tiled")
+
+    def test_no_ovrtx_is_tiled_whatever_the_gpu(self):
+        self.assertEqual(self.choose(installed=False), ("tiled", "ovrtx is not installed"))
+
+    def test_no_cuda_is_tiled(self):
+        self.assertEqual(self.choose(gpu=_gpu("cpu", 0, cuda=False))[0], "tiled")
+
+    def test_the_machine_variable_wins_over_the_machine(self):
+        self.assertEqual(self.choose(env="tiled"), ("tiled", "ROBOSIMSTUDIO_RENDERER=tiled"))
+        self.assertEqual(self.choose(env="rtx", gpu=_gpu("NVIDIA A100", 80))[0], "rtx")
+
+    def test_a_name_in_code_wins_over_the_variable(self):
+        self.assertEqual(self.choose("tiled", env="rtx"), ("tiled", "asked for"))
+
+    def test_auto_and_empty_name_nothing(self):
+        for requested, env in (("auto", ""), ("", "auto"), ("auto", "auto")):
+            self.assertEqual(self.choose(requested, env=env)[0], "rtx", (requested, env))
+        self.assertEqual(self.choose("auto", env="tiled")[0], "tiled")
+
+    def test_rtx_named_without_ovrtx_raises_rather_than_swapping(self):
+        with self.assertRaisesRegex(ImportError, "ovrtx is not installed"):
+            self.choose("rtx", installed=False)
+        with self.assertRaisesRegex(ImportError, "ROBOSIMSTUDIO_RENDERER"):
+            self.choose(env="rtx", installed=False)
+
+    def test_a_misspelled_name_fails_by_name(self):
+        with self.assertRaisesRegex(ValueError, "ROBOSIMSTUDIO_RENDERER='rtxx'"):
+            self.choose(env="rtxx")
+        with self.assertRaisesRegex(ValueError, "'tiles'"):
+            self.choose("tiles")
+
+    def test_a_dotted_path_is_a_name(self):
+        self.assertEqual(self.choose("my.renderers.Mine")[0], "my.renderers.Mine")
 
 
 class TestOneWorldRenderIsNotTheWholeFleetsSignature(unittest.TestCase):

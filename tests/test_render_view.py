@@ -42,16 +42,26 @@ def _panel(**kwargs) -> PanelRenderView:
     return panel
 
 
-def _rtx_panel(**kwargs) -> PanelRenderView:
+def _rtx_panel(why: str = "NVIDIA RTX PRO 6000 (sm_120)", **kwargs) -> PanelRenderView:
     """A page whose world model is on *and* resolved to the tracer.
 
-    ``world_model=True`` lands in raster mode wherever ovrtx is not installed
-    (a CI runner, a frozen install without the ``[rtx]`` extra), so a test about
-    what the RTX viewport does to the scene has to pin the tracer as present;
-    nothing below renders, so the pin costs nothing.
+    Which renderer a page gets depends on the machine (a CI runner has no ovrtx
+    and no RT cores), so a test about what the RTX viewport does to the scene
+    pins the choice; nothing below renders, so the pin costs nothing. ``why`` is
+    the reason the rule gave -- a GPU for the machine's pick, ``asked for`` or
+    ``ROBOSIMSTUDIO_RENDERER=rtx`` for a name somebody chose.
     """
-    with unittest.mock.patch("robosimstudio_studio.render_view._tracer_available", return_value=True):
+    with unittest.mock.patch("robosimstudio_studio.render_view.choose_renderer", return_value=("rtx", why)):
         return _panel(world_model=True, **kwargs)
+
+
+def _tiled_panel(**kwargs) -> PanelRenderView:
+    """A page on a machine where the rule picks ``tiled``: no ovrtx, or no RT cores."""
+    with unittest.mock.patch(
+        "robosimstudio_studio.render_view.choose_renderer",
+        return_value=("tiled", "NVIDIA A100 (sm_80) has no RT cores"),
+    ):
+        return _panel(**kwargs)
 
 
 class TestTheClickListener(unittest.TestCase):
@@ -210,13 +220,45 @@ class TestTheWorldModelSwitch(unittest.TestCase):
         panel._service_requests()
         self.assertEqual(panel.mode, "rtx")
 
-    def test_it_is_disabled_without_a_tracer(self) -> None:
-        """Nothing to switch on, and a switch that does nothing is a lie."""
-        import robosimstudio_studio.render_view as module
+    def test_without_the_tracer_it_renders_with_tiled(self) -> None:
+        """No ovrtx or no RT cores is a colliders-only frame, not a dead switch."""
+        panel = _tiled_panel(world_model=True)
+        self.assertEqual((panel.mode, panel.backend), ("rtx", "tiled"))
+        self.assertFalse(panel.server.gui.find("World model").disabled)
 
-        available = module._tracer_available()
-        widget = self._built(False)[1]
-        self.assertEqual(widget.disabled, not available)
+    def test_tiled_has_no_passes_to_set(self) -> None:
+        """Passes are the path tracer's convergence; a dial that does nothing is greyed out."""
+        panel = _tiled_panel()
+        self.assertTrue(panel.server.gui.find("Passes moving").disabled)
+        self.assertTrue(panel.server.gui.find("Passes still").disabled)
+        self.assertFalse(_rtx_panel().server.gui.find("Passes still").disabled)
+
+    def test_a_misspelled_renderer_disables_it_and_says_so(self) -> None:
+        """A bad ``ROBOSIMSTUDIO_RENDERER`` is reported on the page, not raised through it."""
+        with unittest.mock.patch.dict("os.environ", {"ROBOSIMSTUDIO_RENDERER": "rtxx"}):
+            panel = _panel(world_model=True)
+        self.assertEqual(panel.mode, "raster")
+        self.assertTrue(panel.server.gui.find("World model").disabled)
+        panel.refresh()
+        self.assertIn("rtxx", panel._readout.value)
+
+
+class TestWhenTheRendererFails(unittest.TestCase):
+    """The rule picks ``rtx`` by a table of GPUs; a failure is the table being wrong."""
+
+    def test_the_machines_pick_falls_back_to_tiled(self) -> None:
+        panel = _rtx_panel()
+        panel._failed("rtx would not build -- RuntimeError: no ray tracing pipeline")
+        self.assertEqual((panel.mode, panel.backend), ("rtx", "tiled"))
+        self.assertTrue(panel.server.gui.find("Passes still").disabled)
+
+    def test_a_renderer_somebody_named_is_not_swapped(self) -> None:
+        """``rtx`` asked for is tried and, failing, switched off -- the same rule ``choose_renderer`` keeps."""
+        for why in ("asked for", "ROBOSIMSTUDIO_RENDERER=rtx"):
+            panel = _rtx_panel(why=why)
+            panel._failed("rtx would not build -- RuntimeError: no ray tracing pipeline")
+            self.assertEqual((panel.mode, panel.backend), ("raster", "rtx"), why)
+            self.assertFalse(panel.server.gui.find("World model").value, "a switch left on over no frame is a lie")
 
 
 class TestCleanView(unittest.TestCase):
