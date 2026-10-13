@@ -28,15 +28,13 @@ def main():
     radius = 0.011  # of each capsule [m]
     segments = 28  # capsules; their spacing must stay above twice the radius
     x = -0.05  # the line the cable lies on, in the bench's frame [m]: 50 mm toward the arms, inside their reach
-    # The right arm's joints [rad] with its tool centre 100 mm over the bench,
-    # above capsule 13 (10.7 mm short of the middle), pointing down, jaws
-    # closing across the cable. Solved once with ``sim.arm("right").solve_q_full``.
+    # The right arm's joints [rad]: tool centre 100 mm over the bench above capsule 13, by
+    # the middle, pointing down, jaws across the cable. Solved with ``sim.arm("right").solve_q_full``.
     over_cable = (0.857, 2.337, 2.189, -1.422, 0.0, -0.714)
 
-    # A pinched capsule crept through the pads at 15 mm/s under the default
-    # contact law, which has no static friction, and fell out of a 0.15 m/s lift.
-    # Anchored contacts with their multipliers carried over (both below) held it
-    # within 1 mm of where it was pinched through a 0.4 m/s lift and a 2 s hold.
+    # Under the default contact law, which has no static friction, a pinched capsule crept
+    # through the pads at 15 mm/s and fell out of a 0.15 m/s lift. Anchored contacts (both
+    # settings below) held it within 1 mm of where it was pinched through a 0.4 m/s lift.
     physics = rss.replace(
         rss.GENERIC.with_backend(
             "*", rss.backend("vbd", rigid_body_contact_buffer_size=256, rigid_contact_history=True)
