@@ -298,8 +298,11 @@ class GapEnvFacade:
         settle_tolerance: float = 0.01,
         settle_max_steps: int = 60,
         arm_id: int = 0,
-    ) -> None:
+    ) -> bool:
         """Feed a dense joint trajectory one waypoint per control step.
+
+        Returns whether the arm settled on the last waypoint (``True`` for an
+        empty trajectory: there was nowhere to go).
 
         The runtime looks for this method by name and, finding it, treats a
         trajectory as *the control sequence* rather than as a list of poses to
@@ -330,13 +333,14 @@ class GapEnvFacade:
         """
         for positions in waypoints:
             self.bus.call(self.apply_joint_action, np.asarray(positions, dtype=np.float64), arm_id)
-        if waypoints:
-            self.move_to_joints_blocking(
-                np.asarray(waypoints[-1], dtype=np.float64),
-                tolerance=settle_tolerance,
-                max_steps=settle_max_steps,
-                arm_id=arm_id,
-            )
+        if not waypoints:
+            return True
+        return self.move_to_joints_blocking(
+            np.asarray(waypoints[-1], dtype=np.float64),
+            tolerance=settle_tolerance,
+            max_steps=settle_max_steps,
+            arm_id=arm_id,
+        )
 
     def stream_dual_trajectory(
         self,
@@ -442,8 +446,10 @@ class GapEnvFacade:
         tolerance: float = 0.01,
         max_steps: int = 120,
         arm_id: int = 0,
-    ) -> None:
+    ) -> bool:
         """Drive one arm to a joint target, stepping until it converges.
+
+        Returns whether it converged inside ``max_steps``.
 
         The runtime's ``Connector`` prefers this over its own fallback loop, and
         that preference is worth honouring: the fallback drives a raw
@@ -453,18 +459,20 @@ class GapEnvFacade:
         the one place that owns it.
 
         ``max_steps == 0`` is the runtime's fire-and-forget contract: publish
-        the target once and return without polling.
+        the target once and return ``False`` without polling -- not known to
+        have arrived.
         """
         goal = np.asarray(target, dtype=np.float64).reshape(-1)
         if max_steps == 0:
             self.bus.call(self.apply_joint_action, goal, arm_id)
-            return
+            return False
         name = self._arm(arm_id)
         for step in range(int(max_steps)):
             self.bus.call(self.apply_joint_action, goal, arm_id)
             reached = self.bus.call(self._joint_error, name, goal)
             if step > 0 and reached < tolerance:
-                return
+                return True
+        return False
 
     def _joint_error(self, arm: str, goal: np.ndarray) -> float:
         """How far this arm is from a joint target [rad], on the owner thread."""

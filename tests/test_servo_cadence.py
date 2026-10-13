@@ -256,6 +256,18 @@ class TestATurnCountsTheStepsItSpans(unittest.TestCase):
         self.assertEqual(rig.advances_by_turn, [1] * 5)
 
 
+class TestTheBudgetIsNeverBelowOneStep(unittest.TestCase):
+    def test_a_zero_or_negative_budget_is_the_default(self):
+        """``int(max_steps) or MAX_STEPS`` let a negative through: a move that ended before its first turn."""
+        for given in (0, -5):
+            rig = _Rig(1)
+            with mock.patch.object(servo_module, "MAX_STEPS", 7):
+                result = rig.move(1.0, max_steps=given)
+            self.assertEqual(result["outcome"], "timeout")
+            self.assertEqual(result["steps"], 7)
+            self.assertGreaterEqual(result["remaining_distance"], 0.0)
+
+
 class TestTheStallWindowIsInSimulatorSteps(unittest.TestCase):
     def test_contact_comes_after_stall_steps_simulator_steps_not_turns(self):
         """``stall_steps=12`` is twelve simulator steps without progress at any k.
