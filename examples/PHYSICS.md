@@ -114,10 +114,18 @@ sim = scene.build(control_mode="joint_position")
 rss.view(sim)    # a hand closed on the cube lifts it
 ```
 
-Nothing holds the cube to the hand but the fingers. In
-[`01_rigid/00_drag_things.py`](01_rigid/00_drag_things.py), dragged down onto the
-cube, closed and lifted 150 mm through the page, the cube rose 145 mm and moved
-0.1 mm against the hand over a 2 s hold; **Open** drops it.
+Nothing holds the cube to the hand but the fingers: a grip that slips, slips.
+Dragged down onto a 50 mm cube through the page, closed and lifted 150 mm, the
+cube came up 145 mm with 0.1 mm of slip in the YAM's hand
+([`01_rigid/00_drag_things.py`](01_rigid/00_drag_things.py)) and 150 mm with
+0.3 mm in the Panda's ([`00_getting_started/`](00_getting_started/README.md));
+**Open** drops it.
+
+The arm and the bodies are stepped as joint coordinates here, so a body's
+velocity is its free joint's `joint_qd` (linear, then angular). Writing
+`body_qd`, which this island does not read, moves nothing:
+[`05_studio/00_your_own_panel.py`](05_studio/00_your_own_panel.py) tosses its
+cube the first way.
 
 | Field | Value |
 | --- | --- |
