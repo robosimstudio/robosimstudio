@@ -14,10 +14,14 @@ In order:
 2. **The bar**: a 25 mm tube on two elbows, welded into its blocks as the real one is bolted.
 3. **The stripe**: the marker line, which wears off where the foam presses *and* slides.
 4. **The scene**: two YAMs at home, the mat, the blocks, the bar, and the sponge on the mat.
-5. **The contact map**: the stripe unrolled, with the press drawn on it.
+5. **The latch**: once the right jaws have gripped the sponge by contact, the foam under the pads pinned to the hand.
+6. **The contact map**: the stripe unrolled, with the press drawn on it.
 
-Nothing here holds the sponge. The right hand's jaws do, by their squeeze and
-the foam's friction, in ``routine.py``.
+The grasp is physics and the hold after it is a latch. The jaws close on the
+foam by their servo and SuperDex contact alone; once they have settled on it,
+both pads pressing and the foam squeezed, :class:`Latch` pins the foam under the
+pads where it is, and lets go when the jaws are told to open. Friction alone did
+not hold the sponge through the wipe: see the README.
 """
 
 from __future__ import annotations
@@ -117,7 +121,8 @@ stayed on the mat; this one (80 kPa) is squeezed from 50 mm to 45.5 mm and comes
 up. Below ``friction_falloff`` of slip SuperDex's friction grows with the slip,
 so nothing is held still, and against a collider it drives by pose -- every pad,
 the bar, the mat -- the value it uses is the sponge's, not the collider's. Even
-at 0.1 mm/s the foam slides in the jaws under the wipe: see the README."""
+at 0.1 mm/s the foam slid in the jaws under the wipe, which is why the hold is
+latched once the grasp is made (section 5)."""
 
 PHYSICS = rss.ArrangementSpec(
     control_hz=60.0,
@@ -437,7 +442,134 @@ def scene(layout: Layout = LAYOUT) -> rss.Scene:
 
 
 # =============================================================================
-# 5. The contact map
+# 5. The latch
+# =============================================================================
+# Held by the jaws' squeeze and the foam's friction alone, the sponge slid 69-226 mm
+# in the jaws over a wipe and left them in two takes of three; one convex hull per
+# fingertip changed nothing. So the grasp stays physics and the hold after it is
+# pinned: nothing touches the foam until the jaws have gripped it by contact.
+
+LATCH_SETTLE = 12
+"""Control steps (0.2 s) over which the jaws' opening must hold still before the latch engages."""
+LATCH_STILL = 3.0e-4
+"""[m] How far the opening may move over those steps and still count as settled."""
+LATCH_PRESS = 2.0
+"""[N] The normal force each pad must have on the foam: a grip, not a graze."""
+LATCH_SQUEEZE = 0.002
+"""[m] How far under the foam's own width across the jaws the opening must be: squeezed, not touched."""
+LATCH_REACH = 0.006
+"""[m] Foam nodes this close to a pad's contact samples are the ones pinned."""
+LATCH_STIFFNESS, LATCH_DAMPING = 4000.0, 20.0
+"""The engine's compliant node constraints [N/m, N s/m]: the pinned patch still argues with contact."""
+
+
+class Latch:
+    """The foam under the right pads, pinned to the hand once the jaws have gripped it, until they open.
+
+    Install it once with :func:`latch`; it runs after every control step. While
+    the right gripper is told to close (a command over one half), it waits for a
+    grasp: the jaws' opening still to :data:`LATCH_STILL` over :data:`LATCH_SETTLE`
+    steps, each pad pressing the foam with :data:`LATCH_PRESS` or more, and the
+    opening :data:`LATCH_SQUEEZE` under the foam's width across the jaws. Then it
+    pins the foam nodes within :data:`LATCH_REACH` of the pads' contact samples
+    where they are, so nothing moves when it engages, and the bridge carries
+    them on the hand's body. A command under one half unpins them. A hand closed on air or on one
+    edge never meets the test and never latches.
+
+    Attributes:
+        readings: What the last check read: ``opening``, ``still``, ``press``
+            (per pad) and ``free`` (the foam's width across the jaws) [m, N].
+        events: ``(step, "engaged" | "released", readings)``, in order.
+    """
+
+    def __init__(self, sim, *, arm: str = "right", sponge: str = "sponge") -> None:
+        self.arm = arm
+        self.sponge = sim[sponge]
+        self.bridge = self.sponge.entity.bridge
+        self.sides = tuple(tuple(int(b) for b in side) for side in sim.scene.embodiment.arms[arm].finger_bodies)
+        self.size = np.asarray(self.sponge.entity.spec.size, dtype=np.float64)
+        self.openings: deque = deque(maxlen=LATCH_SETTLE)
+        self.pin: int | None = None
+        self.nodes = np.zeros(0, dtype=np.int64)
+        self.local = np.zeros((0, 3))
+        self.readings: dict = {}
+        self.events: list[tuple[int, str, dict]] = []
+
+    @property
+    def latched(self) -> bool:
+        return self.pin is not None and self.bridge.has_pin(self.pin)
+
+    def __call__(self, sim) -> None:
+        gripper = sim.gripper(self.arm)
+        if self.pin is not None and not self.bridge.has_pin(self.pin):
+            self.pin = None  # a reset took it
+        if gripper.command < 0.5:
+            self.openings.clear()
+            if self.pin is not None:
+                self.bridge.unpin(self.pin)
+                self.pin = None
+                self.events.append((sim.step_count, "released", dict(self.readings)))
+            return
+        if self.pin is not None:
+            return  # riding the hand: the bridge re-aims it every engine substep
+        pos, quat = sim.arm(self.arm).ee_pose(sim.state)
+        rot = quat_to_mat(np.asarray(quat, dtype=np.float64))
+        self.openings.append(float(gripper.width(sim.state)))
+        if len(self.openings) < LATCH_SETTLE:
+            return
+        samples = [self.bridge.contact_points("sponge", against=b) for side in self.sides for b in side]
+        per_side, k = [], 0
+        for side in self.sides:
+            got = samples[k : k + len(side)]
+            k += len(side)
+            per_side.append(sum(float(np.sum(c["force"] * c["normal"])) for c in got))
+        jaw = rot[:, 1]  # the jaws close along the tool's y
+        self.readings = {
+            "opening": self.openings[-1],
+            "still": max(self.openings) - min(self.openings),
+            "press": per_side,
+            "free": float(np.abs(jaw) @ self.size),
+        }
+        r = self.readings
+        gripped = (
+            r["still"] <= LATCH_STILL and min(r["press"]) >= LATCH_PRESS and r["opening"] <= r["free"] - LATCH_SQUEEZE
+        )
+        if not gripped:
+            return
+        nodes = np.asarray(self.sponge.particle_q, dtype=np.float64)
+        touched = np.concatenate([c["pos"] for c in samples if len(c["pos"])])
+        near = np.min(np.linalg.norm(nodes[:, None, :] - touched[None, :, :], axis=2), axis=1) <= LATCH_REACH
+        self.nodes = np.flatnonzero(near)
+        here = nodes[self.nodes]
+        self.local = (here - np.asarray(pos)) @ rot  # where the foam is now, in the hand: no snap
+        self.pin = self.bridge.pin_nodes(
+            "sponge",
+            self.sponge.particles[self.nodes],
+            here.copy(),
+            stiffness=LATCH_STIFFNESS,
+            damping=LATCH_DAMPING,
+        )
+        # Carried on the hand's body and re-aimed every engine substep. Re-aimed
+        # once a control step from here, the pinned foam trailed a lifting hand by
+        # that step's travel: 1.6 mm, 10 mm into the lift, measured.
+        body = sim.arm(self.arm).ee_body
+        frame = sim.state.body_q.numpy()[body]
+        self.bridge.ride(self.pin, body, (here - frame[:3]) @ quat_to_mat(frame[3:7]))
+        self.events.append((sim.step_count, "engaged", dict(self.readings, nodes=int(len(self.nodes)))))
+
+
+def latch(sim) -> Latch:
+    """The scene's :class:`Latch`, installed in ``sim.post_step_hooks`` if it is not there yet."""
+    for hook in sim.post_step_hooks:
+        if isinstance(hook, Latch):
+            return hook
+    hook = Latch(sim)
+    sim.post_step_hooks.append(hook)
+    return hook
+
+
+# =============================================================================
+# 6. The contact map
 # =============================================================================
 
 EYE, LOOK = (0.02, -0.04, 1.32), (0.55, -0.12, 0.84)

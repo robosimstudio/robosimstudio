@@ -3,14 +3,18 @@
 
 The left hand steadies the bar at its far elbow. The right hand takes the
 sponge off the mat, leans 35 degrees along the bar, presses the foam onto the
-crown until the stripe reads a press, strokes it along the bar until the
-marker is gone, puts the sponge back where it lay, and both hands go home. It is the ``surface_prep`` task's scripted take, written against the page:
-every move is a drag of an arm's gizmo (:func:`~robosimstudio_studio.routine.reach`,
-or :meth:`~robosimstudio_studio.panels.PanelArm.aim` for the millimetre steps of
-a press) and every grip a press of its Grip control. The sponge is held by the
-jaws' squeeze and the foam's friction alone, nothing pins it to the pads, and
-that is not yet enough: under the press and the drag of the bar the foam slides
-in the jaws, 69-226 mm over the take in the three runs of its test (README).
+crown until the stripe reads a press, strokes it along the bar until the marker
+is gone, puts the sponge back where it lay, and both hands go home. It is the
+``surface_prep`` task's scripted take, written against the page: every move is a
+drag of an arm's gizmo (:func:`~robosimstudio_studio.routine.reach`, or
+:meth:`~robosimstudio_studio.panels.PanelArm.aim` for the millimetre steps of a
+press) and every grip a press of its Grip control.
+
+The grasp is physics; the hold after it is a latch. **Close** squeezes the foam
+by contact alone, and once the jaws have settled on it -- both pads pressing,
+the foam squeezed -- ``bar.Latch`` pins the foam under the pads where it is, until
+**Open**. A grasp that does not meet that test is not rescued: the take stops
+and says what it read.
 
 Every pose is built from what the scene measures -- the bar's welded pose, the
 sponge's own centroid, the hand's tool centre -- and every constant below
@@ -25,7 +29,7 @@ import bar
 import numpy as np
 
 from robosimstudio.core.math import quat_multiply, quat_to_mat
-from robosimstudio_studio.routine import grip, hand, reach, wait
+from robosimstudio_studio.routine import RoutineError, grip, hand, reach, wait
 
 TILT_DEG = 35.0
 """How far the working hand leans along the bar for the wipe [deg]. Upright, the
@@ -35,10 +39,9 @@ PAD_OFFSET = (0.001, 0.0, 0.007)
 MuJoCo's contact table on a working grasp. They lead the tool centre by 7 mm."""
 CLEARANCE = 0.040
 """The sponge's underside over the crown while it crosses to and from the bar [m]."""
-PRESS_N = 1.5
-"""What a press steers to, read off the stripe [N]. One stroke at 0.6-1 N cleaned
-0.6-0.8 of the stripe; a press steered to 4 N reached 9-12 N at the far end, and
-the harder the press, the faster the foam slid in the jaws."""
+PRESS_N = 4.0
+"""What a press steers to, read off the stripe [N]: the reference take's press. At 1.5 N
+four strokes cleaned 0.89 of the stripe, at 3 N 0.94, at 4 N 0.96."""
 STROKE_SPEED = 0.06
 """Along the bar during a stroke [m/s]: removal is pressure times sliding speed."""
 STROKE_CYCLES = 4
@@ -47,9 +50,10 @@ CLEANED = 0.96
 """The share of the stripe cleaned at which the take stops stroking."""
 OVERRUN_NEAR, OVERRUN_FAR = 0.025, 0.045
 """How far a stroke runs past the stripe's ends [m]: the leaning hand's patch trails its centre."""
-HAND_CLEAR = 0.035
-"""A stroke never comes within this of the steadying hand's pads [m]: at 25 mm the
-foam touched them, 1-2.7 N, at the end of the stroke."""
+HAND_CLEAR = 0.025
+"""A stroke never comes within this of the steadying hand's pads [m]: a jaw's half-width
+and a margin. At 35 mm the strokes stopped short and the stripe's last 20 mm kept 0.88-1.0
+of its ink."""
 FOLLOW_GAIN, FOLLOW_RATE, FOLLOW_SPAN = 4.0e-5, 0.004, (-0.015, 0.008)
 """How a stroke holds its press: the hand goes down (or up) 0.04 mm a step per newton
 short (or over), at most 4 mm/s, and at most this far from the seat [m]."""
@@ -77,6 +81,7 @@ class Take:
         self.sim, self.session = sim, session
         self.stripe = sim["stripe"].entity
         self.sponge = sim["sponge"]
+        self.latch = bar.latch(sim)
         self.phase = "idle"
         self.log: list[str] = []
         self.z = self.seat = 0.0
@@ -118,9 +123,9 @@ class Take:
     def _stroke(self, a, b, quat, label: str):
         """Slide from ``a`` to ``b`` along the bar, raising or lowering the hand a little each step to hold the press.
 
-        The arm sags differently along its reach and the foam gives under the
-        lean, so one seat height pressed 0.7 N at one end and 11 N at the other;
-        a person feels the press and follows it, and so does this.
+        The arm sags differently along its reach, so one seat height pressed
+        0.7 N at one end and 11 N at the other; a person feels the press and
+        follows it, and so does this.
         """
         panel = self.session.arms["right"]
         a, b = np.asarray(a, dtype=np.float64), np.asarray(b, dtype=np.float64)
@@ -129,10 +134,6 @@ class Take:
         rate = FOLLOW_RATE / hz
         for k in range(1, steps + 1):
             p = a + (b - a) * k / steps
-            # Over the crown, the sponge and not the hand: pressed off-centre onto a
-            # round bar, the foam is pushed further off, and the jaws let it slide
-            # along between them (5 mm in one stroke, measured).
-            p[0] -= self.points().mean(axis=0)[0] - hand(self.session, "right")[0][0]
             short = PRESS_N - self.stripe.held_press
             low, high = self.seat + FOLLOW_SPAN[0], self.seat + FOLLOW_SPAN[1]
             self.z = float(np.clip(self.z - np.clip(FOLLOW_GAIN * short, -rate, rate), low, high))
@@ -163,9 +164,21 @@ class Take:
         pick = centroid - quat_to_mat(uq) @ np.asarray(PAD_OFFSET)  # the pads onto the block, not the tool centre
         yield from reach(session, "right", pick + np.array([0.0, 0.0, 0.10]), uq, speed=0.20)
         yield from reach(session, "right", pick, uq, speed=0.05)
-        yield from grip(session, "right", 1.0, seconds=1.0)  # Close: the jaws squeeze to their 8 N cap
-        width = sim.gripper("right").width(sim.state)
-        self._say(f"sponge in the jaws, {width * 1e3:.1f} mm apart")
+        yield from grip(session, "right", 1.0, seconds=0.5)  # Close: the jaws squeeze to their 8 N cap
+        for _ in range(90):  # the latch engages once the grasp is settled, pressed and squeezing
+            if self.latch.latched:
+                break
+            yield
+        r = self.latch.readings
+        if not self.latch.latched:
+            raise RoutineError(
+                f"the jaws did not grip the sponge: opening {r.get('opening', 0) * 1e3:.1f} mm, "
+                f"pads {[round(f, 2) for f in r.get('press', [])]} N"
+            )
+        self._say(
+            f"sponge gripped: jaws {r['opening'] * 1e3:.1f} mm apart on {r['free'] * 1e3:.0f} mm of foam, "
+            f"pads {r['press'][0]:.1f} N and {r['press'][1]:.1f} N; latched {len(self.latch.nodes)} nodes"
+        )
 
         # --- to the near end of the stripe, leaning -----------------------------
         self.phase = "carry"
@@ -192,8 +205,8 @@ class Take:
         far = axis + along * u1
         for cycle in range(STROKE_CYCLES):
             # One way only, the low edge trailing. Stroked back with the hand still
-            # leaning, the low edge led, dug into the crown (the press went from
-            # 0.6 N to 7.6 N in half a second) and turned the sponge out of the jaws.
+            # leaning, the low edge leads and digs into the crown: the press went from
+            # 0.6 N to 7.6 N in two thirds of a second, measured before the latch.
             seat = yield from self._press(start, clear_z, wq, max_travel=CLEARANCE + 0.015, label=f"press {cycle}")
             if seat is None:
                 break

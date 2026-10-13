@@ -10,21 +10,17 @@ it -- through the arm panels, one control step per tick -- from home to home.
 The claims are physical: the arms start at home with their hands open and the
 sponge on the mat; the foam presses the bar with newtons of force; the stripe is
 cleaned; the sponge goes back where it lay; both arms end at home; nothing is
-NaN; and the sponge stayed in the jaws by their squeeze and friction alone,
-which is read off the foam under the pads: nothing pins it.
-
-**Skipped unless ``RSS_WIPE_THE_BAR=1``**, because three of the claims do not
-hold yet and a take is two minutes of a GPU. Three takes on 2026-10-13
-(``demo/wipe_the_bar/README.md``): the start, the finish at home and the press
-held in all three; the stripe was 0.761, 0.724 and 0.687 clean, the foam under
-the pads moved 69, 226 and 218 mm in the hand, and in two takes the sponge left
-the jaws before the last stroke.
+NaN. And the claims about the latch, which holds the sponge through the wipe
+because the jaws' friction alone did not (README): nothing is pinned before the
+first **Close** or after the last **Open**; it engaged only on a grasp the
+contact made -- the jaws settled, both pads pressing, the foam squeezed; and it
+pinned the foam where the squeeze left it, so nothing jumped when it did.
 """
 
 from __future__ import annotations
 
 import importlib.util
-import os
+import inspect
 import sys
 import unittest
 from pathlib import Path
@@ -39,8 +35,6 @@ SCRIPT = FOLDER / "wipe_the_bar.py"
 PORT = 9341
 CLEANED = 0.9
 """The share of the stripe the job must clean."""
-SLIP = 0.010
-"""How far the foam under the pads may move in the hand during the wipe [m]."""
 
 
 def _load():
@@ -54,7 +48,6 @@ def _load():
     return module
 
 
-@unittest.skipUnless(os.environ.get("RSS_WIPE_THE_BAR"), "the sponge slides in the jaws; see the module docstring")
 class TestWipeTheBar(unittest.TestCase):
     """One take for the class: it is the scene's two engines and a minute of stepping that cost."""
 
@@ -67,6 +60,7 @@ class TestWipeTheBar(unittest.TestCase):
         from tests.fixtures.grasp import open_session, tick
 
         cls.module = _load()
+        bar = sys.modules["bar"]
         with _stub_studio() as opened:
             cls.module.main()
         assert len(opened) == 1, f"the demo opened {len(opened)} pages, not one"
@@ -74,17 +68,12 @@ class TestWipeTheBar(unittest.TestCase):
         sim = cls.sim
         cls.session = open_session(sim, PORT, cls.kwargs.get("page"))
         routine = cls.kwargs["routines"]["Wipe the bar"]
-        takes = []
-
-        def play(sim_, session):  # the page's own call, keeping the take to read
-            takes.append(sys.modules["routine"].Take(sim_, session))
-            return takes[-1].steps()
-
-        assert "session" in __import__("inspect").signature(routine).parameters
-        cls.session.add_routines({"Wipe the bar": play})
+        assert "session" in inspect.signature(routine).parameters
+        cls.session.add_routines({"Wipe the bar": routine})
         panel = cls.session.panels[-1]
         tick(cls.session, 20)
         sponge, stripe, ik = sim["sponge"], sim["stripe"].entity, cls.session.arms["right"].ik
+        cls.latch, bridge, gripper = bar.latch(sim), sponge.entity.bridge, sim.gripper("right")
         cls.start = {
             arm: (cls.session.arms[arm].ik.ee_pose(sim.state)[0], cls.session.arms[arm].ik.home_pose[0])
             for arm in ("right", "left")
@@ -92,40 +81,44 @@ class TestWipeTheBar(unittest.TestCase):
         cls.widths = {arm: sim.gripper(arm).width(sim.state) for arm in ("right", "left")}
         cls.lying = np.asarray(sponge.particle_q, dtype=np.float64)
 
-        def under_pads() -> list[np.ndarray]:
+        def pinned_in_hand() -> np.ndarray:
+            """Where the latched foam nodes are now, in the hand's frame [m]."""
             pos, quat = ik.ee_pose(sim.state)
-            rot, nodes = quat_to_mat(np.asarray(quat, dtype=np.float64)), np.asarray(sponge.particle_q)
-            out = []
-            for body in cls.session.arms["right"].finger_bodies:
-                samples = sponge.entity.bridge.contact_points("sponge", against=int(body))
-                if len(samples["pos"]):
-                    near = np.linalg.norm(nodes - samples["pos"].mean(axis=0), axis=1) < 0.007
-                    out.append(np.flatnonzero(near))
-            return [(idx, (nodes[idx] - pos) @ rot) for idx in out]
+            nodes = np.asarray(sponge.particle_q, dtype=np.float64)[cls.latch.nodes]
+            return (nodes - np.asarray(pos)) @ quat_to_mat(np.asarray(quat, dtype=np.float64))
 
-        cls.press = cls.peak = cls.slip = 0.0
-        anchors, steps = None, 0
+        def moved() -> float:
+            return float(np.linalg.norm((pinned_in_hand() - cls.latch.local).mean(axis=0)))
+
+        cls.press = cls.peak = 0.0
+        cls.trace: list[tuple[int, float, int]] = []  # (step, right grip command, pins standing)
+        cls.jump = cls.lift = cls.held = None
+        engaged_at, grasp_z, steps = None, None, 0
         panel.requested = "Wipe the bar"
         tick(cls.session, 1)
         while panel.gen is not None and steps < 7200:
             tick(cls.session, 1)
             steps += 1
-            phase = takes[-1].phase
             cls.press, cls.peak = max(cls.press, stripe.press), max(cls.peak, stripe.peak)
-            if phase == "carry" and anchors is None:
-                anchors = under_pads()
-            if phase == "wipe" and anchors:
-                pos, quat = ik.ee_pose(sim.state)
-                rot, nodes = quat_to_mat(np.asarray(quat, dtype=np.float64)), np.asarray(sponge.particle_q)
-                moved = [float(np.linalg.norm(((nodes[i] - pos) @ rot - at).mean(axis=0))) for i, at in anchors]
-                cls.slip = max(cls.slip, *moved)
-        cls.take, cls.steps, cls.said = takes[-1], steps, panel._status.value if panel._status else ""
+            cls.trace.append((steps, gripper.command, len(bridge._pins)))
+            if cls.latch.latched:
+                if engaged_at is None:
+                    engaged_at, grasp_z = steps, float(ik.ee_pose(sim.state)[0][2])
+                    cls.held = 0.0
+                if steps == engaged_at + 6:  # 0.1 s after it engaged
+                    cls.jump = moved()
+                if cls.lift is None and float(ik.ee_pose(sim.state)[0][2]) > grasp_z + 0.010:
+                    cls.lift = moved()  # 10 mm into the lift
+                cls.held = max(cls.held, moved())
+        cls.steps, cls.said = steps, panel._status.value if panel._status else ""
         now = np.asarray(sponge.particle_q, dtype=np.float64)
+        events = [(step, what, {k: v for k, v in got.items() if k != "nodes"}) for step, what, got in cls.latch.events]
         print(
             f"[wipe_the_bar] {steps / 60.0:.1f} s, cleaned {stripe.cleaned:.3f}, press {cls.press:.2f} N, "
-            f"peak {cls.peak / 1e3:.0f} kPa, slip {cls.slip * 1e3:.1f} mm, sponge "
-            f"{np.linalg.norm(now.mean(axis=0)[:2] - cls.lying.mean(axis=0)[:2]) * 1e3:.0f} mm from where it lay; "
-            f"{cls.said}",
+            f"peak {cls.peak / 1e3:.0f} kPa, sponge "
+            f"{np.linalg.norm(now.mean(axis=0)[:2] - cls.lying.mean(axis=0)[:2]) * 1e3:.1f} mm from where it lay; "
+            f"first close at step {next((st for st, c, _ in cls.trace if c >= 0.5), None)}; "
+            f"latch {events}, jump {cls.jump}, lift {cls.lift}, held {cls.held}; {cls.said}",
             flush=True,
         )
 
@@ -144,7 +137,6 @@ class TestWipeTheBar(unittest.TestCase):
 
     def test_2_the_job_plays_to_the_end_and_both_arms_go_home(self) -> None:
         self.assertIn("done", self.said)
-        self.assertEqual("done", self.take.phase)
         for arm in ("right", "left"):
             ik = self.session.arms[arm].ik
             self.assertLess(float(np.linalg.norm(ik.ee_pose(self.sim.state)[0] - ik.home_pose[0])), 0.006)
@@ -164,8 +156,30 @@ class TestWipeTheBar(unittest.TestCase):
         self.assertLess(moved, 0.02, f"the sponge is {moved * 1e3:.0f} mm from where it lay")
         self.assertAlmostEqual(float(self.lying[:, 2].min()), float(now[:, 2].min()), delta=0.003)
 
-    def test_6_the_sponge_stays_in_the_jaws_by_friction(self) -> None:
-        self.assertLess(self.slip, SLIP, f"the foam under the pads moved {self.slip * 1e3:.0f} mm in the hand")
+    def test_6_nothing_is_pinned_before_the_close_or_after_the_open(self) -> None:
+        closes = [step for step, command, _ in self.trace if command >= 0.5]
+        self.assertTrue(closes, "the right hand never closed")
+        first, last = closes[0], closes[-1]
+        for step, _, pins in self.trace:
+            if step < first or step > last + 1:  # the hook lets go on the step the Open lands
+                self.assertEqual(0, pins, f"something is pinned at step {step}, outside the grip")
+        self.assertEqual(["engaged", "released"], [what for _, what, _ in self.latch.events])
+
+    def test_7_it_latched_only_on_a_grasp_the_contact_made(self) -> None:
+        bar = self.module.bar
+        step, _, got = self.latch.events[0]
+        first = next(s for s, command, _ in self.trace if command >= 0.5)
+        self.assertGreaterEqual(step, first + bar.LATCH_SETTLE, "it latched before the jaws could settle")
+        self.assertLessEqual(got["still"], bar.LATCH_STILL)
+        self.assertGreaterEqual(min(got["press"]), bar.LATCH_PRESS, f"pads {got['press']} N")
+        self.assertLessEqual(got["opening"], got["free"] - bar.LATCH_SQUEEZE, "the foam is not squeezed")
+
+    def test_8_the_latch_pins_the_foam_where_the_squeeze_left_it(self) -> None:
+        self.assertLess(self.jump, 0.001, f"the pinned foam moved {self.jump * 1e3:.2f} mm in 0.1 s")
+        self.assertLess(self.lift, 0.001, f"10 mm into the lift it had moved {self.lift * 1e3:.2f} mm")
+
+    def test_9_the_latch_holds_it_through_the_wipe(self) -> None:
+        self.assertLess(self.held, 0.010, f"the latched foam moved {self.held * 1e3:.1f} mm in the hand")
 
 
 if __name__ == "__main__":

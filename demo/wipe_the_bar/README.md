@@ -10,9 +10,12 @@ steadies the bar at its far elbow, the right takes the sponge off the mat,
 presses it onto the bar and strokes the marker off, puts the sponge back where
 it lay, and both arms go home.
 
-**The sponge is held by the jaws alone.** Nothing pins the foam to the pads, and
-that is the open problem: under the press and the drag of the bar the sponge
-slides in the YAM's jaws, so the job is not finished yet. The numbers are below.
+**The grasp is physics; the hold after it is a latch.** The jaws close on the
+foam by their servo and SuperDex contact alone. Once they have settled on it,
+both pads pressing and the foam squeezed, the foam under the pads is pinned to
+the hand where it is, and stays pinned through the wipe until the jaws are told
+to open. Held by friction alone, the sponge slid out of the jaws in the wipe;
+the numbers are under [Why a latch](#why-a-latch).
 
 ```bash
 uv run --extra superdex python demo/wipe_the_bar/wipe_the_bar.py
@@ -25,8 +28,8 @@ give it a minute. Needs the `[superdex]` extra (Python 3.12) and a GPU.
 
 | | |
 | --- | --- |
-| [`wipe_the_bar.py`](wipe_the_bar.py) | builds the scene and opens the page, with the press readout, a contact map and the Run button |
-| [`bar.py`](bar.py) | the scene: the layout measured off the clip, the welded bar, the stripe that wears off, the physics |
+| [`wipe_the_bar.py`](wipe_the_bar.py) | builds the scene, installs the latch and opens the page, with the press readout, a contact map and the Run button |
+| [`bar.py`](bar.py) | the scene: the layout measured off the clip, the welded bar, the stripe that wears off, the physics, the latch |
 | [`routine.py`](routine.py) | the job, as a generator the page plays one control step at a time |
 
 The layout is the `surface_prep` task's, measured off the *Surface Preparing*
@@ -39,6 +42,30 @@ by SuperDex's own contact samples on the bar, with no wear under 300 Pa. Its
 **cleaned fraction** -- the share of cells with a tenth of their ink or less --
 is the job's measure.
 
+## The grasp, the latch, the release
+
+In that order, and the same whether the routine presses the buttons or you do:
+
+1. **The friction grasp.** **Close** on the sponge, and the jaws close at no more
+   than 80 mm/s and squeeze it at their 8 N cap: by contact, with nothing pinned.
+   They stop 45.6 mm apart on the 50 mm foam, each pad pressing it with 8.6-8.9 N.
+2. **The latch, once the grasp is made.** While the jaws are told to close,
+   `bar.Latch` checks after every control step for all three of:
+   - the opening still, moving no more than **0.3 mm over 12 steps (0.2 s)**;
+   - each pad pressing the foam with at least **2 N** of normal force, read off
+     SuperDex's contact records;
+   - the opening at least **2 mm under the foam's own width** across the jaws.
+
+   Then it pins the 106 foam nodes within 6 mm of the pads' contact samples
+   where they stand, and the bridge carries them on the hand, re-aimed every
+   engine substep. A hand closed on air or on one edge never meets the test and
+   never latches, and the routine stops and says what it read. Measured: it
+   engaged 1.0 s after Close; the pinned foam moved 0.006-0.008 mm in the hand in
+   the next 0.1 s, 0.008-0.012 mm by the time the hand had risen 10 mm, and
+   0.06 mm through the whole wipe.
+3. **The release.** **Open** unpins the foam on the step the command lands. The
+   sponge is set down and let go by the jaws.
+
 ## What the routine does
 
 Every move is a drag of an arm's gizmo and every grip a press of its Grip
@@ -46,76 +73,57 @@ control, so the page shows what a person would do by hand:
 
 1. **Steady.** The left gizmo goes 50 mm over the far elbow, down until the jaws
    straddle the tube 4 mm over its axis, and the jaws close to 29 mm: a hand
-   resting on the bar, not clamping it.
+   resting on the bar, not clamping it, and never latched.
 2. **Pick.** The right gizmo goes 100 mm over the sponge, top-down with the jaws
-   across its 50 mm side, down until the pads are on its middle, and **Close**:
-   the jaws squeeze it from 50 mm to 45.5 mm at their 8 N cap.
+   across its 50 mm side, down until the pads are on its middle, and **Close**;
+   the take waits up to 1.5 s for the latch.
 3. **Carry.** Up 100 mm, over the near block at the crossing height leaning 35
    degrees along the bar, then over the near end of the stripe.
-4. **Wipe.** Down a millimetre at a time until the stripe reads 1.5 N, then a
-   stroke toward the far end at 60 mm/s, the hand following the press up and down
-   and staying centred on the crown; up, back, and again, four times or until the
-   stripe is 96 % clean. Strokes go one way only, the low edge of the leaning
-   sponge trailing.
+4. **Wipe.** Down a millimetre at a time until the stripe reads 4 N, then a
+   stroke toward the far end at 60 mm/s, the hand following the press up and
+   down; up, back, and again, four times or until the stripe is 96 % clean.
+   Strokes go one way only, the low edge of the leaning sponge trailing.
 5. **Put back.** Back over the near block, down onto the spot the sponge came
    from, **Open**, up; the left hand opens and lifts; both gizmos go home.
 
-A take is 49-59 s of simulated time.
+A take is 59.5 s of simulated time.
 
 ## Measured
 
-Three takes of the test (`RSS_WIPE_THE_BAR=1 python -m unittest
-tests.test_demo_wipe_the_bar`), 2026-10-13, one RTX PRO 6000 Blackwell:
+Three takes of the test (`python -m unittest tests.test_demo_wipe_the_bar`),
+2026-10-13, one RTX PRO 6000 Blackwell, nine assertions each:
 
-| take | cleaned | peak press | sponge slid in the jaws | sponge put back | arms home |
-| --- | --- | --- | --- | --- | --- |
-| 1 | 0.761 | 10.3 N | 69 mm | 49 mm from its spot | yes |
-| 2 | 0.724 | 11.4 N | 226 mm, out of the jaws before stroke 4 | no | yes |
-| 3 | 0.687 | 12.4 N | 218 mm, out of the jaws before stroke 3 | no | yes |
+| take | cleaned | peak press | peak pressure | sponge put back | arms home | finite | result |
+| --- | --- | --- | --- | --- | --- | --- | --- |
+| 1 | 0.955 | 4.93 N | 84 kPa | 0.1 mm from its spot | yes | yes | 9/9 |
+| 2 | 0.959 | 4.91 N | 84 kPa | 0.1 mm from its spot | yes | yes | 9/9 |
+| 3 | 0.959 | 4.91 N | 84 kPa | 0.0 mm from its spot | yes | yes | 9/9 |
 
-What does work, in every take: the pick (the sponge comes off the mat in the
-jaws, 45.5-45.7 mm apart, and is carried to the bar sliding 3-9 mm), the press
-(seated at 1.6-2.0 N, peaks of 111-116 kPa on the tube), the first stroke
-(0.54-0.65 of the stripe clean), and both arms back at home (0.5 mm and 0.3 mm
-off in the takes that logged it).
+In every take nothing was pinned before the first Close or after the last
+Open, the latch engaged once and released once, and the four strokes cleaned
+0.91, 0.94, 0.95 and 0.95-0.96 of the stripe in turn.
 
-What does not: on every stroke the foam under the pads slides 10-20 mm in the
-hand, back along the bar and up toward the palm, and the slips add up until the
-sponge leaves the jaws or is put down 49 mm from where it was. The pads report
-8-9 N of grip each and the bar 0.4-0.6 N of drag, yet the foam slides at
-1.5-3 mm/s, the pads' tangential force at 0.84-0.88 of their normal force (the
-friction coefficient between them and the foam is 0.95).
+## Why a latch
 
-Tried, over 30 more takes while tuning, none of which held the slip under 10 mm:
+Without it -- the same grasp, the foam held by the jaws' squeeze and its
+friction alone, at the sponge's lowest workable `friction_falloff` (0.1 mm/s) --
+three takes cleaned 0.761, 0.724 and 0.687 of the stripe, the foam under the
+pads slid 69, 226 and 218 mm in the hand, and in two of the three the sponge
+left the jaws before the last stroke. The pick and the carry held (3-9 mm of
+slide); every stroke slid it 10-20 mm, back along the bar and up toward the
+palm, with the pads reporting 8-9 N of grip and the bar 0.4-0.6 N of drag.
 
-| lever | what it did |
-| --- | --- |
-| the sponge's `friction_falloff`, 1 and 0.1 mm/s | the same 10-20 mm a stroke at both |
-| grip cap 12 N | the sponge left the jaws sooner |
-| press steered to 1.5, 2, 3 and 4 N | below 2 N the press reads 0.6-1 N through a stroke and still slides; at 4 N it peaks at 9-12 N |
-| lean 25 degrees | lost before stroke 4; the far seat is 3 mm out of reach |
-| strokes both ways | the stroke back dug the low edge in, 0.6 N to 7.6 N in two thirds of a second, and turned the sponge out |
-| stroke speed 120 mm/s | cleaned up to 0.95 in one take, the sponge lost in all four |
-| bar friction 0.2 (from 0.6) | cleaned 0.82 and 0.94, slid 77 and 109 mm |
-| sponge friction 2.0 (from 0.9) | lost |
-| soft foam (the clip's) | the jaws closed through it on the pick |
-
-**Not the fingertips' decomposition.** The YAM's tips are 48 and 52 convex
-pieces each, and SuperDex mirrors every piece as a collider of its own, where
-the Panda's pads are one box each. Mirrored instead as one convex hull of each
-tip's last 30-60 mm, the jaws lift and hold the sponge as they do now (3 s of
-hold: 0.11-0.14 mm of slip against 0.10 mm; a 10 s idle: 0.11-0.13 mm against
-0.10 mm), and three wipes still lost it: cleaned 0.65, 0.81 and 0.71, the foam
-sliding 680, 192 and 599 mm in the jaws. One hull of a whole tip is worse: it
-takes in the tip's L-shaped root, and the jaws stopped 55.7 mm apart on the 50 mm
-sponge and lifted it 10 mm.
+Tried over 30 more takes, none of which kept the slide under 10 mm: the
+sponge's falloff at 1 and 0.1 mm/s; a 12 N grip; presses of 1.5 to 4 N; a 25
+degree lean; strokes both ways; 120 mm/s strokes; bar friction 0.2 and sponge
+friction 2.0; the clip's soft foam, which the jaws closed through on the pick.
+And not the fingertips' decomposition: mirrored as one convex hull of each tip's
+last 30-60 mm instead of 48 and 52 pieces, the jaws held a lifted sponge just as
+well (0.11-0.14 mm of slip over 3 s) and three wipes still lost it, cleaning
+0.65, 0.81 and 0.71.
 
 ## Tests
 
 ```bash
-RSS_WIPE_THE_BAR=1 uv run python -m unittest tests.test_demo_wipe_the_bar   # slow: the whole job, through the Run button
+uv run python -m unittest tests.test_demo_wipe_the_bar   # slow: the whole job, through the Run button
 ```
-
-Skipped without the variable, because three of its six assertions -- the
-stripe at least 0.9 clean, the sponge back within 20 mm of its spot, and under
-10 mm of slip in the jaws -- fail today.
