@@ -396,8 +396,9 @@ palette it renders a five-part hammer as five unrelated hues.
 Copied rather than imported because this module is the one place in the package
 with no dependencies, and because a private name is not an import contract. The
 copy is a liability -- a newton release that reorders this turns every check
-below into a no-op that passes -- so :mod:`tests.test_palette` asserts the two
-are still equal. That test is what makes the copy safe.
+below into a no-op that passes -- so the test suite asserts the two are still
+equal (``test_build_order_is_newtons_palette``). That test is what makes the
+copy safe.
 """
 
 

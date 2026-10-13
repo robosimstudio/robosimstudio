@@ -48,8 +48,11 @@ register_kind(
     FeatureKind(
         name="region",
         summary="A volume something can be inside or resting on, anchored to a frame.",
-        payload={"xy_ranges": "x0, y0, x1, y1 in the frame [m]", "z_range": "low and high above the frame origin [m]"},
-        optional={"frame": "body whose pose the region rides, empty for the world"},
+        payload={"xy_ranges": "x0, y0, x1, y1 in the frame [m]"},
+        optional={
+            "z_range": "low and high above the frame origin [m]; BDDL's 0 to 0.15 when omitted",
+            "frame": "part of this asset whose pose the region rides, empty for the asset itself",
+        },
         contracts=(
             "containment returns a FRACTION, always -- a garment is never entirely inside a bin, "
             "and a rigid body's 0-or-1 is the easy case of that question, not a different one",

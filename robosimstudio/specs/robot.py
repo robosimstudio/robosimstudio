@@ -181,8 +181,9 @@ class GripperSpec:
       refactor with nothing measured newly.
     * **Attached** (:attr:`asset` set): the hand carries its own file and is
       welded onto :attr:`mount_body`. Read :attr:`asset` before reaching for it
-      -- the runtime weld is real and narrow, and the route this repo has
-      actually shipped is the offline one, ``scripts/compose_yam_i2rt.py``.
+      -- the runtime weld is real and narrow, and the route that has actually
+      shipped is the offline one: the hand composed into the arm's own file
+      before import.
 
     Any name field may carry ``{arm}``, substituted with the owning
     :class:`ArmSpec`'s name by :meth:`for_arm`. That is what lets one entry
@@ -617,8 +618,8 @@ class EmbodimentSpec:
             mesh geom through its convex-hull path"). The hull fills the yoke in
             solid: **3.13x the blade's volume**, with an inner face standing
             ~13 mm proud of the pad. So the hand grips on a surface that is not
-            drawn and is not where the rubber is. Probed on ``polish/strip`` at
-            the instant its pick reports 35 N: all four pads are **13-14 mm clear
+            drawn and is not where the rubber is. Probed on a pinch of a thin strip
+            at the instant the pick reports 35 N: all four pads are **13-14 mm clear
             of the strip** while their hulls are 1.2-2.3 mm inside it.
 
             It also explains a discrepancy the gripper module had recorded and
@@ -723,19 +724,11 @@ class EmbodimentSpec:
             along one direction -- so on a robot that leaves it free, a graph
             that computed the direction the jaws should close along has that
             direction discarded, and the width it measured along it is
-            commanded along whatever the arm chose instead. Measured on
-            ``astro/wiring_sort``, whose UR5e asked for 0 and +-90 degrees and
-            landed at +53.6, +57.2, +59.1 and +61.8: 1 of 4 objects placed in
-            each of four episodes, and the one that worked was the only object
-            that measures the same width at every heading. Declared here the
-            heading error is 0.0-0.3 degrees and placement is 3,3,3,3 and
-            3,3,1,2 over two runs of four -- the elongated tool that never came
-            up before is now taken in 8 of 8.
-
-            The spread is not noise in the fix, it is the consequence of one:
-            the baseline reproduced to 0.1 mm because nothing ever moved, and an
-            episode that actually lifts and drops four objects has each grasp
-            starting from where the last one left the scene.
+            commanded along whatever the arm chose instead. On a UR5e sorting
+            elongated parts, asked headings of 0 and +-90 degrees landed near
+            +55 to +62 with it free -- one object in four placed, the one that
+            measures the same width at every heading -- and within 0.3 degrees
+            with it declared, with most objects placed.
 
             **The precondition is the tool centre sitting on the last joint's
             axis.** :meth:`~robosimstudio.solvers.ArmIK.solve_q_full`
@@ -749,10 +742,9 @@ class EmbodimentSpec:
             It costs about twice the solver iterations per waypoint, and the
             episode gets longer for a second reason worth separating from it: a
             grasp that *holds* is then carried and placed, which is work a
-            missed grasp never does. ``wiring_sort`` goes from 3390 control
-            steps an episode to 7800 against its 9600 ceiling. Check the
-            headroom before setting this on a robot whose graphs already run
-            near their budget.
+            missed grasp never does -- on that sorting task, more than twice the
+            control steps per episode. Check the headroom before setting this on
+            a robot whose graphs already run near their budget.
         urdf: The arm's kinematics as a URDF, resolved against the asset
             pool, for the solvers that work from one -- the PyRoKi family,
             which is the default. An arm that names none runs on Newton's

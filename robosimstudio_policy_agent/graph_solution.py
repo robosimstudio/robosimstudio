@@ -20,6 +20,7 @@ done at the moment it releases an object, before that object has landed.
 from __future__ import annotations
 
 import json
+import shutil
 import tempfile
 import threading
 import traceback
@@ -207,7 +208,10 @@ class SolutionGraph(SolutionBase):
         # shipped graph is package source -- a run would write dag_trace.json
         # and node_data/ into the installed tree. Default to a scratch
         # directory instead; a caller that wants the trace kept passes one.
-        self.trace_dir = trace_dir or str(Path(tempfile.mkdtemp(prefix="robosimstudio-gap-")))
+        # The scratch directory is this policy's own, and :meth:`close` removes
+        # it; a directory the caller named is theirs and is left alone.
+        self._scratch_trace_dir = None if trace_dir else tempfile.mkdtemp(prefix="robosimstudio-gap-")
+        self.trace_dir = trace_dir or self._scratch_trace_dir
         self.episode_trace_dir: Path | None = None
         """Where *this* episode's trace goes -- a subdirectory per episode.
 
@@ -220,6 +224,11 @@ class SolutionGraph(SolutionBase):
         """
 
         self._thread: threading.Thread | None = None
+        self._generation = 0
+        """Which episode's graph thread may write results. Bumped on every
+        reset, so a previous thread that outlived its join -- a node stuck in a
+        call the closed bus could not release -- has its late writes dropped
+        rather than landing in the next episode's result, error and trace."""
         self._result: Any = None
         self._error: BaseException | None = None
         self._settle_left = -1
@@ -329,6 +338,7 @@ class SolutionGraph(SolutionBase):
 
         # The episode that just ended, before its trace is cleared.
         self.write_trace()
+        self._generation += 1
         self._result, self._error = None, None
         self._settle_left = -1
         self.trace = {}
@@ -338,10 +348,18 @@ class SolutionGraph(SolutionBase):
         # Publish a first snapshot so a node that reads before the first step
         # sees the reset state rather than an empty one.
         self.connector.facade.publish_step(0.0, False, False, dict(info))
-        self._thread = threading.Thread(target=self._run_graph, name="gap-graph", daemon=True)
+        # The registry is built here, on this thread, before the graph thread
+        # exists, as the batched policy does: it is a lazy property, so leaving
+        # it unbuilt makes ``gap.execute`` its first accessor, and registering
+        # the privileged tools reads device state directly
+        # (``SimTools._compute_home_ee_quat`` -- "constructed on the main
+        # thread before the graph starts").
+        _ = self.connector.tool_registry
+        self._thread = threading.Thread(target=self._run_graph, args=(self._generation,), name="gap-graph", daemon=True)
         self._thread.start()
 
-    def _run_graph(self) -> None:
+    def _run_graph(self, generation: int) -> None:
+        """Run the graph; what it leaves behind is kept only while *generation* is current."""
         try:
             from gap import execute
 
@@ -369,22 +387,26 @@ class SolutionGraph(SolutionBase):
             # its first step -- which is every graph, not only the ones that
             # wanted the label.
             if _accepts_node_callbacks(execute):
-                kwargs["on_node_start"] = self._on_graph_node_start
-                kwargs["on_node_end"] = self._on_graph_node_end
-            self._result = execute(self.graph_path, **kwargs)
+                kwargs["on_node_start"] = lambda name, ok: self._on_graph_node_start(name, ok, generation)
+                kwargs["on_node_end"] = lambda name, ok: self._on_graph_node_end(name, ok, generation)
+            result = execute(self.graph_path, **kwargs)
+            if generation == self._generation:
+                self._result = result
         except BaseException as exc:
-            self._error = exc
-            self.trace["traceback"] = traceback.format_exc()
+            if generation == self._generation:
+                self._error = exc
+                self.trace["traceback"] = traceback.format_exc()
 
     @property
     def finished(self) -> bool:
         return self._thread is not None and not self._thread.is_alive()
 
-    def _on_graph_node_start(self, name: str, _success: Any) -> None:
-        self._recording_node = str(name)
+    def _on_graph_node_start(self, name: str, _success: Any, generation: int | None = None) -> None:
+        if generation is None or generation == self._generation:
+            self._recording_node = str(name)
 
-    def _on_graph_node_end(self, name: str, _success: Any) -> None:
-        if self._recording_node == str(name):
+    def _on_graph_node_end(self, name: str, _success: Any, generation: int | None = None) -> None:
+        if (generation is None or generation == self._generation) and self._recording_node == str(name):
             self._recording_node = ""
 
     def recording_stage(self) -> str:
@@ -550,6 +572,12 @@ class SolutionGraph(SolutionBase):
             # unwinds on its own; a daemon thread that does not is not worth
             # blocking a run over.
             self._thread.join(timeout=5.0)
+        # Nothing reads the scratch traces once the policy is closed: nobody
+        # was told where they are. A caller's own trace_dir is kept.
+        self._generation = getattr(self, "_generation", 0) + 1
+        scratch = getattr(self, "_scratch_trace_dir", None)
+        if scratch is not None:
+            shutil.rmtree(scratch, ignore_errors=True)
 
     def raw_spans(self) -> list[dict[str, Any]]:
         """Tool begin/end markers for the recorder's raw capture tape."""

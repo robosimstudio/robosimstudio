@@ -58,7 +58,7 @@ BENCH_075 = register_cell(
         center=(0.6, 0.0, 0.0),
         half=(0.2975, 0.65, 0.375),
         statics=(_table(0.75, (0.2975, 0.65), solid=True),),
-        provenance="the newton_tasks workcell, shared by the USB-C, cable-routing and (retired) RJ45 reference sims",
+        provenance="the original reference workcell, shared by the USB-C, cable-routing and (retired) RJ45 reference sims",
     )
 )
 

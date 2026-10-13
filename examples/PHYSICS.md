@@ -131,8 +131,12 @@ rss.view(sim)    # close a gripper on an edge of the towel
 
 | Engine | Install | Notes |
 | --- | --- | --- |
-| SuperDex | `pip install "robosimstudio[superdex]"` | Python 3.12 only. It solves on the CPU. |
-| Genesis | `pip install "robosimstudio[genesis]"` | We recommend a virtual environment of its own. |
+| SuperDex | `uv sync --extra superdex` | It solves on the CPU. |
+| Genesis | `uv sync --extra genesis` | We recommend a virtual environment of its own. |
+
+From a checkout, `uv run --extra <name> <script>` installs the extra and runs
+the script. With pip, into another environment:
+`pip install "robosimstudio[<name>] @ git+https://github.com/robosimstudio/robosimstudio"`.
 
 A scene that needs a missing engine raises an `ImportError` at `build()`, and
 the message names the extra. A scene with a sponge needs SuperDex.
@@ -198,8 +202,8 @@ steps at 150 steps/s.
 
 - `render_every=4` draws one frame per four control steps. More steps per
   second, fewer frames.
-- `share=False` skips the request for a public URL, which blocks until the
-  tunnel answers.
+- Leave `share` at its default, `False`: `share=True` asks for a public URL,
+  which blocks until the tunnel answers.
 - The live camera view renders in the loop. It is capped at a share of wall
   clock (`live_load`, 0.3 by default) and `StudioConfig(live=False)` turns it
   off.

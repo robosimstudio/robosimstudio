@@ -18,26 +18,14 @@ TIER = "fast"
 class TestEpisodeHooksDoNotOutliveTheirEpisode(unittest.TestCase):
     """A pin installed by a policy must not still be holding next episode.
 
-    **This is the bug that had a benchmark manufacturing successes.** A peel
-    routine installs a `ParticleDragger` into `pipeline.hooks.post_solve` and a
-    follower into `post_step_hooks`; both lists are built once and were never
-    cleared, while a successful peel ends mid-lift with the bus closed so the
-    tool's own release never runs.
-
-    Measured on `peel/handle` before the fix: `--episodes 0:3` reported
-    410, 411 and **24** steps, every one at reward 1.00 -- and at step 24 the
-    workflow was still in `approach`, the gripper had never closed, and six tab
-    particles were already held. The same episode run alone takes 410 steps.
+    A tool may install a `ParticleDragger` into `pipeline.hooks.post_solve` and
+    a follower into `post_step_hooks`, and release both when it finishes. An
+    episode that ends mid-tool never reaches the release, so the reset has to.
 
     Tested here with counters rather than a scene, because the claim is about
     *lifetime* and not about physics: hooks installed while the scene is built
-    survive a reset, hooks installed after it do not.
-
-    **What this does not do.** Closing the leak did not stop the false
-    successes: the same three-episode run afterwards reads 412, 58, 41 steps,
-    still all at reward 1.00. The leak was real and is now closed; it was not
-    the mechanism. These tests are about the lifetime and claim nothing about
-    the peel.
+    survive a reset, hooks installed after it do not, and a captured graph that
+    holds a retired hook is dropped.
     """
 
     def _env(self):
@@ -49,8 +37,25 @@ class TestEpisodeHooksDoNotOutliveTheirEpisode(unittest.TestCase):
         env.post_step_hooks = []
         env.teleop_hooks = []
         env._episode_hook_floor = None
-        env.pipeline = types.SimpleNamespace(hooks=types.SimpleNamespace(post_solve=[]))
+        env.pipeline = types.SimpleNamespace(hooks=types.SimpleNamespace(post_solve=[]), invalidated=[])
+        env.pipeline.invalidate_graph = lambda *, recapture=True: env.pipeline.invalidated.append(recapture)
         return env
+
+    def test_retiring_a_substep_hook_drops_the_captured_graph(self) -> None:
+        """A captured graph replays the hooks it was captured with, so a retired
+        hook would go on running inside it unless the graph is re-captured."""
+        env = self._env()
+        env._retire_episode_hooks()  # the floor
+        env._retire_episode_hooks()  # nothing installed: the graph stays
+        self.assertEqual(env.pipeline.invalidated, [])
+
+        env.pipeline.hooks.post_solve.append(object())
+        env._retire_episode_hooks()
+        self.assertEqual(env.pipeline.invalidated, [True], "a removed hook must invalidate, with a re-capture")
+
+        env.post_step_hooks.append(object())  # host-side only: no graph holds it
+        env._retire_episode_hooks()
+        self.assertEqual(env.pipeline.invalidated, [True])
 
     def test_scene_hooks_survive_and_episode_hooks_do_not(self) -> None:
         env = self._env()

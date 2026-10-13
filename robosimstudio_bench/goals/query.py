@@ -131,7 +131,7 @@ def query(
                 continue
             try:
                 readings[leaf.name] = query(frozen, leaf.name, *references, doc=doc, catalog=lookup)
-            except (QueryRefused, BindError, KeyError, LookupError, ValueError):
+            except (LookupError, BindError, ValueError):  # QueryRefused and KeyError are LookupErrors
                 # An atom this pair does not afford is not an error at family
                 # level -- it is the answer to "what can I ask", arrived at by
                 # asking. ``BindError`` is in the list for the same reason: a
@@ -143,7 +143,7 @@ def query(
 
     try:
         spec = get_atom(atom)
-    except KeyError as exc:
+    except LookupError as exc:
         raise QueryRefused(str(exc)) from None
 
     operands = [_operand(reference, doc, lookup) for reference in references]
@@ -152,7 +152,10 @@ def query(
     substrates = tuple(o.substrate for o in operands)
     try:
         handler = dispatch(atom, kinds, substrates, layouts=_layouts(frozen, operands))
-    except KeyError as exc:
+    except LookupError as exc:
+        # ``LookupError``, not ``KeyError``: dispatch refuses an unimplemented
+        # pairing with a plain ``LookupError`` (``semantics/handlers.py``), which
+        # the narrower catch let escape past the ``QueryRefused`` promised above.
         raise QueryRefused(
             f"{atom!r} is not implemented for {list(zip(substrates, kinds, strict=False))}: {exc}"
         ) from None
@@ -177,7 +180,7 @@ def applicable(family: str, *operands: Operand) -> list[str]:
             continue
         try:
             dispatch(leaf.name, kinds, substrates)
-        except KeyError:
+        except LookupError:
             continue
         out.append(leaf.name)
     return out

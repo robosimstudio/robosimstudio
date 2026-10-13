@@ -35,7 +35,11 @@ from robosimstudio_studio import StudioConfig, StudioSession
 def main(argv=None) -> int:
     parser = argparse.ArgumentParser(description="Feel what the simulated arm runs into, on the leader's own servos.")
     parser.add_argument("--leader", default="", help="<arm>:<port>[,...], e.g. right:/dev/ch340-<serial>")
-    parser.add_argument("--calibration", default="scripts/calibration/yam_leader.json", help="keyed by adapter serial")
+    parser.add_argument(
+        "--calibration",
+        default="scripts/calibration/local/yam_leader.json",
+        help="keyed by adapter serial; the default is where scripts/calibrate_leader_arms.py writes",
+    )
     parser.add_argument("--no-feedback", action="store_true", help="never energize a motor: the run to take first")
     parser.add_argument("--simulate", action="store_true", help="no arm: a scripted hand over a table of registers")
     parser.add_argument("--trace", default="", help="write per-tick timing here on the way out")

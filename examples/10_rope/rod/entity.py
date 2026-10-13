@@ -8,8 +8,8 @@ a 0.91 m rod cable would be shipping a benchmark's props." That argument was
 right about the *props* and wrong about the *mechanism*, and what exposed the
 difference was a second task needing the mechanism. ``threaded_needle``'s suture
 is a rod too -- a shorter, stiffer one carrying a needle -- and its entity
-subclasses :class:`EntityRod` outright. Two tasks may not reach each other
-(``tests/test_content_seam.py`` refuses it), so the shared half had to become
+subclasses :class:`EntityRod` outright. Two tasks may not reach each other,
+so the shared half had to become
 either a duplicate or a layer. A 968-line duplicate is not checked redundancy;
 it is drift with a delay.
 
@@ -26,8 +26,8 @@ task's own ``rod.py`` binds ``cable_rod``, ``cable_peg`` and
 ``cable_peg_round`` to these classes, which keeps every entity name declared by
 the task that stages it -- the same seam every other entity in the tree honours.
 
-The rod is **not** a cloth. ``newton_tasks/sim/yam_cable_sim.py`` builds it as
-a rigid rod -- 28 overlapping capsules chained by cable joints
+The rod is **not** a cloth. The reference cable simulation it was ported from
+builds it as a rigid rod -- 28 overlapping capsules chained by cable joints
 (``ModelBuilder.add_rod``), solved by rigid VBD/AVBD inside the coupled-proxy
 solver -- so it enters a scene as an *extras* entity rather than through the
 particle path.
@@ -1448,8 +1448,8 @@ class EntityRod(Centerline, Entity):
         answers with, so a measure over the two reads the same curve. It was the
         capsule *centres* (``segments`` points), and the two implementations
         therefore disagreed about the length of one and the same cable: 24
-        centres span 23/24 of it, which is the 4% ``scripts/engine_ab.py`` showed
-        for as long as it existed. ``add_rod`` places the centreline endpoints at
+        centres span 23/24 of it, which is the 4% an A/B run of the two
+        implementations showed. ``add_rod`` places the centreline endpoints at
         local ``(0, 0, +-half_height)`` with ``body_frame_origin="com"``; each
         segment's first endpoint, then the last segment's second, is the curve.
 

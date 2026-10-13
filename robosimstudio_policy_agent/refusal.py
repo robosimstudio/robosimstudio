@@ -4,7 +4,7 @@
 One class, because the *type name* is the contract. GaP's executor records a
 failed node as ``Node '<id>' failed: <TypeName>: <message>`` (see gap's
 ``runtime/executor.py::_typed_error_text``), and downstream consumers — most
-concretely gap-self-learning's pre-flight — separate "this policy is broken"
+concretely a self-learning loop's pre-flight — separate "this policy is broken"
 from "this policy tried and failed" by that name. A bare ``ValueError`` cannot
 carry the distinction: a policy's own deliberate check (``raise ValueError("the
 graspable segment does not fit the gripper")``) and a tool's "object 'bin1' has

@@ -40,6 +40,7 @@ judgement, and it should be able to see that it is doing so.
 
 from __future__ import annotations
 
+import time
 from typing import Any
 
 import numpy as np
@@ -430,18 +431,26 @@ class RobotTools:
         gripper swap.
 
         Exactly one of ``preset`` / ``width_m`` / ``object_width_m`` /
-        ``fraction_closed`` may be given. The presets are derived from the hand
-        rather than tabulated: ``open`` is its span, ``close`` is its own
-        minimum, ``pinch`` and ``grip`` need an ``object_width_m`` to be
-        relative to.
+        ``fraction_closed`` may be given, with one exception: the ``pinch`` and
+        ``grip`` presets are relative to an object and so take
+        ``object_width_m`` alongside them (and refuse without it). The presets
+        are derived from the hand rather than tabulated: ``open`` is its span,
+        ``close`` is its own minimum, ``pinch`` is the object plus the finger
+        clearance either side, ``grip`` is the object less ``squeeze_m``.
 
         Writes through the facade's single gripper path, so the command has one
         holder -- a second writer here is what previously made a calibrated
         partial close report success while the jaws stayed at 94 mm.
         """
-        given = [bool(preset), width_m >= 0.0, object_width_m >= 0.0, fraction_closed >= 0.0]
+        relative = preset in ("pinch", "grip")
+        if relative and object_width_m < 0.0:
+            raise ValueError(f"grip preset {preset!r} is relative to an object: give object_width_m with it")
+        given = [bool(preset), width_m >= 0.0, object_width_m >= 0.0 and not relative, fraction_closed >= 0.0]
         if sum(given) != 1:
-            raise ValueError("give exactly one of preset, width_m, object_width_m, fraction_closed")
+            raise ValueError(
+                "give exactly one of preset, width_m, object_width_m, fraction_closed"
+                " (object_width_m may accompany preset 'pinch' or 'grip')"
+            )
         name = self._arm(arm_id, role)
         gripper = self._gripper(name)
         if gripper is None:
@@ -459,8 +468,8 @@ class RobotTools:
                 table = {
                     "open": span,
                     "close": float(info["min_grasp_width_m"]),
-                    "pinch": (object_width_m + 2.0 * clearance) if object_width_m >= 0.0 else 0.5 * span,
-                    "grip": (object_width_m - squeeze_m) if object_width_m >= 0.0 else 0.5 * span,
+                    "pinch": object_width_m + 2.0 * clearance,
+                    "grip": object_width_m - squeeze_m,
                 }
                 if preset not in table:
                     raise ValueError(f"unknown grip preset {preset!r}; have {sorted(table)}")
@@ -548,7 +557,7 @@ class RobotTools:
         """
         # Two seconds a step and half a minute at least: at sixteen episodes on one box a step takes a
         # tenth of a second and more, and a settle cut short by the clock is a hand that has not settled.
-        budget = float(timeout_s) if timeout_s > 0.0 else max(30.0, float(steps) * 2.0)
+        budget = float(timeout_s) if timeout_s > 0.0 else _wait_budget(steps)
         return {"waited": self._wait(int(steps), timeout_s=budget)}
 
     def forward_kinematics(self, joint_configs: list | None = None, arm_id: int = 0, role: str = "") -> dict[str, Any]:
@@ -578,7 +587,7 @@ class RobotTools:
             poses.append({"position": vec3(position), "rotation": quat_wxyz(quat)})
         return {"arm": name, "joint_config": current, "poses": poses}
 
-    def _wait(self, steps: int, timeout_s: float = 30.0) -> int:
+    def _wait(self, steps: int, timeout_s: float | None = None) -> int:
         """Block until the owner thread has stepped ``steps`` times.
 
         Through the bus's own step wait rather than by polling ``snapshot.step``,
@@ -611,13 +620,27 @@ class RobotTools:
         start = int(self.bus.snapshot.step)
         wait_for_step = self.bus.wait_for_step
 
+        # ``timeout_s`` is one deadline for the whole wait, not a budget per
+        # step: per step, a 30-step settle with a 60 s timeout could block for
+        # half an hour.
+        if timeout_s is None:
+            timeout_s = _wait_budget(steps)
         target = start + int(steps)
+        deadline = time.monotonic() + float(timeout_s)
         while int(self.bus.snapshot.step) < target:
+            remaining = deadline - time.monotonic()
+            if remaining <= 0.0:
+                break
             try:
-                wait_for_step(after=int(self.bus.snapshot.step), timeout=timeout_s)
+                wait_for_step(after=int(self.bus.snapshot.step), timeout=remaining)
             except BusTimeout:
                 break
         return int(self.bus.snapshot.step) - start
+
+
+def _wait_budget(steps: int) -> float:
+    """The derived total deadline for a wait of *steps* control steps [s]."""
+    return max(30.0, float(steps) * 2.0)
 
 
 # ---------------------------------------------------------------- wire types

@@ -26,12 +26,14 @@ runtime has been tested against the stand-in.
 
 from __future__ import annotations
 
+import logging
 import math
 from dataclasses import dataclass
 from typing import Any
 
 import numpy as np
 
+from robosimstudio.arms import arm_name as _arm_name
 from robosimstudio.core.bus import Bus, SimBus
 from robosimstudio.solvers.ik.solver import POS_TOLERANCE as _SERVO_POS_TOLERANCE
 from robosimstudio.solvers.ik.solver import ROT_TOLERANCE_DEG as _SERVO_ROT_TOLERANCE_DEG
@@ -48,18 +50,31 @@ from .sim_tools import register_sim_tools
 
 _SERVO_ROT_TOLERANCE = math.radians(_SERVO_ROT_TOLERANCE_DEG)
 
+_log = logging.getLogger(__name__)
+
 __all__ = ["ConnectorNewton", "NewtonEnvConfig", "NonPrivilegedRegistry", "make_connector"]
 
 
-"""How far off the last joint's axis a tool centre may sit and still roll [m].
+def _routed_servo_move(move) -> dict:
+    """Run one blocking servo motion and hand back an outcome dict, never a raise for an unreachable pose.
 
-:meth:`~robosimstudio.solvers.ArmIK.solve_q_full` closes the roll by
-turning one joint, which sweeps a tool centre ``r`` off that axis around a
-circle of radius ``r`` -- 22.8 mm for 30 degrees and 62.2 mm for 90 on a 44 mm
-offset -- and the position polish that follows is capped. At 5 mm the whole
-sweep is ``2r`` = 10 mm at a half turn and 7.1 mm at ninety degrees, which is
-inside what the polish recovers; the YAM's 44 mm is not.
-"""
+    A pose the solver cannot reach comes back as ``{"outcome": "unreachable"}``,
+    a refusal the graph can route on. Raised, it went to the workflow's
+    ``abort`` recovery, whose first act on every shipped graph is to open the
+    gripper -- which dropped the tool at the pick site in three study cells and
+    read, downstream, as "the grasp failed". Every servo-backed pose verb goes
+    through here so they all answer the same way: ``reached`` plus the servo's
+    own ``outcome`` (``reached``, ``timeout``, ``contact``, ``unreachable``).
+    """
+    try:
+        result = move()
+    except RuntimeError as exc:
+        if "unreachable" not in str(exc):
+            raise
+        return {"reached": False, "outcome": "unreachable", "reason": str(exc)}
+    result = dict(result or {})
+    result["reached"] = result.get("outcome") == "reached"
+    return result
 
 
 MOTION_PLANNERS: dict[str, str] = {
@@ -535,16 +550,17 @@ def make_connector(
                 # it reads the mesh: knowing a part's shape is a CAD model, and
                 # a real cell has those for what it was built to handle.
                 register_grasp_tools(registry, env, bus)
-            if task_tools is not None:
+            if task_tools is not None and suite_tools:
                 # Filtered under --no-privileged, for the reason
                 # NonPrivilegedRegistry gives: a suite's own sim.* tools are
                 # more privileged than the generic set, so withholding one and
-                # not the other withheld nothing. Filtered under
-                # --no-suite-tools for the sharper half of the same reason:
+                # not the other withheld nothing. Not registered at all under
+                # --no-suite-tools, for the sharper half of the same reason:
                 # the generic set is uniform across tasks, a suite's own is
-                # this task's solution, and a study of what a policy can learn
-                # has to withhold the second while keeping the first.
-                target = registry if (privileged and suite_tools) else NonPrivilegedRegistry(registry)
+                # this task's solution whatever its name or tags, and a study
+                # of what a policy can learn has to withhold the second while
+                # keeping the first.
+                target = registry if privileged else NonPrivilegedRegistry(registry)
                 task_tools(target, env, bus)
             # A skills checkout's geometry bundle exports names this connector
             # already serves in-process -- geometry_tools.py is that bundle's
@@ -580,31 +596,23 @@ def make_connector(
                     z_approach=z_approach,
                     nonblocking=nonblocking,
                 )
-            # A pose the solver cannot reach comes back as a refusal the graph
-            # can route on, not an exception. Raised, it went to the workflow's
-            # ``abort`` recovery, whose first act on every shipped graph is to
-            # open the gripper -- which dropped the tool at the pick site in
-            # three study cells and read, downstream, as "the grasp failed".
-            try:
+
+            # Unreachable comes back routed, not raised: see _routed_servo_move.
+            def _move():
                 if z_approach and z_approach > 0.0:
                     above = {"position": dict(pose["position"]), "rotation": dict(pose["rotation"])}
                     above["position"] = dict(above["position"])
                     above["position"]["z"] = float(above["position"]["z"]) + float(z_approach)
                     servo.move(above, arm_id=arm_id)
                 # The runtime's own ``tolerance`` reaches the servo: 0 keeps its default ball.
-                result = servo.move(
+                return servo.move(
                     pose,
                     arm_id=arm_id,
                     max_steps=max_steps or 0,
                     pos_tolerance=float(tolerance) if tolerance else None,
                 )
-            except RuntimeError as exc:
-                if "unreachable" not in str(exc):
-                    raise
-                return {"reached": False, "outcome": "unreachable", "reason": str(exc)}
-            result = dict(result or {})
-            result["reached"] = result.get("outcome") == "reached"
-            return result
+
+            return _routed_servo_move(_move)
 
         def _tool_solve_ik(self, pose, tcp_offset=None, arm_id=0):
             """The runtime's solve, plus the numbers the verdict hides.
@@ -654,7 +662,7 @@ def make_connector(
                 }
             if servo is None:
                 return super().go_to_pose_cartesian(pose, arm_id=arm_id)
-            servo.move(pose, arm_id=arm_id, speed_scale=scale)
+            return _routed_servo_move(lambda: servo.move(pose, arm_id=arm_id, speed_scale=scale))
 
         def move_cartesian_until_contact(
             self,
@@ -682,13 +690,15 @@ def make_connector(
             """
             if servo is None:
                 raise RuntimeError("contact-aware Cartesian motion requires feedback servo support")
-            return servo.move(
-                pose,
-                arm_id=int(arm_id),
-                max_steps=int(max_steps),
-                stop_on_stall=True,
-                stall_steps=int(stall_steps),
-                stall_epsilon=float(stall_epsilon),
+            return _routed_servo_move(
+                lambda: servo.move(
+                    pose,
+                    arm_id=int(arm_id),
+                    max_steps=int(max_steps),
+                    stop_on_stall=True,
+                    stall_steps=int(stall_steps),
+                    stall_epsilon=float(stall_epsilon),
+                )
             )
 
         # ------------------------------------------------- the arm_id that was lost
@@ -722,27 +732,28 @@ def make_connector(
             # height this way, silently, for eight straight batches. Report the
             # final gap so the caller (and the feedback that reads returns) can
             # see a motion that completed its stream without arriving.
+            #
+            # The arm is resolved in role order, as every other arm_id is (see
+            # robosimstudio.arms), and the joints are read on the owner thread
+            # through the bus, not off live state from this graph thread.
+            final = trajectory["waypoints"][-1]
+            commanded = final.get("positions") if isinstance(final, dict) else final
+            if commanded is None:
+                return {"status": "ok"}
+            toolkit = self.toolkit_env
             try:
-                final = trajectory["waypoints"][-1]
-                commanded = final.get("positions") if isinstance(final, dict) else final
-                arms = self.toolkit_env.handles.arms
-                names = list(arms)
-                name = names[int(arm_id)] if 0 <= int(arm_id) < len(names) else None
-                if commanded is not None and name is not None:
-                    import numpy as np
-
-                    coords = list(arms[name].arm_coords)
-                    live = np.asarray(self.toolkit_env.state.joint_q.numpy(), dtype=np.float64)[coords]
-                    cmd = np.asarray(list(commanded), dtype=np.float64).reshape(-1)[: len(coords)]
-                    gap = float(np.max(np.abs(cmd - live[: len(cmd)]))) if len(cmd) else 0.0
-                    return {
-                        "status": "ok",
-                        "final_tracking_error_rad": round(gap, 4),
-                        "waypoints": len(trajectory["waypoints"]),
-                    }
-            except Exception:
-                pass
-            return {"status": "ok"}
+                coords = list(toolkit.handles.arms[_arm_name(toolkit, int(arm_id))].arm_coords)
+                live = bus.call(lambda: np.asarray(toolkit.state.joint_q.numpy(), dtype=np.float64)[coords])
+                cmd = np.asarray(list(commanded), dtype=np.float64).reshape(-1)[: len(coords)]
+            except Exception as exc:  # the motion ran; only the report of how well is missing
+                _log.warning("execute_trajectory: final tracking error not measured: %s", exc)
+                return {"status": "ok", "final_tracking_error_unavailable": f"{type(exc).__name__}: {exc}"}
+            gap = float(np.max(np.abs(cmd - live[: len(cmd)]))) if len(cmd) else 0.0
+            return {
+                "status": "ok",
+                "final_tracking_error_rad": round(gap, 4),
+                "waypoints": len(trajectory["waypoints"]),
+            }
 
         def _tool_move_to_joints(self, joint_config, tolerance=0.0, max_steps=0, arm_id=0):
             from gap.connector.core import _as_positions
@@ -770,8 +781,6 @@ def make_connector(
             """
             out = dict(super()._tool_get_gripper(arm_id=arm_id) or {})
             try:
-                from robosimstudio.arms import arm_name as _arm_name
-
                 from .robot_tools import fingertip_reach
 
                 toolkit = self.toolkit_env
@@ -796,9 +805,16 @@ def make_connector(
             """
             if arm_id < 0:
                 return super().go_home()
-            home = list(self._home_joints or ())
+            # This arm's own home, not the work arm's: ``_home_joints`` is the
+            # config's, which is the work arm's posture, and driving the support
+            # arm to it sends it wherever the work arm's joints happen to point.
+            toolkit = self.toolkit_env
+            handle = toolkit.handles.arms[_arm_name(toolkit, int(arm_id))]
+            home = [float(v) for v in getattr(handle, "home_q", ())]
             if not home:
-                return super().go_home()
+                # No home of its own to go to: refuse to move it rather than
+                # home every arm, which would unpark the one held on purpose.
+                return {"homed": False, "reason": f"arm {int(arm_id)} declares no home posture"}
             self.move_to_joints(home, tolerance=0.01, max_steps=200, arm_id=int(arm_id))
             return None
 

@@ -4,7 +4,7 @@
 ``robosimstudio/engines/geometry.py`` is the *reading* half of what used to be
 ``engines/superdex/mirror.py``'s ``make_collider_shape`` -- the half that was the
 same work for every engine and is now done once. The SuperDex half stayed where
-it was, and ``tests/test_superdex.py`` covers it end to end with the engine in
+it was, and ``tests/test_superdex_contact.py`` covers it end to end with the engine in
 the loop; what is checked here is the part that has no engine in it, against a
 stub model, so it runs in the fast tier.
 
@@ -167,6 +167,24 @@ class TestTessellationIsSeparate(unittest.TestCase):
         from robosimstudio.engines.geometry import read_shape_geometry
 
         self.assertIsNone(read_shape_geometry(_model(), 0).mesh())
+
+    def test_a_cone_is_centred_as_newton_builds_it(self):
+        """Newton's cone runs base -h to apex +h about its origin; trimesh's runs 0 to 2h."""
+        from robosimstudio.engines.geometry import ShapeGeometry
+
+        geom = ShapeGeometry(
+            shape=0,
+            body=-1,
+            kind="cone",
+            scale=np.array([0.03, 0.05, 0.0]),
+            local=np.array([0.0, 0, 0, 0, 0, 0, 1.0]),
+            mu=0.5,
+        )
+        verts, _ = geom.mesh()
+        self.assertAlmostEqual(-0.05, float(verts[:, 2].min()))
+        self.assertAlmostEqual(0.05, float(verts[:, 2].max()))
+        base = verts[np.isclose(verts[:, 2], -0.05)]
+        self.assertAlmostEqual(0.03, float(np.linalg.norm(base[:, :2], axis=1).max()), places=6)
 
     def test_a_mesh_without_a_source_is_a_skip(self):
         from robosimstudio.engines.geometry import ShapeGeometry

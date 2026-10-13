@@ -25,8 +25,8 @@ it wholesale -- that is gap's contract and the way to point a run at a
 checkout that lives somewhere else.
 
 **Stdlib only, on purpose.** The fast tier stages every shipped graph with no
-``gap`` installed (``tests/test_extras.py`` forbids a module-scope ``import
-gap`` outside ``nodes/``), so the walk over ``<root>/{skills,tools}/*/SKILL.md``
+``gap`` installed (nothing outside ``nodes/`` may ``import gap`` at module
+scope), so the walk over ``<root>/{skills,tools}/*/SKILL.md``
 is done here, mirroring what ``gap.skills.SkillsRegistry.discover`` does: a
 bundle is a directory holding ``SKILL.md`` whose frontmatter ``name`` equals the
 directory name; underscore-prefixed directories are skipped; a name claimed by
@@ -277,15 +277,20 @@ def _sibling_state() -> str:
     try:
         import subprocess
 
-        head = subprocess.run(
-            ["git", "-C", str(ORS_SIBLING), "rev-parse", "--abbrev-ref", "HEAD", "HEAD"],
-            capture_output=True,
-            text=True,
-            timeout=5,
-            check=False,
-        )
-        branch, sha = [*head.stdout.split(), "?", "?"][:2]
-        return f"The sibling {ORS_SIBLING} is at {branch}@{sha[:8]}; a graph may be written against a newer one."
+        def rev_parse(*args: str) -> str:
+            out = subprocess.run(
+                ["git", "-C", str(ORS_SIBLING), "rev-parse", *args, "HEAD"],
+                capture_output=True,
+                text=True,
+                timeout=5,
+                check=False,
+            )
+            return out.stdout.strip() or "?"
+
+        # Two calls: ``--abbrev-ref`` applies to every rev that follows it, so
+        # one ``rev-parse --abbrev-ref HEAD HEAD`` prints the branch twice.
+        branch, sha = rev_parse("--abbrev-ref"), rev_parse("--short")
+        return f"The sibling {ORS_SIBLING} is at {branch}@{sha}; a graph may be written against a newer one."
     except Exception:  # provenance in a message, never a reason to fail
         return f"The sibling {ORS_SIBLING} is present."
 

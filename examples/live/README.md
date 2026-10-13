@@ -10,9 +10,10 @@ What is here:
   built is what the file says. Bind `routine` (or `routines = {name: fn}`)
   and the page grows a Run button for it.
 - `ctl`: the command line onto the running page (`python -m robosimstudio_real2sim_agent`,
-  with `run/` pinned beside the file). It uses the checkout's `.venv` when there
+  with `run/` and `up`'s scene pinned beside the file, so it also runs from
+  the repository root as `examples/live/ctl`). It uses the checkout's `.venv` when there
   is one, and otherwise `$PYTHON` or `python3`, so it also works after
-  `pip install robosimstudio`.
+  `pip install "robosimstudio @ git+https://github.com/robosimstudio/robosimstudio"`.
 - `run/`: made on first use and not committed. It holds the socket, the
   server's log and every snapshot.
 
@@ -20,14 +21,16 @@ What is here:
 
 ```bash
 cd examples/live
-./ctl up                                    # the page; prints http://localhost:8080 (--share adds a public URL)
+./ctl up                                    # the page; prints its URL, http://localhost:8080 or the next free port (--share adds a public URL)
 claude --permission-mode acceptEdits        # Claude Code; edits go through without a prompt
 codex -a on-request -s workspace-write      # or Codex; the sandbox may write here and reach the socket
 ```
 
 The page opens on the starter scene: two arms on a bare floor. On a remote GPU
 box, pick an idle card with `CUDA_VISIBLE_DEVICES` and use `--share` or an SSH
-tunnel (`ssh -L 8080:localhost:8080 <box>`). `./ctl quit` stops the server.
+tunnel (`ssh -L 8080:localhost:8080 <box>`). The page listens on all interfaces
+(viser's default), so on a shared network firewall the port or use the tunnel.
+`./ctl quit` stops the server.
 
 Both agents pick the procedure up on their own, from [`AGENTS.md`](../../AGENTS.md)
 at the root, so the prompt only has to say what to build.

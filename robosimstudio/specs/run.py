@@ -103,7 +103,9 @@ class JobSpec:
         gripper: Which registered hand to put on every arm, or ``""`` for the
             robot's own. Same rule.
         record: What to record.
-        seed: Overrides the task's base seed when not -1.
+        seed: Overrides the task's base seed (``EpisodeSpec.seed``) when not
+            -1, in every runner: episode ``i`` then draws at ``seed + i``, and
+            that effective seed is what each results row's ``seed`` records.
         max_steps: Overrides the task's own when not 0.
         control_mode: Overrides the task's own when not empty. Which action
             space a policy speaks belongs to the job, since it is a fact about

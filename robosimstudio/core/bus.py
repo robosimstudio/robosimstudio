@@ -46,21 +46,19 @@ class BusClosed(BusTimeout):
 
     Worth separating because the runtime cannot tell the difference on its own.
     A node interrupted this way reports a failure and routes to ``on_error``, so
-    a healthy episode leaves a node error in its trace -- a tool-hanging graph's
-    ``place_sg.hang`` does exactly that on runs that score 1.00 and terminate as
-    successes, because the evaluator declares the hang done while the node is
-    still driving the withdrawal. Anything reading traces to find real failures
-    has to be able to filter these out, and matching on a message string is not
-    a way to do that.
+    a healthy episode leaves a node error in its trace -- typically when the
+    evaluator declares the task done while a node is still driving a withdrawal.
+    Anything reading traces to find real failures has to be able to filter these
+    out, and matching on a message string is not a way to do that.
 
     ``terminal`` says the same thing to the graph runtime, which reads the flag
     off the exception type rather than importing this module. A closed bus is
     not a step that failed and can be retried -- the world is gone -- so the
     runtime re-raises instead of taking the subgraph's ``on_error`` exit. Left
     routable, a graph with a recovery loop answers "the episode ended" by
-    calling another tool, which raises this again: one study episode went round
-    9,186 times before the super-step cap stopped it, and those 9,186 identical
-    lines were 96% of every node failure the study recorded.
+    calling another tool, which raises this again, and goes round until the
+    runtime's super-step cap stops it -- thousands of identical node failures
+    from one episode that had in fact finished.
     """
 
     terminal = True
@@ -99,6 +97,9 @@ class _Request:
     done: threading.Event = field(default_factory=threading.Event)
     result: Any = None
     error: BaseException | None = None
+    state: str = "queued"
+    """``queued``, then ``running`` once a pump takes it, or ``cancelled`` once
+    its worker has given up -- a cancelled request is dropped unrun."""
 
 
 @runtime_checkable
@@ -157,6 +158,9 @@ class SimBus:
         self._queue: queue.Queue[_Request] = queue.Queue()
         self._snapshot = SimSnapshot()
         self._closed = threading.Event()
+        self._lock = threading.Lock()
+        """Makes "closed?" and "enqueue" one step against :meth:`close`, and
+        "take" and "cancel" one step between :meth:`pump` and a timed-out worker."""
         self.owner_thread: int | None = None
         """Set on the first :meth:`pump`, so a re-entrant call can be detected."""
 
@@ -165,17 +169,28 @@ class SimBus:
         """Run ``fn`` on the owner thread and return its result.
 
         Called from a worker. Blocks until the owner pumps, or raises
-        :class:`BusTimeout`. Called *on* the owner thread it runs inline, so a
-        tool that is sometimes called from either side works both ways.
+        :class:`BusTimeout` -- and a request that times out before a pump takes
+        it is withdrawn, so it never runs later behind the caller's back. One
+        already running when the deadline passes finishes, and its result is
+        discarded. Called *on* the owner thread it runs inline, so a tool that
+        is sometimes called from either side works both ways.
         """
-        if self._closed.is_set():
-            raise BusClosed("the simulation bus closed: the episode ended")
         if self.owner_thread == threading.get_ident():
+            if self._closed.is_set():
+                raise BusClosed("the simulation bus closed: the episode ended")
             return fn(*args, **kwargs)
         request = _Request(fn=fn, args=args, kwargs=kwargs)
-        self._queue.put(request)
+        with self._lock:
+            if self._closed.is_set():
+                raise BusClosed("the simulation bus closed: the episode ended")
+            self._queue.put(request)
         if not request.done.wait(self.timeout):
-            raise BusTimeout(f"{getattr(fn, '__name__', fn)} was not serviced within {self.timeout:.0f} s")
+            with self._lock:
+                if request.state == "queued":
+                    request.state = "cancelled"
+                serviced = request.done.is_set()  # finished between the wait and the lock
+            if not serviced:
+                raise BusTimeout(f"{getattr(fn, '__name__', fn)} was not serviced within {self.timeout:.0f} s")
         if request.error is not None:
             raise request.error
         return request.result
@@ -209,19 +224,34 @@ class SimBus:
                 them in a tight loop cannot starve the simulation.
 
         Returns:
-            How many were serviced.
+            How many were serviced. Requests their workers already gave up on
+            are dropped unrun and not counted.
+
+        Raises:
+            KeyboardInterrupt, SystemExit: Raised by a request's ``fn``, they
+                propagate here on the owner thread rather than being handed to
+                the worker. The bus closes first, so that worker and every
+                queued one is released with :class:`BusClosed`.
         """
         self.owner_thread = threading.get_ident()
         serviced = 0
         while serviced < budget:
-            try:
-                request = self._queue.get_nowait()
-            except queue.Empty:
-                break
+            with self._lock:
+                try:
+                    request = self._queue.get_nowait()
+                except queue.Empty:
+                    break
+                if request.state == "cancelled":
+                    continue
+                request.state = "running"
             try:
                 request.result = request.fn(*request.args, **request.kwargs)
-            except BaseException as exc:
+            except Exception as exc:
                 request.error = exc
+            except BaseException:
+                request.error = BusClosed("the simulation bus closed: the owner thread was interrupted")
+                self.close()
+                raise
             finally:
                 request.done.set()
                 serviced += 1
@@ -232,15 +262,20 @@ class SimBus:
         self._snapshot = snapshot
 
     def close(self) -> None:
-        """Release every waiting worker with a timeout. Owner thread."""
-        self._closed.set()
-        while True:
-            try:
-                request = self._queue.get_nowait()
-            except queue.Empty:
-                break
-            request.error = BusClosed("the simulation bus closed: the episode ended")
-            request.done.set()
+        """Stop serving: every queued request, and every later call, raises :class:`BusClosed`.
+
+        Owner thread. Idempotent. A request a pump is already running finishes
+        and returns normally.
+        """
+        with self._lock:
+            self._closed.set()
+            while True:
+                try:
+                    request = self._queue.get_nowait()
+                except queue.Empty:
+                    break
+                request.error = BusClosed("the simulation bus closed: the episode ended")
+                request.done.set()
 
     @property
     def closed(self) -> bool:

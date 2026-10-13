@@ -1,5 +1,5 @@
 [build-system]
-requires = ["hatchling"]
+requires = ["hatchling>=1.27"]
 build-backend = "hatchling.build"
 
 [project]
@@ -7,8 +7,12 @@ name = "robosimstudio"
 dynamic = ["version"]
 description = "An open interactive toolkit that accelerates human and agentic physics-based Real2Sim of Robot Manipulation Tasks"
 readme = "README.md"
-license = "Apache-2.0"
-requires-python = ">=3.10"
+# The project is Apache-2.0; the robot models under assets/ keep their own
+# licences (MIT, BSD-2-Clause, BSD-3-Clause), each in a LICENSE beside its files
+# and listed in NOTICE.
+license = "Apache-2.0 AND MIT AND BSD-2-Clause AND BSD-3-Clause"
+license-files = ["LICENSE", "NOTICE", "assets/embodiments/*/LICENSE*", "assets/embodiments/*/*/LICENSE*"]
+requires-python = ">=3.12"
 authors = [{ name = "Kaiyuan Chen" }]
 keywords = ["robotics", "simulation", "manipulation", "deformable", "newton", "real-to-sim"]
 classifiers = [
@@ -16,8 +20,6 @@ classifiers = [
     "Intended Audience :: Science/Research",
     "Operating System :: POSIX :: Linux",
     "Programming Language :: Python :: 3",
-    "Programming Language :: Python :: 3.10",
-    "Programming Language :: Python :: 3.11",
     "Programming Language :: Python :: 3.12",
     "Topic :: Scientific/Engineering",
 ]
@@ -103,8 +105,8 @@ path = "robosimstudio/_version.py"
 
 # Five packages, one distribution: the library, the browser page over it, the
 # real-to-sim page a coding agent drives, the benchmark (tasks, goals, the run
-# harness) and the policy agent (a graph as the policy). Which may name which is
-# tests/test_import_direction.py.
+# harness) and the policy agent (a graph as the policy). Imports go one way: the
+# library names neither the studio nor the agents.
 [tool.hatch.build.targets.wheel]
 packages = [
     "robosimstudio",
@@ -171,8 +173,9 @@ override-dependencies = [
 ]
 
 # Skill registries a graph's subgraphs may name, in gap's own convention: a
-# clone of open-robot-skills beside this checkout. A subgraph whose skill is
-# "generic" needs none. $GAP_SKILLS_PATH overrides it.
+# clone of open-robot-skills beside this checkout. Optional, and only a default:
+# a subgraph whose skill is "generic" needs none, a missing directory matters
+# only to a graph that names a bundle, and $GAP_SKILLS_PATH overrides it.
 [tool.gap]
 registries = ["../open-robot-skills"]
 
@@ -203,8 +206,8 @@ ignore = [
     "E501",   # long lines, as Newton does
     # Function-local imports are this tree's convention, not a smell: every
     # optional backend is imported inside the function that needs it so a base
-    # install never pays for it. What must not be imported where is checked
-    # structurally (tests/test_extras.py, tests/test_import_direction.py).
+    # install never pays for it. The banned-module-level-imports list below is
+    # what keeps optional backends out of module scope.
     "PLC0415",
     "E741",   # Warp often uses l as a variable name
     "UP018",  # Warp kernels often use float(val) and int(val)

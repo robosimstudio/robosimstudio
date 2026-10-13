@@ -48,7 +48,7 @@ a capture of the current stage set.
 
 from __future__ import annotations
 
-import traceback
+import logging
 from collections.abc import Callable, Iterator
 from contextlib import contextmanager
 from dataclasses import dataclass
@@ -61,6 +61,10 @@ from .builder import assert_even_substeps
 from .streams import capturing
 
 __all__ = ["HOOK_PHASES", "PHASES", "SUBSTEP_PHASES", "Schedule", "ScheduleExecutor", "Stage", "SubstepHooks"]
+
+_log = logging.getLogger(__name__)
+"""Where a failed capture's traceback goes: the one-line reason is printed, the
+stack is there for whoever turns ``logging`` up."""
 
 Hook = Callable[[newton.State, float], None]
 """A stage body: ``(state, dt) -> None``, launching device kernels only."""
@@ -325,9 +329,6 @@ class ScheduleExecutor:
         self.sim_time = 0.0
         self.step_count = 0
 
-        self._after_syncs = self._after_reads_the_device()
-        """Whether ``step`` must let the device catch up before ``after`` runs."""
-
         self.state_0 = model.state()
         self.state_1 = model.state()
         self.control = model.control()
@@ -414,7 +415,8 @@ class ScheduleExecutor:
         *sometimes*. So the stall is made explicit here, and paid only where it
         is owed: a stage declares what it ``reads``, and the only shipped
         ``after`` stage that declares anything is the cosim tick. A Newton-only
-        scene has an empty ``after`` phase and synchronises nothing.
+        scene has an empty ``after`` phase and synchronises nothing. Asked on
+        every step rather than once, so a stage added after construction counts.
         """
         return any(stage.reads for stage in self.schedule.phases["after"])
 
@@ -439,7 +441,7 @@ class ScheduleExecutor:
             self.capture_error = ""
         except Exception as exc:
             print(f"[pipeline] CUDA graph capture failed ({type(exc).__name__}: {exc}); running eager")
-            print(traceback.format_exc())
+            _log.debug("CUDA graph capture failed", exc_info=True)
             self.capture_error = f"{type(exc).__name__}: {exc}"
             self._graph = None
         wp.synchronize()
@@ -452,18 +454,28 @@ class ScheduleExecutor:
         """Temporarily run at another substep count, eagerly.
 
         For a settle, which wants a finer timestep than the run does. Any
-        captured graph is set aside rather than dropped. The clock is *not*
-        restored -- a settle is scene construction, not simulated time.
+        captured graph is set aside rather than dropped, and a pending
+        re-capture waits until the run's own substep count is back -- a graph
+        captured at the settle's count would be the wrong body. If the stages
+        change inside the block, the graph set aside is stale and is dropped
+        for a re-capture instead. The clock is *not* restored -- a settle is
+        scene construction, not simulated time.
         """
-        saved_substeps, saved_dt, saved_graph = self.substeps, self.sim_dt, self._graph
+        saved_substeps, saved_dt = self.substeps, self.sim_dt
+        saved_graph, saved_recapture = self._graph, self._recapture
         self.substeps = assert_even_substeps(substeps)
         self.sim_dt = self.control_dt / self.substeps
         self._graph = None
+        self._recapture = False
         self.settling = True
         try:
             yield
         finally:
-            self.substeps, self.sim_dt, self._graph = saved_substeps, saved_dt, saved_graph
+            self.substeps, self.sim_dt = saved_substeps, saved_dt
+            if self._recapture:  # invalidated inside the block
+                self._graph = None
+            else:
+                self._graph, self._recapture = saved_graph, saved_recapture
             self.settling = False
 
     def invalidate_graph(self, *, recapture: bool = True) -> None:
@@ -488,7 +500,7 @@ class ScheduleExecutor:
             self.capture_error = ""
         except Exception as exc:
             print(f"[pipeline] re-capture failed ({type(exc).__name__}: {exc}); running eager")
-            print(traceback.format_exc())
+            _log.debug("CUDA graph re-capture failed", exc_info=True)
             self.capture_error = f"{type(exc).__name__}: {exc}"
             self.recapture_failures += 1
             self._graph = None
@@ -503,9 +515,9 @@ class ScheduleExecutor:
         else:
             self.steps_eager += 1
             self.substep_block()
-            if self._recapture:
+            if self._recapture and not self.settling:
                 self._try_recapture()
-        if self._after_syncs:
+        if self._after_reads_the_device():
             # The body above only *enqueued* its work; an ``after`` stage that
             # reads what it wrote has to wait for it. See _after_reads_the_device.
             wp.synchronize_device(self.device)

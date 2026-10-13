@@ -224,14 +224,15 @@ class WorldFacade:
         tolerance: float = 0.01,
         max_steps: int = 120,
         arm_id: int = 0,
-    ) -> None:
+    ) -> bool:
         """Drive one arm to a joint target and wait for it to get there.
 
-        ``max_steps == 0`` is the runtime's fire-and-forget contract: submit the
-        motion and return without waiting.
+        Returns whether it converged inside the budget. ``max_steps == 0`` is
+        the runtime's fire-and-forget contract: submit the motion and return
+        ``False`` without waiting -- not known to have arrived.
         """
         goal = np.asarray(target, dtype=np.float32).reshape(-1)
-        self._submit(
+        handle = self._submit(
             MoveToJoints(
                 arm=self._arm(arm_id),
                 target=goal,
@@ -240,6 +241,7 @@ class WorldFacade:
             ),
             wait=max_steps != 0,
         )
+        return max_steps != 0 and bool(handle.result)
 
     def stream_joint_trajectory(
         self,
@@ -248,8 +250,8 @@ class WorldFacade:
         settle_tolerance: float = 0.01,
         settle_max_steps: int = 60,
         arm_id: int = 0,
-    ) -> None:
-        """Feed a dense joint trajectory as one motion.
+    ) -> bool:
+        """Feed a dense joint trajectory as one motion; whether the arm settled on its last waypoint.
 
         The runtime looks for this method by name and, finding it, treats a
         trajectory as *the control sequence* rather than a list of poses to
@@ -261,8 +263,8 @@ class WorldFacade:
         """
         path = np.asarray(waypoints, dtype=np.float32)
         if path.size == 0:
-            return
-        self._submit(
+            return True
+        handle = self._submit(
             JointTrajectory(
                 arm=self._arm(arm_id),
                 waypoints=path.reshape(len(waypoints), -1),
@@ -274,6 +276,7 @@ class WorldFacade:
             ),
             wait=True,
         )
+        return bool(handle.result)
 
     def apply_joint_action(self, joints: np.ndarray, arm_id: int = 0) -> None:
         """Command one arm's joint targets without waiting.

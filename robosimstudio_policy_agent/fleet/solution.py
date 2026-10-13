@@ -261,10 +261,13 @@ class SolutionGraphBatched(FleetSolution):
         """The roll contract, as :class:`~robosimstudio_policy_agent.ik.IKBackend` takes it."""
         self.num_worlds = int(fleet.num_worlds)
 
+        # A scratch directory is this policy's own and :meth:`close` removes it;
+        # one the caller named is theirs and is kept.
+        self._scratch_trace_dir: str | None = None
         if not trace_dir:
             import tempfile
 
-            trace_dir = tempfile.mkdtemp(prefix="robosimstudio-fleet-gap-")
+            trace_dir = self._scratch_trace_dir = tempfile.mkdtemp(prefix="robosimstudio-fleet-gap-")
         self.trace_dir = Path(trace_dir)
         self.graph_path = self._resolve_graph(fleet, graph, registries=self.skills)
         self.task_tools = self._task_tools(fleet)
@@ -392,9 +395,9 @@ class SolutionGraphBatched(FleetSolution):
         # the privileged tools reads device state directly, unmarshalled
         # (``SimTools._compute_home_ee_quat``, whose own docstring states the
         # invariant: "constructed on the main thread before the graph starts").
-        # The single-world path gets that for free because nothing else runs
-        # yet; a fleet has to say it, or W graph threads touch Warp while the
-        # fleet is capturing its control stage and the capture fails.
+        # The single-world policy pre-builds it in its ``reset`` for the same
+        # reason; here it also keeps W graph threads off Warp while the fleet
+        # is capturing its control stage, where a touch fails the capture.
         _ = state.connector.tool_registry
         state.trace_dir = self.trace_dir / f"{slot.episode.episode_id:04d}"
         state.result = state.error = None
@@ -801,3 +804,8 @@ class SolutionGraphBatched(FleetSolution):
         self.rendezvous.close()
         self.service.close()
         self.waiter.close()
+        scratch = getattr(self, "_scratch_trace_dir", None)
+        if scratch is not None:
+            import shutil
+
+            shutil.rmtree(scratch, ignore_errors=True)

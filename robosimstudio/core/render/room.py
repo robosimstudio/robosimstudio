@@ -143,7 +143,7 @@ ROOM_WALL: Vec3 = (0.8600, 0.8500, 0.8300)
 This is the number that matters most in a path tracer: the walls are the largest
 diffuse surface in the room, so almost all of the bounce is theirs, and lifting
 them lifts everything. Kept under pyrender's measured clipping albedo of 0.9121
-(see ``tests/test_palette.py``) so a room stays renderable by the backends that
+so a room stays renderable by the backends that
 are not path tracers, and short of white so a white robot shell still separates
 from the wall behind it."""
 

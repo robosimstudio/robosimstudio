@@ -40,6 +40,7 @@ from typing import Any
 
 import numpy as np
 
+from robosimstudio.core.math import quat_to_mat
 from robosimstudio.engines.cosim import CosimRig, engine_dt
 from robosimstudio.engines.feedback import WrenchAccumulator
 from robosimstudio.engines.geometry import (
@@ -172,7 +173,6 @@ class GenesisBridge:
         self._link_of = {int(m["entity"].base_link.idx): m for m in self.mirrors}
         self._entity_by_shape = {m["geom"].shape: m["entity"] for m in self.mirrors}
         self._rest_frame: int | None = None
-        self._diverged_logged = False
 
         self.rig = CosimRig(
             [m["geom"].body for m in self.mirrors],
@@ -329,8 +329,9 @@ class GenesisBridge:
         error names neither the geometry nor the reason.
 
         The check is a conservative axis-aligned overlap of an actor's rest
-        bounding box against each box-shaped mirror's -- cheap, build-time only,
-        and deliberately *not* an exact test: a false alarm names two pieces of
+        bounding box against each box-shaped mirror's (the world AABB of the
+        rotated box) -- cheap, build-time only, and deliberately *not* an exact
+        test: a false alarm names two pieces of
         geometry and asks a human to look, which is a far better failure than
         the one it replaces. Non-box mirrors are skipped rather than
         approximated, so this is a net that catches the common case and never
@@ -343,8 +344,12 @@ class GenesisBridge:
                 m = mirror["geom"]
                 if m.kind != "box" or m.moving:
                     continue
-                m_lo = m.local[:3] - m.scale
-                m_hi = m.local[:3] + m.scale
+                # The world AABB of the *rotated* box: half-extents |R| @ scale.
+                # Ignoring the rotation under-reports a box turned about any
+                # axis -- a 45-degree plate's footprint grows by sqrt(2).
+                half = np.abs(quat_to_mat(m.local[3:7])) @ np.asarray(m.scale[:3], dtype=np.float64)
+                m_lo = m.local[:3] - half
+                m_hi = m.local[:3] + half
                 if np.all(lo < m_hi) and np.all(hi > m_lo):
                     raise ValueError(
                         f"genesis island {self.recipe.get('island')!r}: actor {geom.name!r} starts "
@@ -485,7 +490,6 @@ class GenesisBridge:
         for entry in self.actors:
             entry["prev"] = np.asarray(entry["entity"].get_state().pos.cpu()).reshape(-1, 3).copy()
         self.rig.mark_teleport()
-        self._diverged_logged = False
         if self.feedback_enabled and self.apply_wrenches is not None:
             self.apply_wrenches(self._acc.zero())
 

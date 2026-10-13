@@ -169,7 +169,7 @@ class Contact(SpatialRelation):
         positives="settled items in a tote read touching on every smoothed step over 300 steps at rest",
         negatives="an item carried above the tote, and one beside it on the bench, read 0.0 throughout",
         gate=None,
-        bench="core/probes/contact.py MIN_IMPULSE (1e-6 N*s); tasks/astro/rigs/settle_astro.py over the astro bins",
+        bench="core/probes/contact.py MIN_IMPULSE (1e-6 N*s); a settle run over the astro bins",
         notes=(
             "The gate is structural rather than tuned: any contact the solver recorded counts, and "
             "MIN_IMPULSE exists to reject the numerical zero rather than to separate two populations."
@@ -234,7 +234,7 @@ class On(SpatialRelation):
             "both pass -- the exact false positive that scored 1.00 at step 240"
         ),
         gate=0.5,
-        bench="tasks/astro/rigs/settle_astro.py over the astro bins; the leaning case staged as a two-box fixture",
+        bench="a settle run over the astro bins; the leaning case staged as a two-box fixture",
         notes="up_frac gates at 0.5: more of the support's push is upward than sideways.",
     )
 

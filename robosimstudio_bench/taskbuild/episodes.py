@@ -7,8 +7,7 @@ so an episode samples the same way whether it is run first, run alone, or run
 after a thousand others. Anything else makes a failure impossible to reproduce
 and a re-render impossible to trust.
 
-The seed, not the index, is what a draw may read -- see
-``docs/benchmark_instances.md``. A benchmark instance is its base document at
+The seed, not the index, is what a draw may read. A benchmark instance is its base document at
 one seed (``(:count 1) (:seed k)``), which is always episode 0 of a document of
 its own, so a sampler that reads ``episode_id`` reports the same draw for every
 instance in the set. A sampler that enumerates rather than draws asks
@@ -29,7 +28,7 @@ from typing import Any
 
 import numpy as np
 
-from robosimstudio.specs import Episode, TaskSpec
+from robosimstudio.specs import Episode, TaskSpec, replace
 
 __all__ = [
     "active_names",
@@ -41,6 +40,7 @@ __all__ = [
     "model_key_for",
     "move_near",
     "pick_instruction",
+    "with_base_seed",
 ]
 
 
@@ -64,6 +64,21 @@ def episode_seed(task: TaskSpec, episode_id: int) -> int:
         The seed.
     """
     return int(task.episodes.seed) + int(episode_id)
+
+
+def with_base_seed(task: TaskSpec, seed: int) -> TaskSpec:
+    """``task`` with its base seed replaced by ``seed``, or ``task`` itself for ``-1``.
+
+    How ``JobSpec.seed`` reaches an episode. The override is applied to the
+    document rather than threaded beside it, so :func:`episode_seed` -- and
+    every sampler that asks it for the number to enumerate by -- sees the one
+    base seed the job asked for, whichever runner made the episode. ``-1`` keeps
+    the very object passed in, so identity checks downstream are undisturbed.
+    """
+    seed = int(seed)
+    if seed == -1 or seed == int(task.episodes.seed):
+        return task
+    return replace(task, episodes=replace(task.episodes, seed=seed))
 
 
 def make_episode(task: TaskSpec, episode_id: int) -> Episode:
@@ -170,8 +185,8 @@ def grid_xy_quat(
 ):
     """A sampler placing named objects on a grid of positions and yaws.
 
-    Enumerates rather than randomises: episode ``i`` takes the ``i``-th cell of
-    the ``grid x yaw`` product, so a run of ``n`` episodes covers the layout
+    Enumerates rather than randomises: the episode at seed ``k``
+    (:func:`episode_seed`) takes the ``k``-th cell of the ``grid x yaw`` product, so a run of ``n`` episodes covers the layout
     space evenly instead of clumping the way independent draws do. ``jitter``
     adds a small random offset on top, which is what keeps a policy from
     memorising exact cell centres.
@@ -211,8 +226,9 @@ def grid_xy_quat(
         names = list(objects) or [o.name for o in task.objects if not o.static]
         poses: dict[str, tuple[float, float, float, float]] = {}
         xforms: dict[str, tuple[float, ...]] = {}
+        index = episode_seed(task, episode_id)
         for k, name in enumerate(names):
-            (x, y), yaw = layouts[(episode_id + k * 7) % len(layouts)]
+            (x, y), yaw = layouts[(index + k * 7) % len(layouts)]
             if jitter:
                 x += float(rng.uniform(-jitter, jitter))
                 y += float(rng.uniform(-jitter, jitter))
@@ -278,12 +294,14 @@ def pick_instruction(*instructions: str):
 
     Language variation with no physical variation, which is what a
     vision-language policy should be robust to and a scripted one should not
-    notice at all.
+    notice at all. Cycled by :func:`episode_seed`, not the bare index, so a
+    benchmark instance (episode 0 of a document at ``(:seed k)``) gets the
+    phrasing its seed names.
     """
 
     def sample(task: TaskSpec, episode_id: int, rng: np.random.Generator) -> dict[str, Any]:
-        del task, rng
-        return {"instruction": instructions[episode_id % len(instructions)]}
+        del rng
+        return {"instruction": instructions[episode_seed(task, episode_id) % len(instructions)]}
 
     return sample
 

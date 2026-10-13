@@ -141,31 +141,59 @@ def request(sock: Path | str, req: dict, timeout: float) -> dict:
 class ControlSocket:
     """A Unix socket that answers one JSON line per connection with what ``handler`` returns.
 
-    :meth:`serve` blocks; :meth:`start` runs it on a daemon thread. Accepts
-    time out every half second so :meth:`close` is honoured promptly. A line
-    that is not a JSON object is answered with an error rather than dropped,
-    and a handler that raises is reported the same way: the client always
-    gets a line back.
+    :meth:`serve` blocks; :meth:`start` binds on the caller's thread -- so a
+    socket that cannot be had is the caller's exception, raised before it says
+    the page is up -- and accepts on a daemon thread. A socket file some live
+    server is answering on is refused rather than taken over; one nobody
+    answers on is a stale leftover and is replaced. Accepts time out every
+    half second so :meth:`close` is honoured promptly. A line that is not a
+    JSON object is answered with an error rather than dropped, and a handler
+    that raises is reported the same way: the client always gets a line back.
     """
 
     def __init__(self, path: Path | str, handler: Callable[[dict], dict]) -> None:
         self.path = Path(path)
         self.handler = handler
         self._stop = threading.Event()
+        self._bound = False
+        """Whether the file at :attr:`path` is ours to unlink."""
         self.thread: threading.Thread | None = None
 
     def start(self) -> threading.Thread:
-        self.thread = threading.Thread(target=self.serve, name="live-socket", daemon=True)
+        server = self.bind()
+        self.thread = threading.Thread(target=self._accept, args=(server,), name="live-socket", daemon=True)
         self.thread.start()
         return self.thread
 
     def serve(self) -> None:
+        self._accept(self.bind())
+
+    def bind(self) -> socket.socket:
+        """Take the socket path and listen on it. Raises if a live server holds it, or on any bind failure."""
         self.path.parent.mkdir(parents=True, exist_ok=True)
-        self._unlink()
+        if self.path.exists() or self.path.is_socket():
+            probe = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
+            probe.settimeout(1.0)
+            try:
+                probe.connect(str(self.path))
+            except OSError:
+                self._unlink()  # nobody behind it: a server that died without closing
+            else:
+                raise FileExistsError(f"a server is already listening at {self.path}; `quit` it first")
+            finally:
+                probe.close()
         server = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
-        server.bind(str(self.path))
-        server.listen(8)
+        try:
+            server.bind(str(self.path))
+            server.listen(8)
+        except OSError:
+            server.close()
+            raise
+        self._bound = True
         server.settimeout(0.5)
+        return server
+
+    def _accept(self, server: socket.socket) -> None:
         with server:
             while not self._stop.is_set():
                 try:
@@ -198,7 +226,9 @@ class ControlSocket:
 
     def close(self) -> None:
         self._stop.set()
-        self._unlink()
+        if self._bound:  # never another server's: a socket this one was refused is left alone
+            self._bound = False
+            self._unlink()
 
     def _unlink(self) -> None:
         try:

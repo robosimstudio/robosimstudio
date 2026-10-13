@@ -169,8 +169,8 @@ YAM_TELEOP_GRIP = ActuationSpec(
     # shipped -- so the follower tracks and the ringing is in the servo.
     #
     # *Its timestep.* The reference integrates at 0.0005 s where these
-    # measurements ran sim_dt 0.00104 (60 Hz, 16 substeps -- the library's
-    # default arrangement), and an undamped stiff servo stable at one step is
+    # measurements ran sim_dt 0.00104 (60 Hz, 16 substeps -- the ``GENERIC``
+    # arrangement's rate), and an undamped stiff servo stable at one step is
     # not automatically stable at twice it. Re-running at 34 substeps --
     # 0.00049 s, finer than the reference's -- left the zeroed count at 66
     # against 60, marginally worse rather than better, while the shipped

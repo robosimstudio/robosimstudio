@@ -1,7 +1,12 @@
 name: publish
 
-# Builds the wheel and uploads it to PyPI when a GitHub release is created.
-# Needs the repository secret PYPI_TOKEN.
+# Builds the wheel and sdist and keeps them as a workflow artifact when a GitHub
+# release is created. Nothing is uploaded to PyPI: pyroki is a git direct
+# reference (see pyproject.toml), which PyPI refuses in a wheel's metadata. Until
+# pyroki is on an index, install from git:
+#   pip install "robosimstudio @ git+https://github.com/robosimstudio/robosimstudio"
+# A workflow artifact rather than a release asset, so the job needs no write
+# token.
 
 on:
   release:
@@ -9,14 +14,14 @@ on:
   workflow_dispatch:
 
 jobs:
-  deploy:
+  build:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
       - name: Install uv
         uses: astral-sh/setup-uv@v5
       - name: Fast tier must pass
-        run: uv run --extra dev --python 3.12 python scripts/testrun.py --tier fast
+        run: uv run --extra dev python scripts/testrun.py --tier fast
       - name: Build
         run: uv build
       - name: Verify wheel contents
@@ -40,7 +45,8 @@ jobs:
           assert not missing, f"Missing from {wheel}: {missing}"
           print(f"{wheel} OK: {len(names)} files")
           PY
-      - name: Publish
-        env:
-          UV_PUBLISH_TOKEN: ${{ secrets.PYPI_TOKEN }}
-        run: uv publish
+      - name: Keep the built distributions
+        uses: actions/upload-artifact@v4
+        with:
+          name: dist
+          path: dist/

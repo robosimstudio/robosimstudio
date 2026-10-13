@@ -49,8 +49,9 @@ class CameraSpec:
         cx: Principal point x [px], defaulting to the image centre.
         cy: Principal point y [px], defaulting to the image centre.
         near: Near clip [m].
-        far: Far clip [m]. Also the value a depth miss is reported as 0 instead
-            of, so a consumer never sees an infinity where it expects a range.
+        far: Far clip [m]. A depth ray that hits nothing is reported as 0
+            rather than as infinity, so a consumer never sees an infinity where
+            it expects a range.
         eye: Camera position in world coordinates [m].
         look_at: Point the camera is aimed at [m]. Ignored when :attr:`xform`
             is set.

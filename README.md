@@ -42,11 +42,23 @@ You need an NVIDIA GPU.
 ```bash
 git clone https://github.com/robosimstudio/robosimstudio.git && cd robosimstudio
 uv run examples/00_getting_started/00_hello_world.py          # Installs on the first run, then opens the studio.
-uv run --extra superdex examples/03_soft/00_sponge.py         # Plus FEM soft bodies (Python 3.12).
+uv run --extra superdex examples/03_soft/00_sponge.py         # Plus FEM soft bodies.
 uv run --extra gap examples/08_policies/00_pick_and_place.py  # Plus the graph runtime: a policy picks a cube.
 ```
 
-Every script under `examples/` runs the same way.
+Every script under `examples/` runs the same way. Python 3.12 is required;
+`uv` picks it from `.python-version`.
+
+RoboSimStudio is not on PyPI (its IK dependency, PyRoKi, is installed from
+git). To install it into an existing environment with pip:
+
+```bash
+pip install "robosimstudio[superdex] @ git+https://github.com/robosimstudio/robosimstudio"
+```
+
+The studio page listens on all network interfaces (viser's default), so on a
+shared network keep its port behind a firewall or reach it over an SSH tunnel.
+A public share link is made only when asked for (`share=True`).
 
 ## Demos
 

@@ -186,7 +186,9 @@ class EpisodeStore:
         return [json.loads(line) for line in path.read_text().splitlines() if line.strip()]
 
     def episode_ids(self) -> list[str]:
-        """Every episode directory name, sorted."""
+        """Every episode directory name, sorted; empty for a run not yet written."""
+        if not self.root.is_dir():
+            return []
         return sorted(p.name for p in self.root.iterdir() if p.is_dir() and (p / "meta.json").exists())
 
     def episode(self, episode_id: int | str) -> EpisodeData:
@@ -214,6 +216,60 @@ class EpisodeStore:
             "success_rate": successes / len(rows) if rows else 0.0,
             "mean_length": float(np.mean([r.get("episode_length", 0) for r in rows])) if rows else 0.0,
         }
+
+
+def episode_row(
+    task: Any,
+    episode: Any,
+    *,
+    request: Any = None,
+    success: bool,
+    reward: float,
+    episode_length: int,
+    close_kind: str,
+    termination_reason: str,
+    metrics: dict[str, Any],
+    wall_s: float,
+    sim_s: float,
+    recorded_steps: int,
+    captured_steps: int,
+    video_frames: int,
+    extra: dict[str, Any] | None = None,
+) -> dict[str, Any]:
+    """One episode's results row and ``meta.json``: the same keys from every recorder.
+
+    Provenance comes off ``task`` when there is one and off ``request``
+    otherwise: a bare ``Sim`` has no task and still has a scene worth writing
+    down. A request spells the place ``cell`` where a task spells it ``scene``,
+    and its embodiment may be a spec rather than a name, so it is written by
+    name.
+    """
+    source = task if task is not None else request
+    embodiment = getattr(source, "embodiment", "")
+    wall_s, sim_s = float(wall_s), float(sim_s)
+    return {
+        "schema": SCHEMA,
+        "task": getattr(source, "full_name", "") if task is not None else "",
+        "scene": getattr(source, "scene", "") or getattr(source, "cell", ""),
+        "embodiment": str(getattr(embodiment, "name", embodiment) or ""),
+        "episode_id": episode.episode_id,
+        "seed": episode.seed,
+        "instruction": episode.instruction,
+        "model_key": episode.model_key,
+        "success": bool(success),
+        "reward": float(reward),
+        "episode_length": int(episode_length),
+        "close_kind": close_kind or "unknown",
+        "termination_reason": termination_reason or "",
+        "metrics": metrics,
+        "wall_s": round(wall_s, 3),
+        "sim_s": round(sim_s, 3),
+        "realtime_factor": round(sim_s / wall_s, 3) if wall_s > 0 else 0.0,
+        "recorded_steps": int(recorded_steps),
+        "captured_steps": int(captured_steps),
+        "video_frames": int(video_frames),
+        **(extra or {}),
+    }
 
 
 def _load_npz(path: Path) -> dict[str, np.ndarray]:

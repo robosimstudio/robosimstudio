@@ -54,6 +54,19 @@ def _rtx_panel(**kwargs) -> PanelRenderView:
         return _panel(world_model=True, **kwargs)
 
 
+class TestTheClickListener(unittest.TestCase):
+    """The server outlives every panel built on it, so a callback added per build must come off on close."""
+
+    def test_one_listener_however_often_it_is_built_and_none_after_close(self) -> None:
+        panel = _panel()
+        scene = panel.server.scene
+        panel.build(panel.server.gui)  # a page rebuilt over the same panel
+        self.assertEqual(scene.click_callbacks, [panel._on_click])
+        panel.close()
+        self.assertEqual(scene.click_callbacks, [], "a closed panel left on the click list is kept alive by it")
+        panel.close()  # idempotent
+
+
 class TestTheModeItResolvesTo(unittest.TestCase):
     def test_off_is_raster_whatever_is_installed(self) -> None:
         self.assertEqual(_panel(world_model=False).mode, "raster")

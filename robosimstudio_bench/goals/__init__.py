@@ -26,7 +26,8 @@ What is here:
 * :mod:`~robosimstudio_bench.goals.combinators` -- the closed set of nine
   ways to combine measures into a goal, and nothing else;
 * :mod:`~robosimstudio_bench.goals.reward` -- reward, which is separate
-  from the goal because in six of the nine shipped suites it always was;
+  from the goal because many tasks score progress on a quantity, not on a
+  share of satisfied predicates;
 * :mod:`~robosimstudio_bench.goals.context` -- the evaluator protocol and the
   per-step verdict it returns.
 

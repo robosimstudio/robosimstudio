@@ -7,7 +7,7 @@ needs a browser, a websocket or a human. These stubs stand in for viser's GUI an
 scene handles: a widget is a value, a disabled flag and callbacks a test may
 fire; a scene is a list of what was added to it.
 
-Promoted out of ``test_scenes.py``, where eight of them sat in the middle of two
+Promoted out of a physics test module, where eight of them sat in the middle of two
 and a half thousand lines of physics tests. Nothing about them is
 physics-specific and nothing about them needs a GPU -- which is exactly why they
 belong in the fixtures package: the studio tests that use them can then live
@@ -237,7 +237,24 @@ class _StubScene:
         return self._node(name, kwargs.get("visible", True))
 
     def on_click(self, *args, **kwargs):
-        return lambda fn: fn
+        def register(fn):
+            self.click_callbacks.append(fn)
+            return fn
+
+        return register
+
+    def remove_click_callback(self, callback="all"):
+        if callback == "all":
+            self.click_callbacks.clear()
+        else:
+            self.click_callbacks[:] = [fn for fn in self.click_callbacks if fn != callback]
+
+    @property
+    def click_callbacks(self) -> list:
+        """What ``on_click`` registered and ``remove_click_callback`` has not removed: viser keeps a list too."""
+        if "_clicks" not in self.__dict__:
+            self._clicks = []
+        return self._clicks
 
 
 class _StubSession:

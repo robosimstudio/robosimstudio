@@ -5,7 +5,7 @@ Everything here runs with SuperDex absent on purpose: the domain registers, the
 specs validate, the composer splits a host island out and records a recipe, and
 none of it may touch the wheel -- a base checkout composes and refuses legibly,
 which is half the extra's contract. The half that needs the engine lives in
-``test_superdex.py`` at the medium tier.
+``test_superdex_contact.py`` and ``test_superdex_teleport.py`` at the medium tier.
 
 The stub host solver in this file is the second half of the acceptance story
 the extension-surface test tells: a *foreign engine* backend -- not a Newton

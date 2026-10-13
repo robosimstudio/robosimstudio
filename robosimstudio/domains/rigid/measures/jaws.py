@@ -106,8 +106,9 @@ def _jaw_stall(snapshot, box: dict[str, Any]) -> dict[str, Any]:
     """Reads the work arm's finger coordinates against their commanded targets.
 
     Fails **closed** -- reporting not-gripped rather than raising -- when the
-    scene carries no commanded targets or the arm declares no finger
-    coordinates. That matches the contact predicates: a task may legitimately be
+    scene carries no commanded targets, the arm declares no finger
+    coordinates, or the hand is geared (no linear gap to compare with the
+    part's width; :meth:`GripperSpec.jaw_gap` refuses it too). That matches the contact predicates: a task may legitimately be
     scored in a scene with no gripper, and a measure that raised there would
     make an unrelated task uncompilable.
     """
@@ -121,12 +122,21 @@ def _jaw_stall(snapshot, box: dict[str, Any]) -> dict[str, Any]:
         return {"gripped": False, "gap": float("nan"), "lag": float("nan")}
 
     joint_q = context.state.joint_q.numpy()
-    measured = float(np.mean([joint_q[c] for c in arm.gripper_coords]))
-    commanded = float(np.mean([context.joint_target_q[c] for c in arm.gripper_coords]))
+    measured = [float(joint_q[c]) for c in arm.gripper_coords]
+    commanded = [float(context.joint_target_q[c]) for c in arm.gripper_coords]
 
-    gap = arm.jaw_gap(measured)
+    # Both as travel towards closed, so the lag is positive when the command
+    # is further shut than the fingers got -- whichever way the joints run. A
+    # raw ``measured - commanded`` is that only on a hand that closes towards
+    # zero; on a 2F-85 (open at 0, closing upward) it is negative on every stall.
+    lag = arm.closing_travel(commanded) - arm.closing_travel(measured)
+    try:
+        gap = arm.jaw_gap(measured)
+    except ValueError:
+        # A geared hand has no linear gap to compare with the part's width;
+        # fail closed, as with no fingers, rather than compare a wrong curve.
+        return {"gripped": False, "gap": float("nan"), "lag": float(lag)}
     width = _width_across(box)
-    lag = measured - commanded
     held = bool(lag > STALL_MARGIN and abs(gap - width) < GAP_BAND)
     return {"gripped": held, "gap": float(gap), "lag": float(lag)}
 
@@ -252,7 +262,7 @@ register_atom(
                 "why this is a *release* test and not a grasp test."
             ),
             gate=None,
-            bench="polish/strip set-down; tests/test_polish_scenes.py",
+            bench="polish/strip set-down",
             notes=(
                 "No gate: how far is far enough depends on the hands' spans and on how "
                 "close the task lets them hover, both of which are the task's to state."

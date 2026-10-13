@@ -43,6 +43,12 @@ from robosimstudio.specs import ActionSpec, CameraSpec, replace
 
 __all__ = ["Sim"]
 
+_NO_RTX = (
+    "[sim] the path tracer is not installed (install the rtx extra: from a checkout `uv sync --extra rtx`; "
+    "with pip see examples/05_studio/README.md); drawing the colliders"
+)
+"""Said once per ``Sim`` when a render falls back to the collider tracer."""
+
 
 class Sim(EnvBase):
     """A compiled scene, its controllers, its cameras and the loop over them.
@@ -107,7 +113,8 @@ class Sim(EnvBase):
         first observation."""
         self._warned_nonfinite = False
         """Whether :meth:`run` has already said the state diverged. Once per
-        ``Sim``: a loop calling ``run`` a hundred times should say it once."""
+        episode: a loop calling ``run`` a hundred times should say it once, and
+        :meth:`reset` clears it with the finite flags it reports."""
         self.settled_body_q = np.zeros((self.model.body_count, 7))
         self._parking: GravcompParking | None = None
         """The per-body gravity-compensation table, built on the first park."""
@@ -363,9 +370,7 @@ class Sim(EnvBase):
                 self._still_renderer.close()
             if backend == FALLBACK and not self._fallback_said:
                 self._fallback_said = True
-                print(
-                    "[sim] the path tracer is not installed (pip install 'robosimstudio[rtx]'); drawing the colliders"
-                )
+                print(_NO_RTX)
             self._still_renderer = self.make_renderer(backend, cameras=[spec], channels=list(channels))
             self._still_key = key
             if backend != FALLBACK:
@@ -517,9 +522,8 @@ class Sim(EnvBase):
         Refusing is right for a renderer somebody built by hand, and wrong here.
         This one is built from a *name*, on the way to constructing an
         environment, and there is no second chance to negotiate -- so it narrows,
-        the way ``scripts/render_offline.py`` narrows for the same reason, which is
-        what lets a run collected with segmentation be re-rendered by a path
-        tracer at all.
+        which is what lets a run collected with segmentation be re-rendered by a
+        path tracer at all.
 
         And it says what it dropped, out loud rather than under ``verbose``,
         because this changes what a policy sees: a channel that quietly stopped
@@ -576,9 +580,7 @@ class Sim(EnvBase):
             # rather than the build raising on a missing extra.
             if not self._fallback_said:
                 self._fallback_said = True
-                print(
-                    "[sim] the path tracer is not installed (pip install 'robosimstudio[rtx]'); drawing the colliders"
-                )
+                print(_NO_RTX)
             backend = FALLBACK
         kwargs = dict(self.renderer_kwargs)
         render = kwargs.pop("render", None)
@@ -697,6 +699,7 @@ class Sim(EnvBase):
         then calls this.
         """
         obs, info = super().reset()
+        self._warned_nonfinite = False  # the finite flags were just cleared too
         if self._start_joint_q is None and self.model.body_count:
             # After the base class has warmed up *and* re-posed, so this is the
             # articulation the first episode is actually about to be stepped
@@ -712,7 +715,9 @@ class Sim(EnvBase):
 
         Separate from :meth:`step`, which takes an *action*: a scene with no arm
         has nothing to command, and ``sim.step(180)`` reading 180 as an action
-        vector is the kind of mistake a shared name invites.
+        vector is the kind of mistake a shared name invites. The per-step
+        bookkeeping is the same as :meth:`step`'s -- the step count and
+        :attr:`post_step_hooks` -- so a hook a scene installs runs here too.
 
         **Says so once if the state stops being finite.** A diverged run looks
         exactly like a fast one -- it steps, it returns, and every number after it
@@ -724,8 +729,7 @@ class Sim(EnvBase):
         do. ``sim.state_is_finite()`` is the same answer as a boolean.
         """
         for _ in range(int(count)):
-            self.pipeline.step()
-            self.step_count += 1
+            self._step_once()
         if not self._warned_nonfinite and not self.state_is_finite():
             self._warned_nonfinite = True
             print(

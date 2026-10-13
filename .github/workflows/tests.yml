@@ -1,8 +1,8 @@
 name: tests
 
-# The fast tier: no GPU. It checks the import law, the public surface and
-# every example's shape. Scenes are built and stepped by the
-# medium tier, which needs an NVIDIA GPU and runs on a workstation:
+# The fast tier: no GPU. It checks the public surface, the bundled assets and
+# every example's shape. Scenes are built and stepped by the medium tier, which
+# needs an NVIDIA GPU and is run by hand on a GPU machine; no workflow runs it:
 #   uv run python scripts/testrun.py --tier medium
 
 on:
@@ -21,7 +21,8 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        python-version: ["3.10", "3.12"]
+        # pyroki's jaxls needs Python 3.12 syntax; see requires-python.
+        python-version: ["3.12"]
     steps:
       - uses: actions/checkout@v4
       - name: Install uv
