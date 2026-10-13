@@ -88,6 +88,12 @@ gap = [
 curobo = ["nvidia-curobo[cu12]"]
 dev = ["ruff==0.16.1"]
 
+[dependency-groups]
+# The clips the example READMEs show: scripts/record_examples.py films the
+# studio page in a headless Chromium. A group, not an extra: never part of the
+# package, never installed by a plain `uv sync`.
+media = ["playwright>=1.55", "pillow"]
+
 [project.urls]
 Repository = "https://github.com/robosimstudio/robosimstudio"
 Issues = "https://github.com/robosimstudio/robosimstudio/issues"
