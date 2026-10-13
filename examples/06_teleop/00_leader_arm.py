@@ -54,8 +54,8 @@ def main(argv=None) -> None:
     # Under the default the cube is on another engine that a hand pushes and cannot pinch.
     scene = rss.Scene(cell="bench_075", name="leader_arm", physics=rss.MUJOCO_500HZ)
     scene.add(rss.robot(YAM_FOLLOWER, arm=YAM_TELEOP_ARM, gripper=YAM_TELEOP_GRIP))
-    # Under the right hand, where a tool pointing down lifts it 150 mm. At (0.10, -0.25)
-    # the fourth joint is at its -90 degree limit 60 mm up, and a straight lift stops there.
+    # In front of the right arm, where a hand turned to point down lifts it 150 mm. At
+    # (0.10, -0.25) the fourth joint is at its -90 degree limit 60 mm up, and a lift stops there.
     scene.add(rss.box(name="cube", half=(0.025, 0.025, 0.025), at=(0.0, -0.20, 0.025)))
     sim = scene.build(control_mode="joint_position")
 
