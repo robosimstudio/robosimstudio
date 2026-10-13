@@ -4,6 +4,13 @@ Sheets: a pinch, fabrics, engines, and a cloth of your own. How a sheet is
 built, section by section: [`cloth.py`](cloth.py), the implementation
 `rss.sheet` builds.
 
+A gripper holds a sheet by friction alone, under one-way coupling with
+full-surface contact: `00_towel.py` lifts a towel by its edge, and
+`04_your_own_cloth.py` lifts a draped hem. On a flat sheet the fingertips must
+reach the bench, or the pads close over the edge rather than around it. Under
+one-way coupling the arm feels nothing from the cloth, so a shut hand closes
+right through it.
+
 ![A click on the cloth pins a patch to a handle. Lift it, carry it, let go.](media/pinch_towel.webp)
 *A click on the cloth pins a patch to a handle. Lift it, carry it, let go.*
 
