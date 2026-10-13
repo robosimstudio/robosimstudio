@@ -52,9 +52,12 @@ def _load(rel: str):
     The name is a function of the path, so a second load of the same file is a
     second module under the *same* name -- which is what a reader's ``python
     examples/...`` does too, and what the two registering examples promise to
-    survive.
+    survive. It is the name :func:`tests.fixtures.examples._load` gives the file
+    as well: a process that runs both (the grasp tests load the own-cloth example
+    there) then sees one class shipped twice, which the registry accepts, rather
+    than two classes under one entity name, which it refuses.
     """
-    name = "_rss_new_example_" + re.sub(r"\W", "_", rel.removesuffix(".py"))
+    name = "_rss_example_" + re.sub(r"\W", "_", rel.removesuffix(".py"))
     spec = importlib.util.spec_from_file_location(name, EXAMPLES / rel)
     module = importlib.util.module_from_spec(spec)
     sys.modules[name] = module
