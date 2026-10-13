@@ -98,6 +98,9 @@ class ShapeGeometry:
         mu: The shape's Coulomb friction coefficient.
         two_way: Whether contact against this mirror is harvested back onto the
             Newton body. Comes from the contact rule, not from the geometry.
+        hand: Whether a robot's hand carries this shape -- a pad or a finger,
+            from the robot's ``coupling_bodies``. An engine may give a hand's
+            colliders contact of their own (SuperDex's ``hand_friction_falloff``).
         source: ``model.shape_source[shape]`` for a mesh, else ``None``.
         world: Which world of a replicated model this shape is being mirrored
             for. 0 when nothing replicated it.
@@ -117,6 +120,7 @@ class ShapeGeometry:
     two_way: bool = False
     source: Any = None
     world: int = 0
+    hand: bool = False
 
     @property
     def moving(self) -> bool:
@@ -174,6 +178,7 @@ def read_shape_geometry(
     arrays: dict[str, np.ndarray] | None = None,
     body: int | None = None,
     two_way: bool = False,
+    hand: bool = False,
 ) -> ShapeGeometry | None:
     """One Newton shape, described. ``None`` for a kind nothing can mirror.
 
@@ -198,13 +203,14 @@ def read_shape_geometry(
         mu=float(arrays["mu"][index]),
         two_way=bool(two_way),
         source=model.shape_source[index] if kind == "mesh" else None,
+        hand=bool(hand),
     )
 
 
 def iter_mirrors(model: Any, records) -> list[ShapeGeometry]:
     """The host recipe's ``mirrors`` list, read off the model.
 
-    Records are ``{"shape": int, "body": int, "two_way": bool}`` — exactly what
+    Records are ``{"shape": int, "body": int, "two_way": bool, "hand": bool}`` — exactly what
     the manifest's host-island record carries, which is why this takes the raw
     dicts rather than a type the manifest would then have to know about.
     Anything unmirrorable is dropped, as a skip rather than an error: the
@@ -219,6 +225,7 @@ def iter_mirrors(model: Any, records) -> list[ShapeGeometry]:
             arrays=arrays,
             body=record.get("body"),
             two_way=bool(record.get("two_way", False)),
+            hand=bool(record.get("hand", False)),
         )
         if geom is not None:
             out.append(replace(geom, world=int(record.get("world", 0))))

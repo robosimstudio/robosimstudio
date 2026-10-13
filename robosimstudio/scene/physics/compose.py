@@ -325,7 +325,8 @@ def _host_recipe(
     whatever the entity declares through ``host_actor``), and
     one mirror record per Newton shape the island's contact rules reach --
     channel shapes with the channel's coupling, static and world-fixed shapes
-    as fixed boundary. Recorded verbatim into the manifest, which is how a
+    as fixed boundary, and each flagged ``hand`` when a robot's hand carries
+    it. Recorded verbatim into the manifest, which is how a
     repro bundle rebuilds the same foreign scene with the model and the
     manifest alone.
 
@@ -413,6 +414,14 @@ def _host_recipe(
     shape_flags = model.shape_flags.numpy() if model.shape_count else np.zeros(0, np.int32)
     mirrors: list[dict] = []
     seen: set[tuple[int, int]] = set()
+    # A robot's hand -- the bodies it offers deformables -- is told apart from the
+    # rest of the boundary, because the two want opposite friction: pads that
+    # hold a pinched sponge still, a bar that lets a pressed one slide. See
+    # ``hand_friction_falloff`` on the SuperDex backend. Every world's copy of a
+    # hand is a hand: the stride alone, as ``spread`` would add the shared plane.
+    hand_template = [node.hand_shapes for node in graph.nodes.values() if node.hand_shapes.size]
+    stride = int(worlds.shapes_per_world) if replicated else 0
+    hands = set(expand_indices(np.concatenate(hand_template), stride, world_count).tolist()) if hand_template else set()
 
     def add_mirror(shape: int, *, two_way: bool, world: int | None = None) -> None:
         if world is None:
@@ -442,6 +451,7 @@ def _host_recipe(
                 "body": int(shape_body[shape]),
                 "two_way": bool(two_way),
                 "world": int(world),
+                "hand": int(shape) in hands,
             }
         )
 

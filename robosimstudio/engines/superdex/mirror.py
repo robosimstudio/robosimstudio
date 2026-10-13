@@ -67,6 +67,8 @@ class MirrorActor:
         local: The shape's body-local transform ``[7]``, xyz + xyzw.
         two_way: Whether contact wrenches against this mirror are harvested
             back onto the Newton body.
+        hand: Whether a robot's hand carries it, so it took the hand's friction
+            falloff.
         world: Which world of a replicated model this collider belongs to.
 
             0 when nothing replicated it. Above that it decides *which scene*
@@ -83,6 +85,7 @@ class MirrorActor:
     local: np.ndarray
     two_way: bool = False
     world: int = 0
+    hand: bool = False
     prev: np.ndarray = field(default_factory=lambda: np.zeros(7))
 
     @property
@@ -99,6 +102,7 @@ def build_mirror_actors(
     layer: str = "mirror",
     contact_smoothing: float = 5.0e-4,
     friction_falloff: float = 1.0e-2,
+    hand_friction_falloff: float | None = None,
     contact_threshold: float | None = None,
     contact_padding: float = 0.0,
     exact_boxes: bool = True,
@@ -109,7 +113,8 @@ def build_mirror_actors(
         scenes: One engine scene, or a sequence of them indexed by world -- a
             record's ``world`` picks which it is built in.
         shapes: Mirror records -- ``{"shape": int, "body": int, "two_way":
-            bool}`` -- exactly what the manifest's host-island record carries.
+            bool, "hand": bool}`` -- exactly what the manifest's host-island
+            record carries.
         layer: Contact layer the mirrors live on.
         contact_smoothing: ``penalty_smoothing_half_distance`` [m] on every
             mirror. **The collider's value is the one that governs the pair**:
@@ -163,8 +168,13 @@ def build_mirror_actors(
             the first press. A stroke at 300 mm/s is at the Coulomb cap either
             way; what the value decides is which interface yields first. A
             task that wants a static pinch AND a pressed wipe needs the two
-            interfaces told apart, not one number for both.
-
+            interfaces told apart, not one number for both: that is
+            ``hand_friction_falloff``.
+        hand_friction_falloff: ``friction_falloff_vel`` [m/s] on the mirrors a
+            robot's hand carries (a record's ``hand``), or ``None`` for
+            ``friction_falloff`` on them too. It lets the pads take the
+            1 mm/s that held the pinch above while a bar or a bench keeps the
+            value the wipe was measured at.
         contact_threshold: ``penalty_threshold_default`` [m] on every mirror,
             or ``None`` for the engine's 1 mm. **The collider's threshold is the
             one that governs a pair**, and a mirror is always the collider, so
@@ -216,7 +226,9 @@ def build_mirror_actors(
         contact = physics.ContactParams(
             coulomb_friction_coefficient=geom.mu,
             penalty_smoothing_half_distance=float(contact_smoothing),
-            friction_falloff_vel=float(friction_falloff),
+            friction_falloff_vel=float(
+                hand_friction_falloff if geom.hand and hand_friction_falloff is not None else friction_falloff
+            ),
         )
         if contact_threshold is not None:
             contact.penalty_threshold_default = float(contact_threshold)
@@ -242,6 +254,7 @@ def build_mirror_actors(
                 local=local,
                 two_way=geom.two_way,
                 world=geom.world,
+                hand=geom.hand,
                 prev=placed.copy(),
             )
         )

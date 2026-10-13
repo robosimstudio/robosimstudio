@@ -1,5 +1,5 @@
 # SPDX-License-Identifier: Apache-2.0
-"""The SuperDex mirrors' contact padding: an option that pads every mirror, and nothing when unset.
+"""The SuperDex mirrors' contact options: a padding on every mirror, and a friction falloff on the hand's alone.
 
 A rod built without its tubular skin samples contact on its own axis, and the
 engine adds a collider's ``penalty_threshold_extra_padding`` to the stand-off
@@ -10,6 +10,13 @@ pads every mirror; ``examples/09_demos/01_route_the_cable.py`` pads by one radiu
 less the engine's own 1 mm, and the cable rests on its skin. That physical claim
 is :mod:`tests.test_demo_route_the_cable`'s; this module holds the option itself
 against a stand-in engine, so it runs with no GPU and no ``[superdex]`` wheel.
+
+``hand_friction_falloff`` is the other interface told apart. Friction on a
+mirror has no static part below its falloff speed, and one number served every
+mirror: at 10 mm/s a pinched 9 g sponge slid out of the pads in about a second,
+and at 1 mm/s on every mirror the bar held a pressed sponge harder than the pads
+did. The composer flags the shapes a robot's hand carries, and the option sets
+those mirrors alone.
 """
 
 from __future__ import annotations
@@ -96,7 +103,11 @@ class _Scene:
         return kwargs
 
 
-RECORDS = [{"shape": 0, "body": -1}, {"shape": 1, "body": -1}, {"shape": 2, "body": 3, "two_way": True}]
+RECORDS = [
+    {"shape": 0, "body": -1},
+    {"shape": 1, "body": -1},
+    {"shape": 2, "body": 3, "two_way": True, "hand": True},
+]
 
 
 def _build(**options):
@@ -166,6 +177,105 @@ class TestTheBackendOption(unittest.TestCase):
         self.assertEqual(0.0, inspect.signature(SuperdexBridge).parameters["mirror_padding"].default)
         source = inspect.getsource(SuperdexBridge.__init__)
         self.assertIn("contact_padding=self.mirror_padding", source)
+
+
+class TestTheHandsFrictionFalloff(unittest.TestCase):
+    """``hand_friction_falloff`` sets the falloff on the mirrors a hand carries, and on nothing else."""
+
+    @staticmethod
+    def _falloffs(**options) -> list[float]:
+        _, contacts = _build(**options)
+        return [contact.friction_falloff_vel for contact in contacts]
+
+    def test_unset_every_mirror_keeps_the_one_falloff(self):
+        self.assertEqual([0.01, 0.01, 0.01], self._falloffs())
+        self.assertEqual([0.02, 0.02, 0.02], self._falloffs(friction_falloff=0.02))
+
+    def test_set_it_reaches_the_hand_and_nothing_else(self):
+        self.assertEqual([0.01, 0.01, 0.001], self._falloffs(hand_friction_falloff=1.0e-3))
+        self.assertEqual([0.02, 0.02, 0.001], self._falloffs(friction_falloff=0.02, hand_friction_falloff=1.0e-3))
+
+    def test_the_mirror_says_which_it_is(self):
+        mirrors, _ = _build(hand_friction_falloff=1.0e-3)
+        self.assertEqual([False, False, True], [mirror.hand for mirror in mirrors])
+
+    def test_a_record_without_the_flag_is_no_hand(self):
+        """A manifest recorded before the flag existed rebuilds as it was built."""
+        from robosimstudio.engines.superdex.mirror import build_mirror_actors
+
+        scene = _Scene()
+        old = [{key: value for key, value in record.items() if key != "hand"} for record in RECORDS]
+        build_mirror_actors(_Engine, scene, _Model(), shapes=old, hand_friction_falloff=1.0e-3)
+        self.assertEqual([0.01] * 3, [actor["contact"].friction_falloff_vel for actor in scene.actors])
+
+    def test_the_solver_and_the_bridge_carry_it(self):
+        import robosimstudio.engines.superdex.bridge as bridge
+        from robosimstudio.engines.superdex.solver import SolverSuperdex
+
+        seen: dict = {}
+
+        class _Bridge:
+            def __init__(self, model, recipe, **kwargs):
+                seen.update(kwargs)
+
+        real = bridge.SuperdexBridge
+        bridge.SuperdexBridge = _Bridge
+        try:
+            SolverSuperdex.open(object.__new__(SolverSuperdex), None, {}, substeps=2, hand_friction_falloff=1.0e-3)
+            self.assertEqual(1.0e-3, seen["hand_friction_falloff"])
+            SolverSuperdex.open(object.__new__(SolverSuperdex), None, {}, substeps=2)
+            self.assertIsNone(seen["hand_friction_falloff"], "unstated, the hand takes the mirrors' falloff")
+        finally:
+            bridge.SuperdexBridge = real
+        self.assertIsNone(inspect.signature(bridge.SuperdexBridge).parameters["hand_friction_falloff"].default)
+        source = inspect.getsource(bridge.SuperdexBridge.__init__)
+        self.assertIn("hand_friction_falloff=self.hand_friction_falloff", source)
+
+
+class TestTheComposerFlagsTheHand(unittest.TestCase):
+    """The host recipe marks a mirror ``hand`` when a robot's hand carries its shape, and no other."""
+
+    @staticmethod
+    def _recipe(*, bodies, hand_shapes, channel_shapes, worlds=None):
+        """``bodies`` is each shape's body, ``-1`` world-fixed; ``hand_shapes`` the robot's, as the graph has them."""
+        from types import SimpleNamespace
+
+        import newton
+
+        from robosimstudio.scene.physics.compose import _host_recipe
+
+        model = SimpleNamespace(
+            shape_count=len(bodies),
+            shape_body=_Arr(bodies),
+            shape_flags=_Arr([int(newton.ShapeFlags.COLLIDE_SHAPES)] * len(bodies)),
+            tet_count=0,
+            tet_indices=_Arr(np.zeros(0, np.int32)),
+        )
+        robot = SimpleNamespace(hand_shapes=np.asarray(hand_shapes, np.int32))
+        sponge = SimpleNamespace(hand_shapes=np.zeros(0, np.int32))
+        graph = SimpleNamespace(nodes={"robot": robot, "sponge": sponge}, edges=[])
+        island = SimpleNamespace(name="soft", nodes=[], entities=("sponge",))
+        channel = SimpleNamespace(destination="soft", shapes=np.asarray(channel_shapes, np.int32), coupling="two_way")
+        arrangement = SimpleNamespace(gravity=-9.81, control_hz=60.0)
+        return _host_recipe(island, [channel], graph, model, arrangement, worlds)
+
+    def test_the_hands_shapes_are_flagged(self):
+        # The ground plane, then a wrist on body 3 and two fingers on 4 and 5.
+        recipe = self._recipe(bodies=[-1, 3, 4, 5], hand_shapes=[2, 3], channel_shapes=[1, 2, 3])
+        flags = {m["shape"]: m["hand"] for m in recipe["mirrors"]}
+        self.assertEqual({0: False, 1: False, 2: True, 3: True}, flags, "the plane and the wrist are no hand")
+
+    def test_each_worlds_copy_of_a_hand_is_a_hand(self):
+        """The graph names the template's shapes; a replicated model holds a copy of each per world."""
+        from types import SimpleNamespace
+
+        worlds = SimpleNamespace(num_worlds=2, shapes_per_world=2)
+        # Two worlds of a wrist and a finger, then the plane every world shares.
+        recipe = self._recipe(bodies=[3, 4, 8, 9, -1], hand_shapes=[1], channel_shapes=[0, 1, 2, 3], worlds=worlds)
+        flags = {(m["shape"], m["world"]): m["hand"] for m in recipe["mirrors"]}
+        self.assertEqual(
+            {(0, 0): False, (1, 0): True, (2, 1): False, (3, 1): True, (4, 0): False, (4, 1): False}, flags
+        )
 
 
 if __name__ == "__main__":
