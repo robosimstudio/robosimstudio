@@ -261,7 +261,7 @@ class TestThePanelExample(unittest.TestCase):
         studio.gui.find("Toss the cube").fire()  # what a click does: the callback only sets a flag
         for fn in studio.steps:
             fn()  # the main-thread hook writes the velocity
-        sim.run(6).sync()  # a tenth of a second at 1.5 m/s is about 100 mm up
+        sim.run(6).sync()  # 0.12 s at 50 Hz: 1.5 m/s up puts it 108 mm over where it lay
         for fn in studio.steps:
             fn()
         self.assertGreater(readout.value, 80.0, "the cube was not tossed")
