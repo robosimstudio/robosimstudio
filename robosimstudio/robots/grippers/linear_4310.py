@@ -6,7 +6,7 @@ actuated and both running the same sign -- *not* the mirrored prismatic
 convention, which is why this hand states its own open and closed coordinates
 despite having two joints.
 
-Every constant here is a fact about the gripper, measured (in ``newton_tasks``)
+Every constant here is a fact about the gripper, measured (in the reference sims)
 on the built model with probe bodies:
 
 * Blade-tip gap in metres is ``2.0 * cmd`` -- at the 0.0475 command the tips are
@@ -92,7 +92,7 @@ JAW_GAP_PER_CMD = 2.0
 Both fingers move, so a millimetre of command is two of opening."""
 JAW_GAP_OFFSET = 0.00536
 """Blade *centroid* gap exceeds the tip gap by this much [m]. Bookkeeping for the
-centroid-frame gap readings ``newton_tasks`` quotes; not a surface gap."""
+centroid-frame gap readings the reference sims quote; not a surface gap."""
 JAW_THICKNESS = 0.02992
 """One blade's AABB extent along its slide direction [m], from the trimmed 30 mm
 blade cut. Bookkeeping for the same readings."""
@@ -127,7 +127,7 @@ LINEAR_4310 = register_gripper(
         #
         # The cable-routing routine states this as prose: "the blade tips, 35 mm
         # below the TCP, swinging with the wrist, clipped the cable".
-        # scripts/measure_gripper.py reads 10.02 mm on both the cable-routing and
+        # A gripper-measurement script reads 10.02 mm on both the cable-routing and
         # the USB-C insertion scenes, which is the furthest pad corner past the TCP with the
         # wrist *still*. The routine's number is about a swept volume; the
         # measurement is about a pose.

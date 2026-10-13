@@ -36,6 +36,23 @@ class TestVideoIsSampledOnTheSimulationClock(unittest.TestCase):
         emitted = [self.recorder._video_frame_due(step / 60.0) for step in range(60)]
         self.assertEqual(sum(emitted), 30)
 
+    def _frames(self, hz: int, seconds: float = 10.0) -> int:
+        return sum(self.recorder._video_frame_due(step / hz) for step in range(int(hz * seconds)))
+
+    def test_a_controller_rate_not_a_multiple_of_fps_keeps_the_frame_rate(self) -> None:
+        """50 Hz into 30 fps: 300 frames in ten seconds, not 250 (a video 1.2x fast)."""
+        self.assertAlmostEqual(self._frames(50), 300, delta=1)
+
+    def test_40_hz_into_30_fps(self) -> None:
+        self.assertAlmostEqual(self._frames(40), 300, delta=1)
+
+    def test_a_long_gap_emits_one_frame_not_a_burst(self) -> None:
+        """Skipping many deadlines (``every`` > 1, a slow tool) yields one frame and resumes on the grid."""
+        self.assertTrue(self.recorder._video_frame_due(0.0))
+        self.assertTrue(self.recorder._video_frame_due(1.0))
+        self.assertFalse(self.recorder._video_frame_due(1.0 + 0.001))
+        self.assertTrue(self.recorder._video_frame_due(1.0 + 1.0 / 30.0))
+
     def test_wall_clock_pause_cannot_add_video_frames(self) -> None:
         """Asked twice at one simulation time -- a plan that took a while -- it answers once."""
         self.assertTrue(self.recorder._video_frame_due(1.0))

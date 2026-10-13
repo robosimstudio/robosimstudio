@@ -37,10 +37,8 @@ calibration" a rule the repository can state before it can satisfy it.
 **The calibration rule is stated with its debt attached.** Eleven of the sixteen
 shipped atoms carry a calibration block; five predate the gate. Those five are
 listed in :data:`UNCALIBRATED` with the reading each one is missing, the list may
-only shrink, and an entry that stops being needed must be deleted -- the same
-ratchet ``tests/test_layout.py`` already uses for oversized modules, and for the
-same reason: a rule you cannot satisfy yet is worth stating if the gap is a
-number that only goes down.
+only shrink, and an entry that stops being needed must be deleted: a rule you
+cannot satisfy yet is worth stating if the gap is a number that only goes down.
 """
 
 from __future__ import annotations
@@ -75,8 +73,8 @@ UNCALIBRATED: dict[str, str] = {
 """Atoms that predate the required-calibration rule, and what each is missing.
 
 A ratchet, not an exemption. Every entry is debt; the dict may only shrink; an
-entry whose atom has since grown a calibration must be deleted, which
-``tests/test_mint_gate.py`` enforces so the countdown keeps counting.
+entry whose atom has since grown a calibration must be deleted, so the countdown
+keeps counting.
 
 Note what the entries say. Four of the five are honest -- nothing thresholds
 them, so there is no gate to justify. ``containment`` is the interesting one: it

@@ -124,6 +124,8 @@ class ArmHandle:
         gripper_open_q: Per driven finger joint, the coordinate at full open.
             Empty means the mirrored prismatic convention.
         gripper_closed_q: The same at full closed.
+        gripper_geared: The hand's travel is not proportional to its pad gap
+            (:attr:`GripperSpec.geared`), so :meth:`jaw_gap` refuses it.
         finger_groups: Per side, ``(body, shapes)`` pairs for grasp tests. A
             robot whose fingertip is a separate body lists both.
         shapes: Every shape belonging to **this arm only** -- its links,
@@ -162,26 +164,70 @@ class ArmHandle:
     gripper_span: float = 0.08
     gripper_open_q: tuple[float, ...] = ()
     gripper_closed_q: tuple[float, ...] = ()
+    gripper_geared: bool = False
     home_q: tuple[float, ...] = ()
     finger_groups: tuple[tuple[tuple[int, np.ndarray], ...], ...] = ()
     open_axis_signs: tuple[float, ...] = (1.0, -1.0)
     shapes: np.ndarray = field(default_factory=lambda: np.zeros(0, dtype=np.int32))
     world: int = 0
 
-    def jaw_gap(self, joint_q: float) -> float:
-        """Pad separation at one finger coordinate [m].
+    def _finger_limits(self, count: int) -> tuple[np.ndarray, np.ndarray]:
+        """Per driven finger coordinate, its value at full open and at full closed."""
+        if self.gripper_open_q:
+            open_q = np.asarray(self.gripper_open_q, dtype=np.float64)
+        elif count == 2:
+            # The mirrored prismatic convention, as the Gripper drives it.
+            open_q = np.array([self.gripper_open, -self.gripper_open])
+        else:
+            open_q = np.full(count, float(self.gripper_open))
+        closed_q = (
+            np.asarray(self.gripper_closed_q, dtype=np.float64) if self.gripper_closed_q else np.zeros(len(open_q))
+        )
+        return open_q, closed_q
+
+    def closing_travel(self, finger_q) -> float:
+        """How far the driven fingers have closed from full open, mean over fingers.
+
+        In joint units, and positive towards closed **whichever way the joints
+        run**: a mirrored prismatic pair closes towards zero from ``+/-open``,
+        a Robotiq 2F-85's driver opens at zero and closes upward. Reading a raw
+        coordinate as "smaller is more closed" gets the second backwards.
+
+        Args:
+            finger_q: The coordinates at :attr:`gripper_coords`, in that order.
+        """
+        q = np.asarray(finger_q, dtype=np.float64).reshape(-1)
+        open_q, closed_q = self._finger_limits(len(q))
+        sign = np.where(closed_q >= open_q, 1.0, -1.0)
+        return float(np.mean((q - open_q) * sign))
+
+    def jaw_gap(self, finger_q) -> float:
+        """Pad separation at the driven fingers' coordinates [m].
 
         The same derivation :meth:`GripperSpec.jaw_gap` makes, from the numbers
         the compiler copied onto this handle -- so a measure that has a scene
-        does not have to go back to the registry for the spec that built it.
+        does not have to go back to the registry for the spec that built it --
+        with the travel read direction-aware (:meth:`closing_travel`).
+
+        Args:
+            finger_q: The coordinates at :attr:`gripper_coords`, in that order.
+
+        Raises:
+            ValueError: On a geared hand, as :meth:`GripperSpec.jaw_gap` does:
+                its pad separation is not linear in finger travel.
         """
         from robosimstudio.specs import jaw_gap_from
 
+        if self.gripper_geared:
+            raise ValueError(
+                f"arm {self.name!r} has a geared hand, so pad separation is not linear in finger travel. "
+                "A gap for this hand needs a measured curve, not this derivation."
+            )
         return jaw_gap_from(
             span=self.gripper_span,
             open_width=self.gripper_open,
             fingers=len(self.gripper_open_q) or len(self.gripper_coords) or 2,
-            joint_q=joint_q,
+            joint_q=self.gripper_open - self.closing_travel(finger_q),
         )
 
 

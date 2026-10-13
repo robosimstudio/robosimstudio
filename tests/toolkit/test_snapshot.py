@@ -28,7 +28,7 @@ from robosimstudio.core.probes.contact import ContactView
 from robosimstudio.scene.snapshot import FLAGGED_PENETRATION, summarise
 
 TIER = "fast"
-"""No GPU: numpy arrays and a dict. :mod:`tests.test_snapshot_scene` builds one."""
+"""No GPU: numpy arrays and a dict. A snapshot of a built scene is not tested here."""
 
 
 def _view(depths, geoms=None) -> ContactView:
@@ -111,6 +111,30 @@ class TestTheSummaryLine(unittest.TestCase):
     def test_something_still_moving_is_counted(self):
         self.assertIn("1 still moving", summarise(self._snap(worst=0.0, moving=0.4)))
         self.assertIn("0 still moving", summarise(self._snap(worst=0.0, moving=0.0001)))
+
+
+class TestTheSpeedsAreTheRightHalves(unittest.TestCase):
+    """Newton's ``body_qd`` is ``(linear, angular)``, linear first."""
+
+    def test_linear_is_the_first_three(self):
+        from types import SimpleNamespace
+
+        from robosimstudio.scene.snapshot import _objects
+
+        def arr(values):
+            return SimpleNamespace(numpy=lambda: np.asarray(values, dtype=float))
+
+        env = SimpleNamespace(
+            state=SimpleNamespace(
+                body_q=arr([[0.0, 0.0, 0.1, 0.0, 0.0, 0.0, 1.0]]),
+                # Sliding at 0.3 m/s, spinning at 5 rad/s.
+                body_qd=arr([[0.3, 0.0, 0.0, 0.0, 0.0, 5.0]]),
+            ),
+            handles=SimpleNamespace(objects={"cube": SimpleNamespace(body=0, static=False)}),
+        )
+        (row,) = _objects(env, SimpleNamespace(body_mass=arr([0.1])))
+        self.assertAlmostEqual(0.3, row["linear_speed"])
+        self.assertAlmostEqual(5.0, row["angular_speed"])
 
 
 class TestItIsJsonAble(unittest.TestCase):

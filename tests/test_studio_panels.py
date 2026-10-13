@@ -31,7 +31,7 @@ TIER = "medium"
 
 HAS_GAP = importlib.util.find_spec("gap") is not None
 
-DRIVE = ("inspector", "arm", "object", "cloth")
+DRIVE = ("inspector", "overlay", "arm", "object", "cloth")
 """What ``panels="drive"`` keeps: the things you take hold of, and what is behind
 the one you clicked. Not the scene list -- clicking is the way in -- and not
 ``Appearance``, which is built inline and gated the same way."""
@@ -168,19 +168,17 @@ class TestATaskPageKeepsItsDocument(unittest.TestCase):
         return session
 
     def test_the_goal_its_regions_and_the_runner_stay(self) -> None:
-        import inspect
-
-        import robosimstudio as rss
+        from robosimstudio.sim.draw import _VIEW_DEFAULTS
         from tests.fixtures.examples import _run
 
-        self.assertEqual("drive", inspect.signature(rss.view).parameters["panels"].default)
+        self.assertEqual("drive", _VIEW_DEFAULTS["panels"])
         env, _ = _run("07_tasks/00_your_first_task.py")
         session = self._view(env, 9220)
         try:
             keys = _keys(session)
             self.assertLessEqual({"goal", "regions", "solution"}, keys, "the document's panels")
             self.assertLessEqual(set(DRIVE) - {"cloth"}, keys, "and what drive keeps on any page")
-            for key in ("task", "scene", "video", "record", "camera", "overlay"):
+            for key in ("task", "scene", "video", "record", "camera"):
                 with self.subTest(dropped=key):
                     self.assertNotIn(key, keys)
             self.assertIn("containment", session.goal_panel._tree_text(), "the clause, beside the scene")

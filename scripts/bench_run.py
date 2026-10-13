@@ -107,8 +107,8 @@ def create_parser() -> argparse.ArgumentParser:
             "processes. --episodes then selects which episodes OF EACH (default 0:1, since a paper "
             "instance document declares one). Each world is scored on its own document's goal over "
             "its own objects and its row carries its own task, so the results are the same rows the "
-            "documents produce one at a time. Ignored by the serial runner, which has no wave to "
-            "share: pass them one at a time there"
+            "documents produce one at a time. Needs --num-worlds above 1: the serial runner has no "
+            "wave to share, so a job naming several documents with --num-worlds 1 is refused"
         ),
     )
     parser.add_argument(
@@ -147,8 +147,7 @@ def create_parser() -> argparse.ArgumentParser:
         default="",
         help=(
             "run the task on another registered robot; empty is its own. Same rule as --scene: "
-            "the pairing has to be declared. 'uv run python scripts/matrix.py' is what says which "
-            "ones build and step"
+            "the pairing has to be declared"
         ),
     )
     parser.add_argument(
@@ -271,7 +270,7 @@ def create_parser() -> argparse.ArgumentParser:
         help=(
             "serve a live grid of the wave in a browser. The worlds are superimposed in the "
             "simulation and spread out only at draw time, so watching costs the frames and "
-            "nothing else"
+            "nothing else. Served from this process, so it needs --workers 1"
         ),
     )
     group.add_argument("--view-port", type=int, default=8080, help="port for --view")
@@ -298,8 +297,8 @@ def create_parser() -> argparse.ArgumentParser:
             default="",
             help=(
                 "the checkpoint's published name (rt-1-x, octo-base, ...). Recorded as the run's "
-                "policy, so scripts/simpler_correlation.py can pair it against the published table -- "
-                "a run named anything else measures fine and correlates with nothing"
+                "policy, so the results can be paired against the published table -- a run named "
+                "anything else measures fine and correlates with nothing"
             ),
         )
         group.add_argument(
@@ -362,7 +361,8 @@ def create_parser() -> argparse.ArgumentParser:
         "--no-suite-tools",
         action="store_true",
         help=(
-            "withhold the *suite's own* sim.* tools while keeping the generic privileged set. "
+            "skip the suite's own tool registrar (TaskSpec.tools) entirely -- every tool it "
+            "registers, whatever its name or tags -- while keeping the generic privileged set. "
             "The generic set is the same catalogue on every task -- a pose, a bound, an OBB, a "
             "relation -- and withholding it is what '--no-privileged' is for. A suite's own tools "
             "are written for one task and routinely hand over its answer: where to pick and place, "
@@ -575,8 +575,7 @@ def check_graph_claims(jobs: list[JobSpec]) -> None:
     The hard check is :meth:`Env.__init__`'s, which refuses an undeclared
     ``(scene, embodiment)`` outright; this one refuses a *policy* on a declared
     pairing, and ``--allow-undeclared-graph`` is how a person says they are
-    exploring rather than measuring. Running ``scripts/matrix.py`` needs no such
-    escape: it builds and steps, and never claims to have run a policy.
+    exploring rather than measuring.
 
     A ``--graph`` that is a path rather than a shipped name is left alone: the
     binding cannot have an opinion about a directory it has never heard of.
@@ -741,6 +740,10 @@ def main() -> int:
         print("[run] not recording episodes (pass --record to keep them)")
 
     if args.workers > 1:
+        if args.view:
+            # The pool runs each job in a worker process with no page of its own;
+            # watching a wave is the in-process fleet runner's, under --workers 1.
+            raise SystemExit("[run] --view serves the wave from this process, so it needs --workers 1")
         summaries = list(
             run_pooled(
                 jobs,

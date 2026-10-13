@@ -38,8 +38,7 @@ Same name, different file stays normal and is not a violation --
 and ``tool_sort`` on purpose, because what "verify" means is the suite's own
 business -- which is exactly why the rule is *beside the graph first*. What a
 graph may not do is carry a byte-identical copy of a bundle's script under the
-bundle's name: that is drift waiting to happen, and ``tests/test_skills.py``
-refuses it.
+bundle's name: that is drift waiting to happen.
 
 **A bundle comes with its helpers.** A bundle's scripts import their siblings
 by directory (``sys.path.insert(0, dirname(abspath(__file__)))``, then ``import
@@ -94,7 +93,7 @@ COLLECTION_SHARED = Path("_shared") / "scripts"
 """Where a task root keeps the scripts more than one of its graphs run: ``<root>/_shared/scripts/``.
 
 ``_shared`` is the one name under a root that is not a task (``roots.is_task_dir``
-skips it) and the one directory a task may reach across (``tests/test_content_seam.py``),
+skips it) and the one directory a task may reach across,
 so a rule two suites of one collection share lives there, with the collection,
 and travels with it.
 """

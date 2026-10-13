@@ -14,8 +14,12 @@ proprioception and intrinsics, and
 anything else -- so a graph developed against ``sim.get_object_pose`` simply
 cannot run over the bridge until it has been rewritten to look.
 
-Every tool answers from the :class:`~robosimstudio.core.bus.SimSnapshot`
-the owner thread published, so a node calling one never blocks the simulation.
+Every tool reads the simulator on the owner thread: off the
+:class:`~robosimstudio.core.bus.SimSnapshot` it published where that carries
+the answer (poses, frames), which costs nothing, and otherwise through
+``bus.call``, so the read runs between steps rather than racing one from the
+graph thread. A tool that marshals waits for the owner's next pump; none of
+them reads live simulator state from the graph worker.
 
 No tool takes a parameter called ``name``: the registry dispatches through
 ``ToolRegistry.invoke(name, ctx, **kwargs)``, so a tool with its own ``name``
@@ -194,7 +198,7 @@ class SimTools:
         the default local *y* closes the jaws along the object rather than
         across it.
 
-        The ``(-90, 90]`` wrap is kept. Without it the last wrist joint runs into
+        The ``[-90, 90)`` wrap is kept. Without it the last wrist joint runs into
         its limit on grasps near a right angle, which is measured elsewhere in
         this package as 40.9 degrees of residual roll against a hard stop.
         """
@@ -465,7 +469,7 @@ class SimTools:
         name = cloth or next(iter(deformables))
         probe = deformables[name].probe
         key = f"{name}/{particle_set}" if particle_set else name
-        return {"cloth": name, "set": key, **probe.summary(key)}
+        return {"cloth": name, "set": key, **self.bus.call(probe.summary, key)}
 
     def get_rgbd(self, camera: str = "") -> dict[str, Any]:
         frames = self.bus.snapshot.frames
@@ -511,7 +515,7 @@ class SimTools:
                 excluded_bodies.add(int(handle.body))
 
         model = self.env.scene.index_model
-        body_q = np.asarray(self.env.state.body_q.numpy(), dtype=np.float64)
+        body_q = self._body_q()
         collide = int(newton.ShapeFlags.COLLIDE_SHAPES)
         labels = list(getattr(model, "shape_label", None) or ())
         meshes = []
@@ -774,10 +778,14 @@ class SimTools:
         from robosimstudio_bench.goals.query import QueryRefused
         from robosimstudio_bench.goals.query import query as _query
 
-        snapshot = Snapshot(ctx=self.env.make_context())
-        try:
+        def ask() -> dict[str, Any]:
+            snapshot = Snapshot(ctx=self.env.make_context())
             return _query(snapshot, atom, *refs, doc=self.env.doc)
-        except (QueryRefused, BindError, LookupError, KeyError, ValueError) as exc:
+
+        try:
+            # On the owner thread: the handlers read live state and probes.
+            return self.bus.call(ask)
+        except (QueryRefused, BindError, LookupError, ValueError) as exc:
             # **A refusal is an answer, and it is returned rather than raised.**
             # "This thing does not afford that question" is a legitimate and
             # common reply during authoring -- it is the catalog-gap signal the
@@ -796,21 +804,35 @@ class SimTools:
         """
         from robosimstudio.assetlib.semantics.atom import leaves_of
         from robosimstudio.assetlib.semantics.snapshot import Snapshot
+        from robosimstudio_bench.goals.bind import BindError
+        from robosimstudio_bench.goals.query import QueryRefused
         from robosimstudio_bench.goals.query import query as _query
 
-        snapshot = Snapshot(ctx=self.env.make_context())
-        doc = getattr(self.env.task, "doc", None)
-        out: dict[str, list[dict[str, Any]]] = {}
-        for family in ("SpatialRelation", "Relation", "Property"):
-            for leaf in leaves_of(family):
-                if len(leaf.args) != len(refs):
-                    continue
-                reading = _query(snapshot, family, *refs, doc=doc)["readings"]
-                if leaf.name in reading:
-                    out.setdefault(family, []).append(
-                        {"atom": leaf.name, "summary": leaf.summary, "returns": list(leaf.returns)}
-                    )
-        return {"families": out}
+        # ``env.doc``, where the document lives -- the same one :meth:`query`
+        # resolves against; ``env.task`` carries none.
+        doc = self.env.doc
+
+        def ask() -> dict[str, list[dict[str, Any]]]:
+            snapshot = Snapshot(ctx=self.env.make_context())
+            out: dict[str, list[dict[str, Any]]] = {}
+            for family in ("SpatialRelation", "Relation", "Property"):
+                readings = None
+                for leaf in leaves_of(family):
+                    if len(leaf.args) != len(refs):
+                        continue
+                    if readings is None:
+                        readings = _query(snapshot, family, *refs, doc=doc)["readings"]
+                    if leaf.name in readings:
+                        out.setdefault(family, []).append(
+                            {"atom": leaf.name, "summary": leaf.summary, "returns": list(leaf.returns)}
+                        )
+            return out
+
+        try:
+            return {"families": self.bus.call(ask)}
+        except (QueryRefused, BindError, LookupError, ValueError) as exc:
+            # Returned, not raised, for the reason :meth:`query` gives.
+            return {"refused": str(exc)}
 
     def clearance(self, group_a: str, group_b: str = "", joint_q: list[float] | None = None) -> dict[str, Any]:
         """How close two things are, now or at a configuration the arm is not in.
@@ -835,10 +857,12 @@ class SimTools:
         probe = self.env.clearance
         first = self._shape_group(group_a)
         second = self._shape_group(group_b) if group_b else self._complement(first)
+        # On the owner thread: the probe holds simulator state of its own, and
+        # the live body poses are read where they are written.
         if joint_q is not None:
-            gap = probe.at(list(joint_q), first, second)
+            gap = self.bus.call(probe.at, list(joint_q), first, second)
             return {"gap": float(gap), "at_configuration": True}
-        gap, shape_a, shape_b = probe.closest(first, second, self.env.state.body_q.numpy())
+        gap, shape_a, shape_b = self.bus.call(lambda: probe.closest(first, second, self.env.state.body_q.numpy()))
         return {"gap": float(gap), "shape_a": int(shape_a), "shape_b": int(shape_b), "at_configuration": False}
 
     def _shape_group(self, name: str) -> list[int]:

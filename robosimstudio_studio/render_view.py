@@ -145,6 +145,8 @@ class PanelRenderView(Panel):
         self._window = (time.time(), 0)
         self._cam_key: dict[int, tuple] = {}
         self._touched = 0.0
+        self._listening = False
+        """Whether :meth:`_on_click` is on the server's click list; :meth:`close` takes it off."""
         self._note = ""
         self.clean = False
         self.locked = ""
@@ -194,9 +196,14 @@ class PanelRenderView(Panel):
         # A click is the studio's own signal that somebody is working, and the
         # session's copy is consumed by its drain before this panel's runs -- so
         # this panel listens for itself. viser accumulates scene click callbacks
-        # rather than replacing them, so the session's picker is untouched.
+        # rather than replacing them, so the session's picker is untouched --
+        # and for the same reason it is added once and taken off in close():
+        # the server outlives this panel, and a callback left behind on every
+        # adopt would keep each old panel (and the scene it holds) alive.
         # Callback-safe: it assigns a float and nothing else.
-        self.server.scene.on_click()(self._on_click)
+        if not self._listening:
+            self.server.scene.on_click()(self._on_click)
+            self._listening = True
 
     def _on_click(self, event) -> None:
         """Somebody is working. Viser thread -- assign only."""
@@ -549,6 +556,9 @@ class PanelRenderView(Panel):
 
     def close(self) -> None:
         """Release the renderer and give the raster scene back. Main thread."""
+        if self._listening:
+            self.server.scene.remove_click_callback(self._on_click)
+            self._listening = False
         self._release()
         self._restore()
         super().close()

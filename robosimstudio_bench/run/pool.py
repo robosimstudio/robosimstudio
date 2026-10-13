@@ -50,13 +50,14 @@ import queue
 import time
 from collections.abc import Sequence
 from dataclasses import dataclass, replace
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any
 
 from robosimstudio.record import EpisodeStore, RunMeta
 from robosimstudio.specs import JobSpec
 
+from .jobs import job_task
 from .summary import RunSummary, wilson_interval
 
 __all__ = ["PoolResult", "run_pooled", "wilson_interval"]
@@ -157,7 +158,7 @@ def run_pooled(
     for _ in range(workers):
         work.put(None)
 
-    started = datetime.now(timezone.utc).isoformat()
+    started = datetime.now(UTC).isoformat()
     wall0 = time.perf_counter()
     procs = [
         ctx.Process(
@@ -297,7 +298,7 @@ def _write_pooled(result: PoolResult, *, started: str) -> None:
             renderer=result.job.renderer,
             device=",".join(sorted({str(row.get("device", "")) for row in result.rows} - {""})),
             started=started,
-            finished=datetime.now(timezone.utc).isoformat(),
+            finished=datetime.now(UTC).isoformat(),
             episodes=result.episodes,
             successes=result.successes,
             provenance={
@@ -406,6 +407,14 @@ def _env_key(job: JobSpec) -> tuple:
         job.solution,
         job.solution_kwargs,
         job.renderer,
+        # Both reach ``Env`` in ``_build``: a different control mode is a
+        # different action space, and reusing the env across it ran one job's
+        # actions through the other's.
+        job.obs_renderer,
+        job.control_mode,
+        # Applied to the documents the worker resolves (``job_task``), so a
+        # different seed is a different set of episodes from the same build.
+        job.seed,
         job.max_steps,
         job.device,
         job.record,
@@ -535,13 +544,12 @@ class _FleetWorker:
         self.fleet: Any = None
         self.policy: Any = None
         self.task: Any = None
+        self.job: Any = None
         self._docs: dict[str, Any] = {}
 
     def run(
         self, job: JobSpec, work: tuple[tuple[str, int], ...], root: Path, index: int, results, job_index: int
     ) -> int:
-        from robosimstudio_bench.taskbuild.registry import get_task
-
         from .fleet import RunnerFleet
 
         key = _env_key(job)
@@ -550,7 +558,11 @@ class _FleetWorker:
             self.close()
             self.runner = RunnerFleet(job, verbose=False, run_dir=_shard_root(root, job, index))
             self.fleet, self.policy = self.runner.open(job)
-            self.task = get_task(job.task) if isinstance(job.task, str) else job.task
+            self.task = job_task(job)
+            self.job = job
+            # Documents resolve with the job's seed applied, so a cache filled
+            # under the previous job's key does not carry over.
+            self._docs = {}
             self.key = key
             # The same keys a serial worker reports, so the parent's progress
             # line and the run's ``builds`` provenance read one way whichever
@@ -586,11 +598,9 @@ class _FleetWorker:
         """The document a unit names, or the job's own task when it names none."""
         if not name:
             return self.task
-        from robosimstudio_bench.taskbuild.registry import get_task
-
         cached = self._docs.get(name)
         if cached is None:
-            cached = get_task(name)
+            cached = job_task(self.job, name)
             self._docs[name] = cached
         return cached
 
@@ -634,7 +644,7 @@ def _build(job: JobSpec, root: Path, index: int):
     # ``control_mode`` is passed for the same reason the others were dropped:
     # the job carries it and this is where it belongs.
     env = Env(
-        job.task,
+        job_task(job),
         scene=job.scene,
         embodiment=job.embodiment,
         gripper=job.gripper,

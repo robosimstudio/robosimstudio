@@ -48,8 +48,8 @@ drained while a policy holds the arm, and neither is the episode panel, whose
 
 **Export is deferred; the live view is opt-in.** Capturing is copying ``body_q``
 and ``particle_q`` into a ring buffer -- microseconds -- and the render happens
-when you press Export, through the same replay ``scripts/render_offline.py`` does.
-No solver runs, so the video is the trajectory you watched, photographed
+when you press Export, as an offline replay of that buffer
+(:class:`~robosimstudio.core.render.offline.OfflineRenderer`). No solver runs, so the video is the trajectory you watched, photographed
 differently. That is the right default because a *deliverable* is better looked
 at afterwards, larger, and through a better backend.
 
@@ -173,7 +173,7 @@ handful of control steps at 1x and is the whole result.
 
 PANEL_SETS: dict[str, tuple[str, ...]] = {
     "all": (),
-    "drive": ("inspector", "arm", "object", "cloth"),
+    "drive": ("inspector", "overlay", "arm", "object", "cloth"),
 }
 """Named panel selections for :attr:`StudioConfig.panels`. Empty means no filter.
 
@@ -183,7 +183,9 @@ studio that is about producing something -- cameras, video, takes, material
 presets, regions, the event log, a leader arm -- which is exactly the half an
 example has no use for and the reason ``examples/`` was reported as showing too
 much. The scene list goes with them: clicking a thing is the way in, and a
-dropdown over every subject in the scene is a second one nobody asked for.
+dropdown over every subject in the scene is a second one nobody asked for. The
+overlay stays with the inspector: it has no folder of its own, and it is what
+the inspector's ``Draw`` checkboxes draw with.
 
 Two things are not panels and are handled either side of this. Transport --
 Pause, Speed, Reset -- is built inline by :meth:`StudioSession.build_gui` and
@@ -253,8 +255,12 @@ class StudioConfig:
             and only *runs* while something reads it, so leaving this on costs
             build time rather than step rate.
         obs_render_every: Control steps between observation renders.
-        port: viser port.
-        share: Request a public viser share URL.
+        port: viser port; the next one up is taken when it is busy. The page
+            listens on every interface (``0.0.0.0``), not only ``localhost`` --
+            Newton's viewer has no host option -- so anyone who can reach the
+            port can drive the scene: firewall it on a shared network, or reach
+            it over an SSH tunnel (``ssh -L 8080:localhost:8080 <box>``).
+        share: Request a public viser share URL as well. Off by default.
         out: Where run directories, videos and traces go.
         render_every: How often to refresh the browser, as one frame per this
             many control steps *at the task's control rate*. It is a frame rate,
@@ -469,7 +475,11 @@ class StudioConfig:
     keeps the phase names and discards their samples.
     """
     profile_out: str = ""
-    """Where the JSON sidecar lands; empty puts it under ``out/profile``."""
+    """Where the JSON sidecar lands; empty puts it under ``out/profile``.
+
+    All three are read by :meth:`StudioSession.run`, as the defaults for its
+    own ``steps`` and ``warmup``; the sidecar is written only when
+    :attr:`profile` armed something."""
 
 
 class Refused(ValueError):
@@ -593,6 +603,9 @@ class StudioSession:
         """The page's Pause checkbox, once :meth:`build_gui` has made it; :meth:`set_paused` keeps it truthful."""
         self.reset_requested = False
         self.quit_requested = False
+        self._captured_step: int | None = None
+        """Step the video and the take last captured; a step taken by a script while
+        the page holds is captured on the next pass. See :meth:`_capture_outside_steps`."""
         self.load_request: tuple[str | TaskSpec, int, str, str, str, int] | None = None
         self.num_worlds = max(1, int(self.config.num_worlds))
         """Worlds the page is showing. Changing it and reloading swaps the page
@@ -897,8 +910,8 @@ class StudioSession:
             self.task_panel, self.goal_panel, self.driver = self._bench("a task page's panels").document_panels(self)
         # A take is a take on whatever the page is showing. A bare scene has
         # the synthetic episode the compiler gave it, which is all the recorder
-        # needs; its take is a valid run directory that ``render_offline``
-        # cannot rebuild (no registry id), and ``run_meta.json`` says so.
+        # needs; its take is a valid run directory that cannot be rebuilt from
+        # a registry id (it has none), and ``run_meta.json`` says so.
         self.record = PanelRecord(self, spec=config.record)
         self.video = PanelVideo(
             self,
@@ -1208,6 +1221,7 @@ class StudioSession:
             speed = gui.add_dropdown("Speed", options=tuple(SPEEDS), initial_value=initial)
             speed.on_update(lambda _: setattr(self, "speed", SPEEDS[str(speed.value)]))
             reset = gui.add_button("Reset")
+            # The one reset path: the loop services it through reset_now().
             reset.on_click(lambda _: setattr(self, "reset_requested", True))
             quit_ = gui.add_button("Stop server")
             quit_.on_click(lambda _: setattr(self, "quit_requested", True))
@@ -1240,16 +1254,82 @@ class StudioSession:
                 "- **Camera gizmo** draws each camera where it stands, showing its own view. Click "
                 "one to fly there; **Set from view** then points it wherever you have flown.\n"
                 "- **Run** hands the arm to one of the task's policies until it finishes.\n"
-                "- **Start take** keeps what you drive as an episode, in a run directory "
-                "`scripts/render_offline.py` and `scripts/export_lerobot.py` read.\n"
+                "- **Start take** keeps what you drive as an episode: one numbered folder per take "
+                "(`steps.npz`, `meta.json`, `cameras/*.mp4`) beside `episode_results.jsonl` and "
+                f"`run_meta.json`, under `{self.config.out}/<scene>/<time>/demos/`.\n"
                 "- **Export video** renders the captured state offline, and never re-simulates.\n"
             )
+
+    def reset_now(self) -> bool:
+        """Put the scene back to its start. Main thread; True when it reset.
+
+        Where every Reset lands -- the Simulation folder's button, the episode
+        panel, and anything a subclass adds -- by way of :attr:`reset_requested`,
+        which is all a viser callback may do. A subclass with its own idea of
+        what a reset ends (a script playing, a take being filmed) overrides this
+        rather than adding a second button that does something different.
+        """
+        try:
+            # An episode whose model key differs recompiles the scene in here,
+            # so this is the second place a menu can ask for something that
+            # will not build.
+            obs, info = self.reset_env()
+        except Exception as exc:
+            # Unlike a task load, this cannot be made atomic: a rebuild that
+            # fails half way leaves the environment in a state this page did
+            # not build and cannot repair. So say so and stop stepping it,
+            # rather than run a scene nobody can vouch for -- through
+            # set_paused, so the checkbox says what the loop does.
+            self.set_paused(True)
+            self.status = f"episode {self.episode_id} did not load ({type(exc).__name__}: {exc}) -- paused"
+            self._show_status()
+            print(f"[studio] episode {self.episode_id} did not load; paused:")
+            traceback.print_exc()
+            return False
+        self.obs = obs
+        self.on_reset(obs, info)
+        self.status = "reset"
+        return True
+
+    def steps_held(self) -> bool:
+        """Whether something other than this loop is stepping the scene right now.
+
+        While it is, the loop treats the page as paused whatever the checkbox
+        says -- stepping beside it would take two steps per pass -- but still
+        films what it steps (:meth:`_capture_outside_steps`). Nothing does on a
+        plain page; ``robosimstudio_real2sim_agent`` says so while a routine plays.
+        """
+        return False
+
+    def _show_status(self) -> None:
+        """Put :attr:`status` on the page now, rather than at the next rate readout."""
+        readout = getattr(self, "_status_readout", None)
+        if readout is not None and readout.value != self.status:
+            readout.value = self.status
+
+    def _capture_outside_steps(self) -> None:
+        """Film the steps something else took while the page held. Main thread.
+
+        A script playing on a held page steps the scene itself, so the loop's
+        own capture -- which follows the loop's own step -- would leave a take
+        or a video with nothing in it. One capture per pass in which the step
+        count moved, of the state as it now stands.
+        """
+        step = int(self.env.step_count)
+        if step == self._captured_step:
+            return
+        self._captured_step = step
+        if self.video is not None:
+            self.video.capture()
+        if self.record is not None:
+            self.record.capture(None, "")
 
     def on_reset(self, obs: dict[str, Any], info: dict[str, Any]) -> None:
         # A reset moves the scene without advancing the step count -- it puts it
         # back to 0 -- so the "has it stepped far enough" test would hold the
         # viewer on the previous episode's picture.
         self._drawn_step = None
+        self._captured_step = int(self.env.step_count)
         for panel in self.panels:
             panel.on_reset(obs, info)
 
@@ -1594,7 +1674,13 @@ class StudioSession:
             warmup: Steps to run before the profiler's samples start counting.
                 Discarded with :meth:`Profiler.reset`, which keeps the phase
                 names and drops what they measured.
+
+        Zero for either reads :attr:`StudioConfig.profile_steps` and
+        :attr:`StudioConfig.profile_warmup`; a profiled run ends by printing
+        the phase table and writing it to :attr:`StudioConfig.profile_out`.
         """
+        steps = int(steps or self.config.profile_steps)
+        warmup = int(warmup or self.config.profile_warmup)
         self.begin_run()
         stepped = 0
         self.profile.start()
@@ -1626,7 +1712,21 @@ class StudioSession:
             if self.profile.device is not None:
                 self.profile.device.drain()
             self.profile.stop()
+            self._write_profile()
             self.close()
+
+    def _write_profile(self) -> None:
+        """Print the phase table and write its JSON sidecar, when anything was measured."""
+        prof = self.profile
+        if not prof.enabled:
+            return
+        path = Path(self.config.profile_out) if self.config.profile_out else None
+        if path is None:
+            path = self.root / "profile" / f"{time.strftime('%Y%m%d-%H%M%S')}.json"
+        path.parent.mkdir(parents=True, exist_ok=True)
+        prof.write(str(path))
+        print(prof.report())
+        print(f"[studio] profile written to {path}")
 
     def tick(self) -> bool:
         """One iteration of the loop. True when the scene actually stepped.
@@ -1667,25 +1767,8 @@ class StudioSession:
 
             if self.reset_requested:
                 self.reset_requested = False
-                try:
-                    # An episode whose model key differs recompiles the
-                    # scene in here, so this is the second place a menu can
-                    # ask for something that will not build.
-                    obs, info = self.reset_env()
-                except Exception as exc:
-                    # Unlike a task load, this cannot be made atomic: a
-                    # rebuild that fails half way leaves the environment in
-                    # a state this page did not build and cannot repair. So
-                    # say so and stop stepping it, rather than run a scene
-                    # nobody can vouch for.
-                    self.paused = True
-                    self.status = f"episode {self.episode_id} did not load ({type(exc).__name__}: {exc}) -- paused"
-                    print(f"[studio] episode {self.episode_id} did not load; paused:")
-                    traceback.print_exc()
+                if not self.reset_now():
                     return False
-                self.obs = obs
-                self.on_reset(obs, info)
-                self.status = "reset"
 
             if self.scenery_request:
                 self.scenery_request = False
@@ -1710,7 +1793,7 @@ class StudioSession:
                 self.release_all_requested = False
                 self.release_all()
 
-            if self.paused:
+            if self.paused or self.steps_held():
                 # The interaction panels are drained while paused: lining a
                 # grasp up on a held scene is exactly when you want to, and
                 # aiming costs an IK solve rather than a step. The others
@@ -1733,6 +1816,11 @@ class StudioSession:
                             (PanelArm, PanelObject, PanelCloth, PanelRegions, PanelScene, PanelInspector, PanelOverlay),
                         ):
                             panel.drain()
+                # Set here too: a script stepping a held page renders the rig
+                # for a take the same as the loop's own step would.
+                self.env.obs_render_enabled = self.wants_pixels
+                self._capture_outside_steps()
+                self._show_status()
                 self.refresh_view()
                 time.sleep(0.02)
                 self._next_frame = time.perf_counter()
@@ -1781,6 +1869,7 @@ class StudioSession:
             with prof.phase("iter.record"):
                 if self.record is not None:
                     self.record.capture(action, mode)
+            self._captured_step = int(self.env.step_count)
             self._rate_frames += 1
             prof.mark_step()
 

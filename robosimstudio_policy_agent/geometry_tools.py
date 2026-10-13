@@ -180,7 +180,7 @@ class GeometryTools:
         n = max(1, int(count))
         poses = []
         for k in range(n):
-            # top_down_grasp_quat wraps into (-90, 90] on the way, which is the
+            # top_down_grasp_quat wraps into [-90, 90) on the way, which is the
             # same symmetry the fan is built on and keeps the last wrist joint
             # off its limit; composing here rather than writing the product out
             # keeps one yaw convention in the package.

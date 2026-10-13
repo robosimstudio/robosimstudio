@@ -30,7 +30,7 @@ still gets coherent ``:objects``, ``:init`` and ``:goal``; nothing we add change
 the meaning of anything standard. What they add is what BDDL genuinely lacks:
 graded comparisons over measures (a garment is never entirely inside a bin),
 temporal modals (turns *retained after release*), a reward clause separate from
-the goal (six of nine shipped evaluators do not score on a satisfied share),
+the goal (a depth over its gate is not a share of satisfied predicates),
 staging (which cell, which robot -- LIBERO supplies these by harness convention),
 and dotted references into an object's own features.
 """

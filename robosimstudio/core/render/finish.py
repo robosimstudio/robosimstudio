@@ -59,9 +59,8 @@ Vec3 = tuple[float, float, float]
 COLOR_TOLERANCE = 2.0e-3
 """How close a painted colour has to be to a keyed one to take its finish.
 
-The same tolerance ``tests/test_palette.py`` uses to recognise a palette entry
-written out by hand: a colour that round-trips through ``float32`` on the
-builder is still that colour.
+Loose enough to recognise a palette entry written out by hand: a colour that
+round-trips through ``float32`` on the builder is still that colour.
 """
 
 

@@ -244,6 +244,8 @@ class ArrangementSpec:
     overrides: tuple[tuple[str, Any], ...] = ()
 
     def __post_init__(self) -> None:
+        if isinstance(self.substeps, bool) or int(self.substeps) != self.substeps or self.substeps <= 0:
+            raise ValueError(f"substeps must be a positive whole number, got {self.substeps!r}")
         if self.substeps % 2:
             raise ValueError(f"substeps must be even so the state swap comes out even, got {self.substeps}")
         if not self.control_hz > 0.0:

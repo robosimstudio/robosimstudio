@@ -32,6 +32,7 @@ import unittest
 
 import numpy as np
 
+from robosimstudio.core.bus import BusTimeout
 from robosimstudio_policy_agent.fleet.barrier import Barrier, ParkTable, Rendezvous
 
 TIER = "fast"
@@ -236,18 +237,40 @@ class TestTheBarrierStepsWithAPollerRunning(unittest.TestCase):
         _in_thread(script)
         self.assertTrue(script_in.wait(SETTLE))
 
-        def poller() -> None:
-            for _ in range(3):
-                with parks.parked(0):
-                    rendezvous.post(0, "render", None, SETTLE)
+        frames: list[object] = []
+        ended: list[BusTimeout] = []
 
-        _in_thread(poller)
+        def poller() -> None:
+            # A poller outlives the barrier that answered it: whatever it asks
+            # after quiesce returns is released when the fleet closes the
+            # rendezvous, with a BusTimeout, which is how a wave ends its helpers.
+            try:
+                for _ in range(3):
+                    with parks.parked(0):
+                        frames.append(rendezvous.post(0, "render", None, SETTLE))
+            except BusTimeout as exc:
+                ended.append(exc)
+
+        polling = _in_thread(poller)
+        for _ in range(int(SETTLE / 0.01)):
+            if rendezvous.pending():
+                break
+            threading.Event().wait(0.01)
+        self.assertTrue(rendezvous.pending(), "the poller is waiting on the rendezvous")
 
         # Before the fix this never returned: the poller's first answer cleared
         # the script's park and the loop waited out its watchdog instead.
         barrier.quiesce()
 
         self.assertTrue(parks.all_parked(np.array([True])), "quiesce returns with the world parked")
+        self.assertGreaterEqual(barrier.answered, 1, "the barrier answered the poller on the way")
+
+        rendezvous.close()
+        polling.join(SETTLE)
+        self.assertFalse(polling.is_alive(), "closing the rendezvous releases the poller")
+        self.assertTrue(frames, "the poller got the frame the barrier answered")
+        if ended:
+            self.assertIn("closed", str(ended[0]), "the poller was released by the close, not left to time out")
         release.set()
 
 

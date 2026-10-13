@@ -17,7 +17,9 @@ kinematics URDF's parity measurements — is the `embodiments/panda/` section of
   (robosuite 1.4.0, MuJoCo 3.3.3) compiles that robot into one merged MJCF with
   its arena, and the dump of that scene is what these files were cut from. Not
   re-authored: the bodies, joints, inertias, limits and names are robosuite's,
-  `robot0_` and `gripper0_` prefixes included.
+  `robot0_` and `gripper0_` prefixes included. Neither the export nor the
+  development scripts that dumped and cut it are included in this repository:
+  the checked-in files are the source of truth.
 * **The mesh geometry originates from Franka's `franka_ros` robot description**
   (`franka_description`, Apache-2.0), which is what robosuite's Panda meshes
   were made from.
@@ -31,6 +33,7 @@ kinematics URDF's parity measurements — is the `embodiments/panda/` section of
 | `assets/` | The 61 meshes those two files name, and nothing else: eleven STL collision meshes and fifty OBJ visual meshes, 39.9 MB. |
 | `LICENSE` | robosuite's MIT licence, which the two MJCFs and the meshes arrive under. |
 | `panda_kinematics.urdf` | **A different source**: `example-robot-data`'s `panda_description` (itself Franka's `franka_description`, Apache-2.0), stripped to joints, links, limits and inertials. Never simulated, only solved against. See `assets/PROVENANCE.md`. |
+| `LICENSE.example-robot-data` | example-robot-data's BSD 3-Clause licence, which `panda_kinematics.urdf` arrives under. |
 
 Both MJCFs say `meshdir="."` and name every mesh as `assets/<file>`, so they
 resolve against this directory as they stand.
@@ -64,9 +67,8 @@ colours come from the MJCFs' own `<material>` elements.
 
 ## The copy the benchmark's collection keeps
 
-The same two MJCFs and the same meshes also sit in the benchmark's collection,
-beside the arena exports they were cut from, and that collection's own scenes
-read them there. The files here are byte copies of those. The collection's
-tool-sort split script regenerates `panda_standalone.xml` there; after running
-it, copy the result here — `tests/test_panda_vendored.py` fails while the two
-differ.
+The same two MJCFs and the same meshes also sit in the benchmark's collection
+(not included in this repository), beside the arena exports they were cut from.
+The files here are byte copies of those; where that collection is present in
+the checkout (as `vabar/`), `tests/test_panda_vendored.py` fails while the two
+differ, and skips that comparison otherwise.

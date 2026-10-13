@@ -21,6 +21,11 @@ class SolverSuperdex(SolverHost):
         threads: Worker threads for the engine's one-per-process initialize.
         feedback: ``"auto"`` or ``"off"`` -- contact-wrench harvest for
             two-way mirrors.
+        feedback_alpha: EMA coefficient for a *rising* harvested force; 1.0
+            disables the ramp. See
+            :class:`~robosimstudio.engines.feedback.WrenchAccumulator`.
+        feedback_dv_max: The most velocity [m/s] one control step's harvested
+            wrench may add to a body; scales the whole wrench, torque with it.
         pose_source: ``"fresh"`` reads this step's poses off the state (zero
             coupling lag, one extra small device read); ``"snapshot"`` reads
             the free batched host copy, one control period stale.
@@ -84,8 +89,6 @@ class SolverSuperdex(SolverHost):
         """
         from .bridge import SuperdexBridge
 
-        self.shell_young = float(shell_young)
-        self.shell_poisson = float(shell_poisson)
         return SuperdexBridge(
             model,
             {

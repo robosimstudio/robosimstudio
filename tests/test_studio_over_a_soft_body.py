@@ -12,9 +12,6 @@ friends, and there is nothing for it to bind.
 that the page it feeds must then be *half* built -- and the half that survives is
 the one that matters most on such a scene, because a foreign engine's backend
 parameters are reached through ``Physics``.
-
-Companion to :mod:`tests.test_studio_over_a_bare_scene`, which makes the same
-kind of claim one layer out: the page holds up over scenes it was not shaped for.
 """
 
 from __future__ import annotations

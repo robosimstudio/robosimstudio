@@ -982,7 +982,7 @@ class SuperdexBridge:
     # ------------------------------------------------------------------ wiring
     @property
     def _wrench_ema(self) -> np.ndarray:
-        """The feedback filter's state. Read by ``tests/test_superdex.py``."""
+        """The feedback filter's state, exposed for inspection in tests."""
         return self._acc.ema
 
     def attach_pipeline(self, pipeline: Any) -> None:

@@ -39,7 +39,11 @@ from robosimstudio.robots.teleop.lerobot_controller import (
 def main(argv=None) -> None:
     parser = argparse.ArgumentParser(description="Drive the simulated YAM from a real leader arm, read only.")
     parser.add_argument("--leader", default="", help="<arm>:<port>[,...], e.g. right:/dev/ch340-<serial>")
-    parser.add_argument("--calibration", default="scripts/calibration/yam_leader.json", help="keyed by adapter serial")
+    parser.add_argument(
+        "--calibration",
+        default="scripts/calibration/local/yam_leader.json",
+        help="keyed by adapter serial; the default is where scripts/calibrate_leader_arms.py writes",
+    )
     parser.add_argument("--simulate", action="store_true", help="no arm: a scripted hand over a table of registers")
     parser.add_argument("--port", type=int, default=8080, help="the page's port")
     parser.add_argument("--share", action="store_true", help="also request a public URL for the page")

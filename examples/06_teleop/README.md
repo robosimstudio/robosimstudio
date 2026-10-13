@@ -72,9 +72,9 @@ Source: [`01_force_feedback.py`](01_force_feedback.py)
 | --- | --- |
 | Leader arm | A YAM leader on Feetech STS3215 bus servos: six joints and a trigger per arm. A bimanual leader is two arms on two buses. |
 | Adapter | One USB-serial adapter per arm (WCH CH340/CH341, USB id `1a86:55d3`). |
-| Extra | `pip install "robosimstudio[lerobot-feetech]"`. The Feetech bus driver comes from `lerobot`. |
+| Extra | `lerobot-feetech`: every hardware command below runs with `uv run --extra lerobot-feetech`. The Feetech bus driver comes from `lerobot`. |
 | udev rule | `scripts/udev/99-ch340-serial.rules`, so each adapter has a fixed device path. |
-| Calibration | A JSON file per leader, written by `scripts/calibrate_leader_arms.py`. `scripts/calibration/yam_leader.json` is a sample for two arms that are not yours. |
+| Calibration | A JSON file keyed by adapter serial, written by `scripts/calibrate_leader_arms.py` to `scripts/calibration/local/yam_leader.json` (git-ignored), which is where the scripts here read it by default. `scripts/calibration/yam_leader.json` is a sample for two arms that are not yours. |
 
 The simulated arm is the shipped `yam_bimanual` with servo gains for
 teleoperation, `YAM_TELEOP_ARM` and `YAM_TELEOP_GRIP` in
@@ -101,9 +101,9 @@ keep the right numbers. Label each arm's controller with its serial.
 ## Calibrate
 
 ```bash
-uv run python scripts/calibrate_leader_arms.py \
+uv run --extra lerobot-feetech python scripts/calibrate_leader_arms.py \
     --leader left:/dev/ch340-<left-serial>,right:/dev/ch340-<right-serial> \
-    --out scripts/calibration/yam_leader.json
+    --out scripts/calibration/local/yam_leader.json
 ```
 
 The whole workflow is in the browser page the tool opens, on port 8081. A
@@ -144,7 +144,7 @@ servo-id order; ids `1..N` are assigned in that order when a bus opens.
 ## Check the signs
 
 ```bash
-uv run python scripts/check_leader_signs.py --leader right:/dev/ch340-<serial>
+uv run --extra lerobot-feetech python scripts/check_leader_signs.py --leader right:/dev/ch340-<serial>
 ```
 
 Read-only. Move one joint at a time and watch its signed `delta`. A joint whose
@@ -154,7 +154,7 @@ flip that one entry in the file.
 ## Drive the simulation from the leader
 
 ```bash
-uv run examples/06_teleop/00_leader_arm.py --leader right:/dev/ch340-<serial>
+uv run --extra lerobot-feetech examples/06_teleop/00_leader_arm.py --leader right:/dev/ch340-<serial>
 ```
 
 Every control step the script reads the leader, converts ticks to joint angles
@@ -172,7 +172,7 @@ from robosimstudio_studio import StudioConfig
 
 rss.view(sim, panels="all", config=StudioConfig(
     leader_arm_ports=(("right", "/dev/ch340-<serial>"),),
-    leader_arm_calibration="scripts/calibration/yam_leader.json"))
+    leader_arm_calibration="scripts/calibration/local/yam_leader.json"))
 ```
 
 Without hardware, `--simulate` runs a scripted hand over a table of registers:
@@ -186,8 +186,8 @@ above. It exercises the loop and shows nothing about feel.
 > through the [rig checklist](#rig-checklist) below before you rely on it.
 
 ```bash
-uv run examples/06_teleop/01_force_feedback.py --leader right:/dev/ch340-<serial> --no-feedback
-uv run examples/06_teleop/01_force_feedback.py --leader right:/dev/ch340-<serial>
+uv run --extra lerobot-feetech examples/06_teleop/01_force_feedback.py --leader right:/dev/ch340-<serial> --no-feedback
+uv run --extra lerobot-feetech examples/06_teleop/01_force_feedback.py --leader right:/dev/ch340-<serial>
 ```
 
 The [force-feedback clip](#force-feedback) above is the `--simulate` run: the
@@ -288,7 +288,9 @@ real servo and how it feels. That is what this checklist is for.
 
 ### Before you start
 
-- The extra is installed: `pip install "robosimstudio[lerobot-feetech]"`.
+- The extra is installed: `uv sync --extra lerobot-feetech` in a checkout (the
+  commands below pass `--extra lerobot-feetech` too), or
+  `pip install "robosimstudio[lerobot-feetech] @ git+https://github.com/robosimstudio/robosimstudio"`.
 - The udev rule is installed; see [The udev rule](#the-udev-rule) above.
 - The leader arm is powered, its power switch is within reach, and nothing
   stands in its sweep.
@@ -311,7 +313,7 @@ enough; a second arm is a second `<arm>:<port>` pair in `--leader`.
 
 | | |
 | --- | --- |
-| Run | `uv run python scripts/calibrate_leader_arms.py --leader right:/dev/ch340-<serial> --out scripts/calibration/yam_leader.json` and open `http://localhost:8081`. |
+| Run | `uv run --extra lerobot-feetech python scripts/calibrate_leader_arms.py --leader right:/dev/ch340-<serial> --out scripts/calibration/local/yam_leader.json` and open `http://localhost:8081`. |
 | Observe | After **Start**, the status line says the arm is connected with torque off, and the arm hangs loose. A green ghost stands at each target; the arm mesh follows the leader as you move it. |
 | Pass | Every joint fits with a residual under 40 ticks (no warning in the results list). The gripper's two captures differ by several hundred ticks. The file holds an entry under your serial with six joints and a gripper. |
 | Fail | The mesh moves the wrong way during a sweep: press **Invert direction** before capturing. A residual over 40: **Redo last joint**. A servo does not answer: the tool exits with the bus error; check the daisy chain and power. |
@@ -320,7 +322,7 @@ enough; a second arm is a second `<arm>:<port>` pair in `--leader`.
 
 | | |
 | --- | --- |
-| Run | `uv run python scripts/check_leader_signs.py --leader right:/dev/ch340-<serial>` |
+| Run | `uv run --extra lerobot-feetech python scripts/check_leader_signs.py --leader right:/dev/ch340-<serial>` |
 | Observe | One line per motor with `raw`, `angle` and a signed `delta`; `<-- moving` marks the joint you are moving. |
 | Pass | Each joint's `delta` changes only when that joint moves, and the gripper's `cmd` runs 0 at open to 1 at closed. |
 | Fail | The gripper runs 1 to 0: its `open_ticks` and `closed_ticks` are swapped in the file. Two lines move for one joint: the servo ids do not match the joint order. |
@@ -329,7 +331,7 @@ enough; a second arm is a second `<arm>:<port>` pair in `--leader`.
 
 | | |
 | --- | --- |
-| Run | `uv run examples/06_teleop/00_leader_arm.py --leader right:/dev/ch340-<serial>` and open the page. |
+| Run | `uv run --extra lerobot-feetech examples/06_teleop/00_leader_arm.py --leader right:/dev/ch340-<serial>` and open the page. |
 | Observe | The simulated right arm snaps to the leader's pose on the first step and then follows it. Its gizmo is hidden. The left arm keeps its gizmo. |
 | Pass | Each of the six joints moves the same way as the leader's, with no visible lag at a normal hand speed. The jaw closes when you squeeze the trigger and opens when you release it. The arm stays loose in your hand throughout. |
 | Fail | A joint mirrored: flip its `sign`. The whole arm offset by a constant angle on some joints: `calibrate_leader_arms.py --zero-only`. A joint that jumps a whole turn: re-zero that arm. |
@@ -338,7 +340,7 @@ enough; a second arm is a second `<arm>:<port>` pair in `--leader`.
 
 | | |
 | --- | --- |
-| Run | `uv run examples/06_teleop/01_force_feedback.py --leader right:/dev/ch340-<serial> --no-feedback` |
+| Run | `uv run --extra lerobot-feetech examples/06_teleop/01_force_feedback.py --leader right:/dev/ch340-<serial> --no-feedback` |
 | Observe | The console prints `right: leader on /dev/ch340-<serial> ..., torque off, gains untouched (no feedback)` and `Driving right without feedback: no motor will be energized.` The page's **Force feedback** folder shows `reading only (no motor is energized)`. |
 | Pass | The arm drives the simulation as in step 4, stays loose, and no servo warms or hums. Swing the right hand into the panel: the simulated arm stops at it and your hand feels nothing. |
 | Fail | `refusing to arm against nonzero torque limits`: power-cycle the arm and rerun. A traceback instead of one sentence: report it. |
@@ -347,7 +349,7 @@ enough; a second arm is a second `<arm>:<port>` pair in `--leader`.
 
 | | |
 | --- | --- |
-| Run | `uv run examples/06_teleop/01_force_feedback.py --leader right:/dev/ch340-<serial>` |
+| Run | `uv run --extra lerobot-feetech examples/06_teleop/01_force_feedback.py --leader right:/dev/ch340-<serial>` |
 | Observe | `Force feedback armed on right at 100 Hz. Torque stays off in free space (deadband=0.04+0.045*speed capped 0.16, ...)`. The status says `waiting for alignment`, then, once you have held the arm still for half a second, `[right] alignment held; contact feedback is live again.` and `free`. |
 | Pass | Move slowly, then briskly, through empty space, and work the trigger on air. The status stays `free`, no servo energizes, and the arm feels exactly as loose as it did in step 5. |
 | Fail | The status flickers to `pushing back` during free motion, or a joint stiffens briefly: lag is being read as contact. Note the joint and the speed, then take step 10. |
@@ -383,7 +385,7 @@ enough; a second arm is a second `<arm>:<port>` pair in `--leader`.
 
 | | |
 | --- | --- |
-| Run | `uv run examples/06_teleop/01_force_feedback.py --leader right:/dev/ch340-<serial> --trace outputs/ff.json`, repeat steps 6 and 7, exit, then `uv run python scripts/analyze_leader_trace.py outputs/ff.json`. |
+| Run | `uv run --extra lerobot-feetech examples/06_teleop/01_force_feedback.py --leader right:/dev/ch340-<serial> --trace outputs/ff.json`, repeat steps 6 and 7, exit, then `uv run python scripts/analyze_leader_trace.py outputs/ff.json`. |
 | Observe | Per arm: the loop period percentiles against the 10 ms target, where an armed tick's time went, the torque transitions per second, and which slot carried the worst mismatch. Then the page's publish gap. |
 | Pass | Few ticks over 1.5 times the target period; transitions reported `calm` outside contact; `follower sample age` p95 within a few page steps; `events` lists no `glitch`. |
 | Fail | `CHATTER`: a mismatch sitting at the deadband. `suspend` events with the page open: the scene steps too slowly for the stale limit. A loop period p99 many times the target: the leader thread is starved; close other work on the machine. |

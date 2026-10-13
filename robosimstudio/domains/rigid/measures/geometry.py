@@ -320,7 +320,7 @@ register_atom(
                 "this atom exists to stop being mistaken for a position."
             ),
             gate=None,
-            bench="tests/test_agent_surface.py, TestTheAgentCanAskWhereAFeatureIs",
+            bench="asked of a built scene: where a named feature is, read back off the live pose",
             notes="A reading, never a verdict: there is no threshold to sit anywhere, and it is observe-only.",
         ),
     )

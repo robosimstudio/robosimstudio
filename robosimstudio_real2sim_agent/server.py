@@ -13,7 +13,11 @@ One process, one page, one file. The file is executed on every save
 (:mod:`.scenefile` is the contract), the scene it binds is built, and the
 result is swapped into the open page: the browser never reloads and the
 camera stays where it was left. A file that does not build leaves the previous
-scene up, with the traceback in the page's ``Live`` folder and in ``status``.
+scene up, with the traceback in the page's ``Live`` folder and in ``status``;
+one that builds and then fails to go into the page (the old scene is already
+given back by then) leaves a bare scene up instead, with the same report. The
+modules the file imports from its own directory are imported afresh on every
+rebuild, so an edit to a helper beside it lands with the next save.
 Saves are noticed by polling the file's stamp once per loop pass and waiting
 for it to hold still for :data:`STABLE_SECONDS`, because editors write in two
 steps and the compile step catches whatever slips through.
@@ -24,11 +28,25 @@ because a command has to land *between* iterations: ``adopt`` rebuilds the
 panels, and a panel rebuilt inside its own drain would return into a loop over
 handles that no longer exist. So every command arrives on the socket's
 thread, is put on the bus, and runs on the main thread between two passes.
+An exception out of a pass -- a panel's drain, a rebuild -- is reported in the
+``Live`` folder and in ``status`` and the loop goes on; only ``quit`` stops it.
+
+While a routine plays it steps the scene itself, so the studio's own stepping
+is held for as long as it plays (``LiveSession.steps_held``), whatever the
+Pause checkbox says; ``run N`` is refused while it plays, and a rebuild or a
+reset under a ``run N`` ends that run with a reply saying so.
+
+The page is served on every interface (viser binds ``0.0.0.0``), not only on
+``localhost``: anyone who can reach the port can drive it. On a shared network
+firewall the port, or reach it over an SSH tunnel (``ssh -L 8080:localhost:8080
+<box>``). :attr:`LiveServer.url` names the port viser actually took, which is
+the next one up when the one asked for is busy.
 """
 
 from __future__ import annotations
 
 import gc
+import importlib
 import inspect
 import io
 import json
@@ -82,13 +100,16 @@ class LiveServer:
         self.config = config
         self.watch_enabled = watch
         self.url = f"http://localhost:{config.port}"
+        """The page, on the port viser actually bound -- rewritten once the server is up."""
         self.share_url: str | None = None
         # As long as the client's longest wait (ctl.TIMEOUTS).
         self.bus = SimBus(timeout=600.0)
         self.socket = ControlSocket(self.sock_path, self._on_request)
         self.session: LiveSession | None = None
         self.ns: dict = {}
-        self.eval_ns: dict = {}
+        """The scene file's names. ``eval`` runs in this same namespace, so what it binds the routines see."""
+        self.generation = 0
+        """Rebuilds that have gone into the page; ``run N`` ends when it changes under it."""
         self.scene: Any = None
         self.sim: Any = None
         self.last_error = ""
@@ -100,7 +121,9 @@ class LiveServer:
         """Generators an ``eval`` returned, advanced one ``next()`` per loop pass."""
         self.recorder: checks.Recorder | None = None
         """Records the script playing, when ``eval --record`` asked for it; finished when the queue empties."""
-        self._resume_after_script = False
+        self._baseline_modules: set[str] = set()
+        """What was imported before the scene file first ran; never evicted on a rebuild."""
+        self._tick_error = ""
         self.ref_image: np.ndarray | None = None
         self.ref_label = ""
         self.board: dict[str, np.ndarray] = {}
@@ -121,25 +144,77 @@ class LiveServer:
     # ------------------------------------------------------------ the file
     def load(self) -> Loaded:
         """Execute the scene file and build what it declares. Raises on any failure."""
+        self.evict_helpers()
         return run_scene_file(self.path)
 
-    def swap(self, loaded: Loaded) -> None:
+    def evict_helpers(self) -> list[str]:
+        """Forget the modules the scene file imported from its own directory, so they are read again.
+
+        Only modules imported since the server started (anything already
+        loaded then -- the library, even when the file sits at the repository
+        root -- is never touched), and only those whose file is under the scene
+        file's directory: a helper beside ``scene.py``, or a package of them.
+        """
+        root = self.path.parent
+        gone = []
+        for name, module in list(sys.modules.items()):
+            if name in self._baseline_modules or name.partition(".")[0] in self._baseline_modules:
+                continue
+            file = getattr(module, "__file__", None)
+            if not file:
+                continue
+            try:
+                Path(file).resolve().relative_to(root)
+            except ValueError:
+                continue
+            del sys.modules[name]
+            gone.append(name)
+        if gone:
+            importlib.invalidate_caches()
+        return gone
+
+    def swap(self, loaded: Loaded) -> bool:
+        """Put a built scene into the page. False when it would not go in; a bare scene stands in then."""
         old = self.sim
         # before adopt() closes the old sim: a take's last frame is read off it
         self._finish_recorder("the scene was rebuilt")
-        # the file's names first: adopt() rebuilds the page, and its buttons are the routines the file binds
-        self.ns, self.scene, self.sim = loaded.ns, loaded.scene, loaded.sim
-        self.session.adopt(loaded.sim, label="live")
-        self.session.begin_run()
-        self.eval_ns = dict(loaded.ns)
-        self.last_error = ""
-        self.loaded_at = time.time()
-        self.load_seconds = loaded.seconds
         self.script.clear()
         self.run_budget = 0
+        try:
+            self._adopt(loaded)
+            ok = True
+        except Exception as exc:
+            # adopt() gave the old scene back before it failed, so there is no
+            # previous scene to keep: serve a bare one, and say why.
+            error = traceback.format_exc()[-3000:]
+            print(
+                f"[live] {self.path.name} built but would not go into the page:\n{error}", file=sys.stderr, flush=True
+            )
+            try:
+                scene = fallback_scene()
+                self._adopt(Loaded(ns={}, scene=scene, sim=scene.build(control_mode="joint_position"), seconds=0.0))
+            except Exception:
+                error += (
+                    "\n\nand the bare scene that should have replaced it failed too:\n" + traceback.format_exc()[-2000:]
+                )
+                print(f"[live] the bare scene failed too:\n{error}", file=sys.stderr, flush=True)
+            self.last_error = error
+            self.session.status = f"rebuild failed going into the page: {type(exc).__name__}: {exc}"
+            ok = False
         del old
         gc.collect()
         self.refresh_live(force=True)
+        return ok
+
+    def _adopt(self, loaded: Loaded) -> None:
+        # the file's names first: adopt() rebuilds the page, and its buttons are the routines the file binds
+        self.ns, self.scene, self.sim = loaded.ns, loaded.scene, loaded.sim
+        self.generation += 1
+        self.session.adopt(loaded.sim, label="live")
+        self.session.begin_run()
+        self.last_error = ""
+        self.loaded_at = time.time()
+        self.load_seconds = loaded.seconds
 
     def reload(self, why: str = "requested") -> dict:
         """Rebuild from the file; the page is touched only when the build succeeded."""
@@ -156,7 +231,8 @@ class LiveServer:
             )
             self.refresh_live(force=True)
             return {"ok": False, "error": self.last_error}
-        self.swap(loaded)
+        if not self.swap(loaded):
+            return {"ok": False, "error": self.last_error}
         self.session.status = f"loaded {self.path.name} in {loaded.seconds:.1f} s"
         names = loaded.sim.names()
         print(
@@ -179,16 +255,31 @@ class LiveServer:
 
     # ------------------------------------------------------------ the loop
     def tick_once(self) -> None:
-        self.bus.pump(budget=8)
-        self._take_clicks()
-        if self.watch_enabled:
-            self.watch()
-        if self.script:
-            self._play()
-        if self.session.tick() and self.run_budget > 0:
-            self.run_budget -= 1
-            if self.run_budget == 0:
-                self.session.set_paused(True)
+        try:
+            self.bus.pump(budget=8)
+            self._take_clicks()
+            if self.watch_enabled:
+                self.watch()
+            if self.script:
+                self._play()
+            if self.session.tick() and self.run_budget > 0:
+                self.run_budget -= 1
+                if self.run_budget == 0:
+                    self.session.set_paused(True)
+            self._tick_error = ""
+        except Exception as exc:
+            # A panel's drain or a rebuild that raised: the page stays up and
+            # says so. Printed once per distinct failure, since the same one
+            # may come round every pass; and the pass that failed is not paced,
+            # so give the loop a breath rather than spin on it.
+            error = traceback.format_exc()[-3000:]
+            if error != self._tick_error:
+                self._tick_error = error
+                self.last_error = error
+                self.session.status = f"the loop failed: {type(exc).__name__}: {exc}"
+                print(f"[live] the loop failed; still serving:\n{error}", file=sys.stderr, flush=True)
+                self.refresh_live(force=True)
+            time.sleep(0.05)
         if time.perf_counter() - self._refreshed >= REFRESH_SECONDS:
             self.refresh_live()
 
@@ -198,9 +289,7 @@ class LiveServer:
                 what, name = self.clicks.get_nowait()
             except queue.Empty:
                 return
-            if what == "reset":
-                self.cmd_reset()
-            elif what == "play":
+            if what == "play":
                 reply = self.cmd_play(name)
                 if not reply.get("ok"):
                     self.last_error = str(reply.get("error", ""))
@@ -217,9 +306,12 @@ class LiveServer:
         return names
 
     def start_script(self, gen, *, record: str = "", every: int = 4, camera: str = "") -> None:
-        """Queue a generator to play one step per loop pass, filming it when asked."""
-        if not self.script:
-            self._resume_after_script = not self.session.paused
+        """Queue a generator to play one step per loop pass, filming it when asked.
+
+        The page's own stepping is held while anything is queued
+        (``LiveSession.steps_held``) and the Pause checkbox is left as it was,
+        so when the queue empties the page carries on as it was before.
+        """
         if record:
             self._finish_recorder("another recording started")
             recorder = checks.Recorder(self, record, camera=camera, every=every)
@@ -230,12 +322,17 @@ class LiveServer:
                 raise
             self.recorder = recorder
         self.script.append(gen)
-        self.session.set_paused(True)
         self.run_budget = 0
+
+    def stop_scripts(self, why: str) -> None:
+        """Drop every queued script and finish the take filming them. Main thread."""
+        self.script.clear()
+        self.run_budget = 0
+        self._finish_recorder(why)
 
     def _play(self) -> None:
         """One step of the script at the head of the queue. It steps the sim itself;
-        the page stays paused so the studio's own teleop step does not double it."""
+        the studio's own stepping is held meanwhile, so nothing doubles it."""
         gen = self.script[0]
         try:
             next(gen)
@@ -251,8 +348,6 @@ class LiveServer:
             print(f"[live] script failed:\n{self.last_error}", file=sys.stderr, flush=True)
         if not self.script:
             self._finish_recorder("the script ended")
-            if self._resume_after_script:
-                self.session.set_paused(False)
 
     def _hold_take_against_clip(self, take: str) -> None:
         """Every take is judged: held against the clip's timeline with the last comparison's keys.
@@ -324,9 +419,34 @@ class LiveServer:
             pass
 
     def serve(self) -> None:
+        """Open the page, take the socket, print the ready line and run the loop until ``quit``."""
+        self.open_page()
+        for sig in (signal.SIGINT, signal.SIGTERM):
+            signal.signal(sig, lambda *_: setattr(self.session, "quit_requested", True))
+        try:
+            # Inside the try, so a socket that cannot be had -- another live
+            # server on it -- closes the page and exits before the ready line.
+            self.socket.start()
+            if self.config.share:
+                # Newton's viewer asked for the tunnel at construction; asking again
+                # returns the same URL once it is up, without blocking.
+                self.share_url = self.session.server.request_share_url(verbose=False) or None
+            share = self.share_url or ("unavailable" if self.config.share else None)
+            print(ready_line(self.url, self.sock_path, self.path, share), flush=True)
+            while self.session.viewer.is_running() and not self.session.quit_requested:
+                self.tick_once()
+        finally:
+            self.socket.close()
+            self.bus.close()
+            self.session.close()
+            print("[live] stopped", flush=True)
+
+    def open_page(self) -> None:
+        """Build the file (a bare scene if it does not build) and open the page over it. No socket, no loop."""
         # The scene file's own directory, so what it imports by name beside
         # itself resolves -- and so `eval` can import it back the same way.
         sys.path.insert(0, str(self.path.parent))
+        self._baseline_modules = set(sys.modules)
         # Stamped before the build, not after: a save made while the first
         # build runs is a change the watcher must still see.
         self._loaded_stamp = stamp(self.path)
@@ -348,29 +468,14 @@ class LiveServer:
             )
         self.ns, self.scene, self.sim = loaded.ns, loaded.scene, loaded.sim
         self.session = LiveSession(loaded.sim, config=self.config, host=self)
-        self.eval_ns = dict(loaded.ns)
+        # viser takes the next port up when the one asked for is busy
+        self.url = f"http://localhost:{self.session.server.get_port()}"
+        self.generation += 1
         self.last_error = error
         self.loaded_at = time.time()
         self.load_seconds = loaded.seconds
         self.session.begin_run()
         self.refresh_live(force=True)
-        for sig in (signal.SIGINT, signal.SIGTERM):
-            signal.signal(sig, lambda *_: setattr(self.session, "quit_requested", True))
-        self.socket.start()
-        if self.config.share:
-            # Newton's viewer asked for the tunnel at construction; asking again
-            # returns the same URL once it is up, without blocking.
-            self.share_url = self.session.server.request_share_url(verbose=False) or None
-        share = self.share_url or ("unavailable" if self.config.share else None)
-        print(ready_line(self.url, self.sock_path, self.path, share), flush=True)
-        try:
-            while self.session.viewer.is_running() and not self.session.quit_requested:
-                self.tick_once()
-        finally:
-            self.socket.close()
-            self.bus.close()
-            self.session.close()
-            print("[live] stopped", flush=True)
 
     # ------------------------------------------------------------ the socket
     def _on_request(self, request: dict) -> dict:
@@ -422,6 +527,7 @@ class LiveServer:
             "time": round(float(sim.time), 3),
             "paused": bool(self.session.paused),
             "playing": len(self.script),
+            "generation": self.generation,
             "finite": bool(sim.state_is_finite()),
             "routines": self.routine_names(),
             "board": list(self.board),
@@ -434,9 +540,19 @@ class LiveServer:
         return self.reload("requested")
 
     def cmd_run(self, steps: int = 1) -> dict:
+        if self.script:
+            return {
+                "ok": False,
+                "error": "a routine is playing and steps the scene itself; wait for it to end, or `reset` to stop it",
+            }
         self.run_budget = max(1, int(steps))
         self.session.set_paused(False)
-        return {"ok": True, "step": int(self.sim.step_count), "budget": self.run_budget}
+        return {
+            "ok": True,
+            "step": int(self.sim.step_count),
+            "budget": self.run_budget,
+            "generation": self.generation,
+        }
 
     def cmd_pause(self) -> dict:
         self.run_budget = 0
@@ -446,11 +562,14 @@ class LiveServer:
     def cmd_resume(self) -> dict:
         self.run_budget = -1
         self.session.set_paused(False)
-        return {"ok": True, "paused": False}
+        reply: dict = {"ok": True, "paused": False}
+        if self.script:
+            reply["note"] = "a routine is playing; the page runs on its own once it ends"
+        return reply
 
     def cmd_reset(self) -> dict:
-        self.script.clear()
-        self._finish_recorder("reset")
+        # The page's two Reset buttons land in the same place: the loop's
+        # reset_now(), which LiveSession extends to stop the scripts and the take.
         self.session.reset_requested = True
         return {"ok": True}
 
@@ -461,16 +580,19 @@ class LiveServer:
     def cmd_eval(self, code: str = "", record: str = "", every: int = 4, camera: str = "") -> dict:
         import robosimstudio as rss
 
-        ns = self.eval_ns
-        ns.update(
-            sim=self.sim,
-            scene=self.scene,
-            session=self.session,
-            server=self.session.server,
-            np=np,
-            rss=rss,
-            live=self,
-        )
+        # The scene file's own namespace, not a copy: a name eval binds is one
+        # the file's routines read, so a later `play` sees it. The next save
+        # starts the namespace over. The page's names never shadow the file's.
+        ns = self.ns
+        ns.update(sim=self.sim, scene=self.scene)
+        for name, value in (
+            ("session", self.session),
+            ("server", self.session.server),
+            ("np", np),
+            ("rss", rss),
+            ("live", self),
+        ):
+            ns.setdefault(name, value)
         out = io.StringIO()
         value = None
         with redirect_stdout(out):

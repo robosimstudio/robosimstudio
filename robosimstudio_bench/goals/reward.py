@@ -2,36 +2,33 @@
 """Reward, which is not the goal.
 
 The tempting design says reward is the share of goal predicates satisfied, and
-that a goal tree therefore scores an episode by itself. It is wrong, and the
-evidence is the shipped suites: **six of the nine hand-written evaluators
-compute reward from something other than their goal.**
+that a goal tree therefore scores an episode by itself. It fits sorting tasks
+-- the share of ``In`` predicates satisfied -- and little else. The kinds of
+task this stack is built for score reward in other shapes:
 
-===============  ==============================================================
-Suite            What its reward actually is
-===============  ==============================================================
-``tool_sort``    the share of ``In`` predicates satisfied -- the tempting design,
-                 and the *only* family it fits
-``usbc_insert``  ``clip(depth / depth_gate, 0, 1)`` -- a quantity over a gate,
-                 with the goal being a conjunction the depth is only part of
-``rj45_insert``  ``clip(1 - mate_gap / travel, 0, 1)`` -- the same shape read
-                 from the other end, because the measure *shrinks* toward success
-``tape_peel``    ``min(1, broken / success_fraction)`` -- and it keeps moving
-                 after the verdict latches
-``film_peel``    the same, multiplied by a 0/1 mask: progress counts only while
-                 the film is still within tolerance
-``cloth_fold``   the share, over a goal that latches
-===============  ==============================================================
+=====================  ========================================================
+Kind of task           What its reward is
+=====================  ========================================================
+sorting, folding       the share of goal predicates satisfied (``fraction``)
+insertion by depth     ``clip(depth / gate, 0, 1)`` -- a quantity over a gate,
+                       the goal being a conjunction the depth is only part of
+mating by gap          ``clip(1 - gap / gate, 0, 1)`` -- the same shape read
+                       from the other end, because the measure *shrinks* toward
+                       success (``shrinking``)
+peeling                ``min(1, broken / gate)`` -- and it keeps moving after
+                       the verdict latches (``progress``)
+peeling a film         the same, multiplied by a 0/1 mask: progress counts only
+                       while the film is still within tolerance (``gated-by``)
+=====================  ========================================================
 
 So a task document states its reward separately, in one of exactly four forms,
 and this module is those four. The set is closed for the same reason the
 combinator set is: a fifth shape means a task nobody can compare against the
-others, and every existing suite fits.
+others.
 
 **Reward passes through a latch.** ``once`` freezes *success*; the quantity goes
-on moving. Both the tape and cloth evaluators do this, and freezing reward at the
-instant of success would diverge from every recorded trace on the way down --
-which is the sort of difference that shows up as an unexplained band six weeks
-into a port. :class:`Scored` takes success from the goal tree and reward from the
+on moving. Freezing reward at the instant of success would hide what happened
+after it -- a peel that kept going, a fold that came undone. :class:`Scored` takes success from the goal tree and reward from the
 clause, and those really are two different reads of the same step.
 
 **A measure reports its quantity by name, not as its reward.** A progress clause
@@ -48,12 +45,14 @@ from dataclasses import dataclass, field
 from typing import Any
 
 from .combinators import Node
-from .context import EvalResult, WorldState
+from .context import EvalResult, WorldState, finite_reward
 
 __all__ = ["Fraction", "Gated", "Progress", "RewardClause", "Scored", "build_reward", "reading_key"]
 
 
 def _clip(value: float) -> float:
+    """``value`` clamped to [0, 1], with NaN read as 0.0 (see :func:`finite_reward`)."""
+    value = finite_reward(value)
     return 0.0 if value < 0.0 else 1.0 if value > 1.0 else value
 
 
@@ -61,7 +60,7 @@ def _clip(value: float) -> float:
 class Fraction:
     """The goal tree's own reward: the share of its conjuncts satisfied.
 
-    The default, and what ``tool_sort`` and ``cloth_fold`` use. Written as a
+    The default, and what a sorting or folding task uses. Written as a
     clause rather than assumed, so that a document which says nothing about
     reward and one which says ``(:reward (fraction))`` compile to the same thing
     and mean the same thing.
@@ -76,9 +75,9 @@ class Fraction:
 class Progress:
     """A quantity over a gate: ``clip(v / gate)``, or ``clip(1 - v / gate)``.
 
-    Both directions, because a measure may grow toward success (``usbc``'s
-    insertion depth, ``tape``'s broken-bond fraction) or shrink toward it
-    (``rj45``'s mating gap). One class, two words at the call site: ``progress``
+    Both directions, because a measure may grow toward success (an insertion
+    depth, a tape's broken-bond fraction) or shrink toward it (a connector's
+    mating gap). One class, two words at the call site: ``progress``
     and ``shrinking``.
 
     Two words rather than ``(progress ... (:invert true))``, and the choice is
@@ -93,7 +92,7 @@ class Progress:
             number nobody can calibrate.
         key: Which of its metrics carries the raw quantity.
         gate: The value at which progress reads 1.0. Not necessarily the value at
-            which the goal succeeds: ``film_peel`` gates reward at its success
+            which the goal succeeds: a film peel gates reward at its success
             fraction while its goal also demands the film stayed within
             tolerance, and conflating them would make a torn film look finished.
         invert: Whether the measure shrinks toward success.
@@ -108,11 +107,11 @@ class Progress:
         del verdict
         result = self.of(ctx)
         raw = _quantity(result, self.key)
-        if self.gate == 0.0:
-            # A zero gate divides by nothing. Reported as satisfied rather than
-            # raising: the clause is checked at build time, and a per-step raise
-            # would turn a document mistake into a crash 400 steps into a run.
-            return 1.0, dict(result.metrics)
+        if not self.gate > 0.0:
+            # Unreachable from a document: ``_progress`` refuses a gate <= 0 at
+            # build time. A clause constructed directly with one gets the same
+            # refusal here rather than a constant reward.
+            raise ValueError(f"progress gate must be > 0, got {self.gate!r}")
         share = raw / self.gate
         return _clip(1.0 - share if self.invert else share), dict(result.metrics)
 
@@ -124,7 +123,7 @@ class Progress:
 class Gated:
     """Progress, multiplied by a 0/1 mask.
 
-    ``film_peel``'s shape, and the reason it exists is worth stating: a film
+    A film peel's shape, and the reason it exists is worth stating: a film
     peeled 80% of the way and then torn is **not** 0.8 of a success, and a reward
     that merely dipped would let a policy trade tearing against speed. The mask
     is a verdict; the thing masked is progress.
@@ -206,6 +205,11 @@ def _progress(body: Any, make_node: Callable[[Any], Node], *, invert: bool, word
             if len(part) != 2:
                 raise ValueError(f"({word} ...): (:gate V) takes one number, got {part[1:]!r}")
             gate = float(part[1])
+            if not gate > 0.0:
+                # Refused here, at build time: ``Progress.score`` divides by it
+                # every step, and a zero or negative gate makes the reward a
+                # constant (or a sign-flipped share) that looks like a result.
+                raise ValueError(f"({word} ...): (:gate V) must be > 0, got {part[1]!r}")
         elif keyword in _MASK_WORDS:
             if len(part) != 2:
                 raise ValueError(f"({word} ...): (:gated-by CLAUSE) takes one clause, got {part[1:]!r}")
@@ -241,9 +245,8 @@ def reading_key(head: str) -> str:
     Public, and shared with :func:`~robosimstudio_bench.goals.goal.build_goal`,
     because ``peak`` and ``integral`` need the same answer for the quantity they
     threshold. Two copies of this rule is the shape of drift ``about_key``'s
-    docstring records the cost of -- and here it would not even raise: a key that
-    misses falls through to the leaf's own reward, so a peak over the wrong
-    number reads as a plausible one.
+    docstring records the cost of: every reader raises on a key the measure did
+    not report, so a second copy that drifted would fail every episode.
     """
     from robosimstudio.assetlib.semantics.atoms import ATOMS
 

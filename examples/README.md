@@ -8,8 +8,10 @@ uv run examples/02_cloth/00_towel.py
 ```
 
 With the package installed, `python examples/02_cloth/00_towel.py` does the
-same. No script takes a flag: every parameter is a local at the top of
-`main()`, so change a number and run it again. A script that needs an optional
+same. Apart from the teleoperation scripts in `06_teleop/`, which take the
+leader arm's port and calibration as flags, no script takes a flag: every
+parameter is a local at the top of `main()`, so change a number and run it
+again. A script that needs an optional
 engine says so in its docstring.
 
 Folders and scripts are numbered in reading order, and each script runs on its

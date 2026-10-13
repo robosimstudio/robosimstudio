@@ -314,7 +314,7 @@ class TestTheSceneApi(unittest.TestCase):
     """``Scene`` -> ``Sim`` -> ``Ref``, on a stepped scene.
 
     The authoring half is checked without a GPU in
-    :mod:`tests.test_scene_api`; what needs one is that the ref you were handed
+    :class:`tests.test_core_fixes.TestSceneAddBindsAndRefuses`; what needs one is that the ref you were handed
     at ``add`` time reads the state that exists *now*.
     """
 

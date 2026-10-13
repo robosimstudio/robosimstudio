@@ -20,8 +20,8 @@ temporal modals
     ``once``, ``hold-for``, ``after``, ``peak``. A wrap is scored on turns
     *retained after release*; there is no way to say that in a static predicate.
 ``:reward``
-    Separate from the goal, because reward is not "the share of goal predicates
-    satisfied" in six of the nine shipped evaluators.
+    Separate from the goal, because reward is often not "the share of goal
+    predicates satisfied" -- an insertion depth over its gate, a mating gap.
 ``:observe``
     Recorded every step, gating nothing. Reporting an uncalibrated quantity is
     how it gets calibrated; thresholding it uncalibrated is how a benchmark ends

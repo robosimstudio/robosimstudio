@@ -248,7 +248,9 @@ through another moves differently on every step that rotates:
     rather than about the setpoint's. Identical while the arm is caught up and
     different exactly when it is not, which is why the reference has both.
 ``"tool"``
-    Both in the tool's own frame -- ``ee`` upstream. Frame-independent, so
+    Both in the tool's own frame -- ``ee`` upstream, ``prev_pose * delta``:
+    ``p' = p + R dpos``, ``q' = q dq``, the translation along the orientation
+    *before* this step's rotation. Frame-independent, so
     :attr:`ActionEEDelta.frame_bodies` does not enter.
 """
 
@@ -402,11 +404,14 @@ class ActionEEDelta(ActionSpace):
             angle = float(np.linalg.norm(rot_vec))
 
             if self.convention == "tool":
-                # Both halves in the tool's own frame, so the mount never enters.
+                # Both halves in the tool's own frame, so the mount never enters:
+                # ``prev_pose * delta_pose`` upstream, which translates along the
+                # *pre-step* orientation and then rotates. Translating along the
+                # rotated frame instead swings every combined move off its axis.
+                pos = pos + quat_to_mat(quat) @ dpos
                 if angle > 1.0e-9:
                     quat = quat_multiply(quat, quat_from_axis_angle(rot_vec / angle, angle))
                     quat = quat / np.linalg.norm(quat)
-                pos = pos + quat_to_mat(quat) @ dpos
             else:
                 frame = self._frame_quat(i, state)
                 # The delta rotation, taken out of the frame's axes into world:

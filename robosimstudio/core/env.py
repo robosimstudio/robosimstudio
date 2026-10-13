@@ -259,50 +259,37 @@ class EnvBase:
         return self.observe(), self.reset_info()
 
     def _retire_episode_hooks(self) -> None:
-        """Drop every hook a policy installed during the last episode.
+        """Drop every hook installed since the first reset, so none outlives its episode.
 
-        **A benchmark was manufacturing successes without this.** A peel's latch
-        installs a ``ParticleDragger`` -- a kinematic pin on the tape's tab --
-        into ``pipeline.hooks.post_solve``, and its follower into
-        :attr:`post_step_hooks`. Both lists are built once in ``__init__`` and
-        were never cleared, while a *successful* peel always ends mid-lift with
-        the bus closed, so the tool's own release never runs.
-
-        So episode 2 began with episode 1's pin still holding. Measured on
-        a tape-peeling task: ``--episodes 0:3`` reported 410, 411 and **24**
-        steps, all at reward 1.00 -- and at step 24 the workflow was still in
-        ``approach`` with the gripper never closed and six tab particles already
-        held. Run alone, that same episode takes 410 steps and is a real peel.
-        One bug, three suites: the film-peeling one registers the tape tools
-        outright, and the cloth-folding one installs the same latch but survives
-        because its episodes end with the workflow finished, so its release does
-        run.
+        A tool a policy runs may install a substep hook -- a kinematic pin on a
+        particle, say, in ``pipeline.hooks.post_solve`` -- and a follower in
+        :attr:`post_step_hooks`, and release both when it finishes. An episode
+        that ends mid-tool (a success, a truncation) never reaches that release,
+        and without this the next episode would begin with the last one's pin
+        still holding.
 
         The floor is taken at the **first** reset rather than in ``__init__``,
         because entities install their own hooks while the scene is being built
         -- the conveyor's belt drive, the gravity ramp -- and those are the
         scene, not the episode. Anything appended after that mark belongs to a
-        policy that has now finished.
+        policy that has now finished. Kept here rather than left to each policy:
+        a lifetime that depends on every tool remembering to unregister is one
+        that will be got wrong.
 
-        Fixed here rather than in the three policies: a lifetime that depends on
-        every policy remembering to unregister is a lifetime that will be got
-        wrong again, and this one was silent for as long as it existed.
-
-        **NECESSARY AND NOT SUFFICIENT.** This closes a real leak -- the hook
-        lists demonstrably survived a reset, and the test beside this proves they
-        no longer do -- but it does NOT stop the peel suites reporting false
-        successes. Measured after: ``tape_peel/handle --episodes 0:3`` still
-        reads 412, **58**, **41** steps at reward 1.00 where a genuine peel takes
-        410. So something else carries across the boundary, and the hooks were
-        not it. Do not read this docstring as a closed case; the reproduction in
-        ``tape_peel/graphs/gt/README.md`` is still live.
+        A captured CUDA graph holds the substep hooks it was captured with, so
+        removing one also drops the graph and asks for a re-capture on the next
+        step; otherwise the graph would go on replaying the retired hook.
         """
         floor = self._episode_hook_floor
         if floor is None:
             self._episode_hook_floor = (len(self.pipeline.hooks.post_solve), len(self.post_step_hooks))
             return
+        retired = len(self.pipeline.hooks.post_solve) > floor[0]
         del self.pipeline.hooks.post_solve[floor[0] :]
         del self.post_step_hooks[floor[1] :]
+        invalidate = getattr(self.pipeline, "invalidate_graph", None)
+        if retired and invalidate is not None:
+            invalidate(recapture=True)
 
     def reset_info(self) -> dict[str, Any]:
         """Whatever a caller should know about the episode it just started."""
@@ -330,13 +317,23 @@ class EnvBase:
             return
         space.apply(action, self.control, self.state)
 
-    def step(self, action: Sequence[float] | None = None, mode: str = "") -> StepResult:
-        """One control period: apply, step, hook, observe."""
-        self.apply_action(action, mode)
+    def _step_once(self) -> None:
+        """One control period of physics and the bookkeeping every loop owes it.
+
+        The step count and :attr:`post_step_hooks`, in that order. Every door
+        that advances the scene -- :meth:`step`, :meth:`step_teleop`,
+        ``Sim.run``, ``rss.draw`` -- goes through here, so a hook a scene
+        installs runs whichever of them is driving.
+        """
         self.pipeline.step()
         self.step_count += 1
         for hook in self.post_step_hooks:
             hook(self)
+
+    def step(self, action: Sequence[float] | None = None, mode: str = "") -> StepResult:
+        """One control period: apply, step, hook, observe."""
+        self.apply_action(action, mode)
+        self._step_once()
         obs = self.observe()
         terminated, truncated, info = self.evaluate()
         return obs, float(info.get("reward", 0.0)), terminated, truncated, info
@@ -349,10 +346,7 @@ class EnvBase:
         re-deriving one would round-trip the setpoint through the arm's actual
         position and lag behind the gizmo.
         """
-        self.pipeline.step()
-        self.step_count += 1
-        for hook in self.post_step_hooks:
-            hook(self)
+        self._step_once()
         for hook in self.teleop_hooks:
             hook(self)
 

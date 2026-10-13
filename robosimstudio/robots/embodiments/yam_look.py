@@ -1,9 +1,9 @@
 # SPDX-License-Identifier: Apache-2.0
 """The real YAM's two-tone shell: black arm, white upper-arm and forearm tubes.
 
-Ported from ``newton_tasks/sim/yam_arm.py``, whose numbers came out of
-``scripts/derive_yam_tube_colors.py`` -- and the derivation is the reason this
-is a module rather than a colour constant.
+Ported from an earlier YAM simulation, whose numbers came out of a colour
+derivation against photographs of the real arm -- and the derivation is the
+reason this is a module rather than a colour constant.
 
 The i2rt MJCF ships rainbow per-link ``rgba`` (purple base, tan link1, blue
 link2, olive link3, pink link5, green gripper) left over from the CAD export.

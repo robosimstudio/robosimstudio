@@ -56,7 +56,11 @@ Usage::
 
     uv run python scripts/calibrate_leader_arms.py \\
         --leader left:/dev/ch340-<left-serial>,right:/dev/ch340-<right-serial> \\
-        --out scripts/calibration/yam_leader.json
+        --out scripts/calibration/local/yam_leader.json
+
+``scripts/calibration/local/`` is git-ignored, so a real calibration never
+overwrites ``scripts/calibration/yam_leader.json``, the tracked sample, and the
+examples read it from there unless ``--calibration`` says otherwise.
 
 Partial recalibration
 ---------------------
@@ -138,8 +142,15 @@ GHOST_COLOR = np.array([70, 220, 110], dtype=np.uint8)
 GHOST_OPACITY = 0.35
 GHOST_PREFIX = "/calibration/ghost"
 
-DEFAULT_OUT = Path("scripts/calibration/yam_leader.json")
-"""Where the examples read their calibration from unless told otherwise."""
+DRIVER_MISSING = (
+    "the Feetech bus driver is not installed: run with `uv run --extra lerobot-feetech`, or "
+    "pip install 'robosimstudio[lerobot-feetech] @ git+https://github.com/robosimstudio/robosimstudio'"
+)
+"""What a run without the ``lerobot-feetech`` extra is told."""
+
+DEFAULT_OUT = Path("scripts/calibration/local/yam_leader.json")
+"""Where the examples read their calibration from unless told otherwise. Git-ignored:
+the tracked ``scripts/calibration/yam_leader.json`` is a sample for arms that are not yours."""
 
 
 class Poser:
@@ -311,9 +322,7 @@ def connect_bus(port: str, joint_names: list[str], gripper_name: str | None):
         from lerobot.motors import Motor, MotorNormMode
         from lerobot.motors.feetech import FeetechMotorsBus
     except ModuleNotFoundError as exc:
-        raise SystemExit(
-            "the Feetech bus driver is not installed: pip install 'robosimstudio[lerobot-feetech]'"
-        ) from exc
+        raise SystemExit(DRIVER_MISSING) from exc
 
     motors = {
         name: Motor(id=i + 1, model="sts3215", norm_mode=MotorNormMode.RANGE_M100_100)
@@ -873,7 +882,7 @@ def create_parser() -> argparse.ArgumentParser:
 def preflight(ports: dict[str, str], out: Path, mode: str) -> None:
     """Everything that can be refused before a scene is built, in one sentence each."""
     if importlib.util.find_spec("lerobot") is None:
-        raise SystemExit("the Feetech bus driver is not installed: pip install 'robosimstudio[lerobot-feetech]'")
+        raise SystemExit(DRIVER_MISSING)
     for name, port in ports.items():
         if not os.path.exists(port):
             raise SystemExit(

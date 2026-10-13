@@ -1,9 +1,8 @@
 # SPDX-License-Identifier: Apache-2.0
 """A batched segmentation against a single one, on the real weights.
 
-:mod:`tests.test_perception_batch` checks the *contract* against a stub -- how
-many passes a group costs, whose answer is whose, what a differing threshold
-does -- and cannot check the one thing a wave's parity bar actually rests on:
+A stub can check the batching *contract* -- how many passes a group costs,
+whose answer is whose, what a differing threshold does -- and cannot check the one thing a wave's parity bar actually rests on:
 that a world's answer is the same answer it would have got alone.
 
 It is not bit-identical and does not need to be. SAM3 is query-based: it returns

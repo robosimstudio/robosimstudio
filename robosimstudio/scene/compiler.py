@@ -1222,6 +1222,7 @@ def _build_handles(
                 gripper_span=index.gripper_span,
                 gripper_open_q=tuple(float(v) for v in index.gripper_open_q),
                 gripper_closed_q=tuple(float(v) for v in index.gripper_closed_q),
+                gripper_geared=bool(hand.geared) if hand else False,
                 finger_groups=finger_groups,
                 open_axis_signs=tuple(hand.open_axis_signs if hand else (1.0, -1.0)),
                 # THIS arm's shapes, from the index's own limb walk -- not the

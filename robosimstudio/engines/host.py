@@ -26,9 +26,11 @@ not something the entity owning the particles can snapshot on its behalf:
   writes, or the double-buffer swap resurrects a stale copy.
 * :meth:`capture_rest` runs **after everything has settled**, because the drape
   a deformable lands in is what a reset returns to.
-* :meth:`reset` restores it. ``Sim.reset_scene`` runs the entities first and the
-  solvers after, which is the order this wants: the entity writes the Newton
-  arrays, then the engine is put back behind them.
+* :meth:`reset` restores it. ``Sim.reset_scene`` resets the solvers first and
+  the entities after: the engine returns its island to the captured rest, then
+  an entity places this episode's state on top. The other order put a
+  deformable an episode moves straight back to the nominal (measured at 56 mm
+  between Newton's particles and the engine's nodes).
 
 The composer drives all three off :attr:`PhysicsProgram.hosts`. An entity does
 none of it, and that is load bearing rather than tidy --- while it was the soft

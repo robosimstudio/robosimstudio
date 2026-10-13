@@ -79,7 +79,9 @@ def arm_name(env, arm_id: int) -> str:
     """
     order = arm_order(env)
     if not order:
-        raise RuntimeError(f"task {env.task.full_name!r} has no arms")
+        # A bare Sim has no task; its request carries the same name.
+        owner = getattr(env, "task", None) or getattr(env, "request", None)
+        raise RuntimeError(f"scene {getattr(owner, 'full_name', '?')!r} has no arms")
     return order[min(max(int(arm_id), 0), len(order) - 1)]
 
 

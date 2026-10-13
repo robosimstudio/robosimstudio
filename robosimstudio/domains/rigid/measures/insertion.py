@@ -60,6 +60,8 @@ def insertion(
         ``depth`` -- tip past the mouth plane along the axis, negative outside.
         ``lat`` -- distance from the bore axis in the plane normal to it.
         ``mate_gap`` -- travel still to go before the tip reaches the bore floor.
+        ``tilt`` -- angle between the part's own +z and the bore axis [rad],
+        unsigned, in ``[0, pi/2]``.
 
     ``mate_gap`` is reported because one shipped suite scores on it rather than
     on depth: ``rj45`` rewards ``clip(1 - gap / travel)``, a measure that shrinks

@@ -1,9 +1,7 @@
 # SPDX-License-Identifier: Apache-2.0
 """robosimstudio: a Newton-native benchmark stack, as ten packages; the benchmark tier is a package beside them.
 
-Read bottom-up; each names only what is below it, and
-``tests/test_import_direction.py`` holds them to it by importing each package in
-a subprocess with everything above it blocked at the import hook.
+Read bottom-up; each names only what is below it.
 
 **The mechanisms.**
 
@@ -65,9 +63,8 @@ more general than this shirt.
 **This module imports nothing above ``_version``, and that is load-bearing.**
 Importing :mod:`robosimstudio.core` executes this file first, so a module-scope
 ``from .sim import Scene`` here would make core un-importable without ``sim`` and
-quietly invert the whole partition -- and it would fail every subprocess
-test in ``tests/test_import_direction.py`` at once, since every one of them
-imports a package with the layers above it blocked.
+quietly invert the whole partition, which nothing would notice until somebody
+imported a lower package without the layers above it.
 
 The flat names below are resolved through :pep:`562` ``__getattr__`` instead,
 which fires on *attribute access* and never during ``importlib.import_module``.
@@ -159,9 +156,8 @@ today, and a typo resolves to something plausible from the wrong layer instead o
 raising. This is also the list a reader scans to answer "what is the core tier",
 which is a question the tier split exists to have an answer to.
 
-``Arrangement`` is ``ArrangementSpec`` under the name the examples use -- the
-only alias here, kept because ``rss.Arrangement(control_hz=60, substeps=16)``
-reads as configuration and ``ArrangementSpec`` reads as a type.
+There are no aliases: a physics arrangement is ``rss.ArrangementSpec(control_hz=60,
+substeps=16)``, under the one name its module gives it (see :data:`_ALIASES`).
 
 ``replace`` is ``dataclasses.replace``, re-exported for one reason: amending a
 frozen spec is the *normal* way to use this tier -- ``replace(GENERIC,

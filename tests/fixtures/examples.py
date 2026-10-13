@@ -2,7 +2,7 @@
 """An example run from a test: which scripts there are, and ``main()`` against a studio that is not there.
 
 Shared by :mod:`tests.test_examples` and, in a tree that has the older rope
-scripts, ``tests/test_examples_rope.py``, which split one module along the
+scripts, the module that tests them, which split one module along the
 600-line rule: the first is about the numbered examples every tree ships, the
 second about what only those rope scripts claim. Both load a script by file path and run its
 ``main()`` with :func:`robosimstudio.view` replaced, and one copy of that is

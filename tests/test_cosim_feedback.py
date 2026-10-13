@@ -10,8 +10,8 @@ extracted versions, and these tests assert the two agree bit for bit over a few
 thousand randomised steps rather than on one hand-picked example.
 
 ``WrenchFeed`` is not covered here: it needs a device, and the fast tier has
-none. It is exercised by ``tests/test_superdex.py`` at the medium tier, whose
-kinematic-press assertion is a measurement of the whole path including it.
+none. It is left to the medium tier, where the SuperDex scenes run with an
+engine in the loop.
 """
 
 from __future__ import annotations

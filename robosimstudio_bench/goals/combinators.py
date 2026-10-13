@@ -33,9 +33,9 @@ Each of these, and what forced it:
 ======================  =================================================
 
 Two names a reader may expect are deliberately absent. **``fraction`` is not a
-combinator**: reward turned out not to be "the share of goal predicates" in six
-of the nine shipped evaluators -- insertion depth over its gate, an inverse mate
-gap, a progress term masked to zero by a tension budget -- so reward is its own
+combinator**: reward is often not "the share of goal predicates" -- insertion
+depth over its gate, an inverse mate gap, a progress term masked to zero by a
+tension budget -- so reward is its own
 clause over the same terms rather than a node type. A node still reports its
 natural partial credit here, and the reward clause may override it entirely.
 **``for_each`` is compile-time sugar**: a quantifier over a class expands to
@@ -487,6 +487,22 @@ class After(Node):
         return EvalResult(success=inner.success, reward=inner.reward, metrics=metrics)
 
 
+def _reading(inner: EvalResult, key: str, word: str) -> float:
+    """The quantity ``peak`` / ``integral`` thresholds: metric ``key``, or the leaf's reward for none.
+
+    Raises:
+        KeyError: When ``key`` names a metric the measure did not report -- the
+            reward clause's rule (``goals/reward.py::_quantity``). Falling back
+            to the leaf's normalised reward thresholded a different number that
+            looked just as plausible.
+    """
+    if not key:
+        return float(inner.reward)
+    if key not in inner.metrics:
+        raise KeyError(f"{word} reads {key!r}, but the measure reported {sorted(inner.metrics)}")
+    return float(inner.metrics[key])
+
+
 @dataclass
 class Peak(Node):
     """The largest value a measure reached this episode, thresholded.
@@ -512,7 +528,7 @@ class Peak(Node):
 
     def evaluate(self, ctx: WorldState) -> EvalResult:
         inner = self.of(ctx)
-        current = float(inner.metrics.get(self.key, inner.reward)) if self.key else float(inner.reward)
+        current = _reading(inner, self.key, "peak")
         self._peak = max(self._peak, current)
         metrics = dict(inner.metrics)
         metrics["peak"] = self._peak
@@ -552,7 +568,7 @@ class Integral(Node):
     def evaluate(self, ctx: WorldState) -> EvalResult:
         inner = self.of(ctx)
         now = float(ctx.sim_time)
-        current = float(inner.metrics.get(self.key, inner.reward)) if self.key else float(inner.reward)
+        current = _reading(inner, self.key, "integral")
         if self._last_t >= 0.0:
             self._total += current * max(0.0, now - self._last_t)
         self._last_t = now

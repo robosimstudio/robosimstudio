@@ -164,8 +164,11 @@ it away and see what it still solves.
 | Many worlds | a `JobSpec` with `num_worlds=16`: one graph per world, motions batched |
 
 A subgraph's `skill` may name a bundle in
-[open-robot-skills](https://github.com/graph-robots/open-robot-skills); clone
-it beside this checkout. A `generic` subgraph needs none. The `sam3.*`
+[open-robot-skills](https://github.com/graph-robots/open-robot-skills). That
+registry is optional: a `generic` subgraph needs none, and only a graph naming
+a bundle needs the clone. Put it beside this checkout (`../open-robot-skills`,
+the default in `pyproject.toml`'s `[tool.gap]`), or point `$GAP_SKILLS_PATH` or
+`bench_run.py --skills` at it. The `sam3.*`
 segmentation tool loads `facebook/sam3`, whose weights are gated on Hugging Face.
 
 

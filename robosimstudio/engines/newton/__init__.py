@@ -69,7 +69,7 @@ MUJOCO = register_backend(
     summary="MuJoCo-Warp: articulated rigid bodies, the robot's solver.",
     # ``jacobian`` sparse rather than MuJoCo's "auto" is measured: five stacked
     # boxes stand every time under sparse and three times in eight under auto
-    # (``scripts/stack_bench.py``); the ceilings are sized for the busiest frame,
+    # (a stacking benchmark run during development); the ceilings are sized for the busiest frame,
     # because an overflow escalates into an illegal memory access.
     defaults={
         "nconmax": 2048,

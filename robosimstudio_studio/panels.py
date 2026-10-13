@@ -943,7 +943,7 @@ class PanelCloth(Panel):
         centre = points.mean(axis=0)
         reach = float(np.linalg.norm(points - centre, axis=1).max())
 
-        slot = self.handles.acquire()
+        slot = self._acquire()
         dragger = self.draggers[slot.index]
         was = dragger.radius
         dragger.radius = reach + 1e-6
@@ -1071,24 +1071,44 @@ class PanelCloth(Panel):
             if live.key == ("cloth", name) and float(np.linalg.norm(live.position - position)) < self.radius:
                 self._release(live)
                 return
+        self._seize(self._acquire(), name, cloth, position, IDENTITY_QUAT)
+
+    def _acquire(self):
+        """A slot for a new grip, let go of whatever it was holding. Main thread.
+
+        :meth:`HandleSet.acquire` recycles the oldest handle on a full set and
+        leaves letting go to the caller -- and an engine-side pin left on a
+        recycled slot would go on being aimed at the new handle's pose instead
+        of the Newton grip that slot now carries.
+        """
         slot = self.handles.acquire()
+        self._drop_pin(slot.index)
+        self.draggers[slot.index].release()
+        return slot
+
+    def _seize(self, slot, name: str, cloth, position, quat) -> bool:
+        """Take hold of the patch at ``position`` on ``slot``. Main thread.
+
+        ``slot`` holds nothing on the way in; a miss clears it and records how
+        far off the aim was.
+        """
         dragger = self.draggers[slot.index]
         # Not fallback_nearest: the point came from a click on the cloud itself,
         # so nothing inside the radius means the aim missed, and saying so beats
         # seizing a corner nobody pointed at.
-        taken = dragger.grab(
-            self.env.state, position, IDENTITY_QUAT, candidates=cloth.particles, fallback_nearest=False
-        )
+        taken = dragger.grab(self.env.state, position, quat, candidates=cloth.particles, fallback_nearest=False)
         if not taken:
             self._release(slot)
             self.miss = dragger.last_distance
-            return
-        self._hand_over(slot, name, dragger, position, IDENTITY_QUAT)
-        slot.place(position, IDENTITY_QUAT, key=("cloth", name), label=f"{name} ({taken})")
+            return False
+        self.miss = 0.0
+        self._hand_over(slot, name, dragger, position, quat)
+        slot.place(position, quat, key=("cloth", name), label=f"{name} ({taken})")
         # A task with a rigid pull-tab must let go of it once something else
         # has taken the film, or the two holds fight over the same particles.
         if hasattr(cloth, "release_handle"):
             cloth.release_handle()
+        return True
 
     def _hand_over(self, slot, name: str, dragger, position, quat) -> bool:
         """Give a landed grab to the engine that owns the body. Main thread.
@@ -1158,7 +1178,17 @@ class PanelCloth(Panel):
         slot = self.handles.newest()
         if slot is None:
             return
-        self._grab(str(slot.key[1]), slot.position)
+        # Seized again on the same slot, in the handle's own frame, rather than
+        # through _grab: a click at a grip you already hold lets it go, and the
+        # newest handle is always at distance 0 from its own position.
+        name = str(slot.key[1])
+        cloth = self.env.scene.by_name.get(name)
+        if cloth is None:
+            return
+        position, quat = slot.position.copy(), slot.quat.copy()
+        self._drop_pin(slot.index)
+        self.draggers[slot.index].release()
+        self._seize(slot, name, cloth, position, quat)
 
     def _distance_to(self, cloth, position) -> float:
         """How far ``position`` is from the nearest particle of ``cloth`` [m]."""

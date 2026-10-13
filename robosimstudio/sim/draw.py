@@ -39,17 +39,22 @@ class Viewer:
             ``pipeline`` and ``time``.
         port: What to serve on. The URL is printed by the server.
         label: The page title.
-        share: Ask viser for a public URL as well as the local one. **On by
-            default**, because the machine with the GPUs is usually not the
-            machine with the browser, and ``localhost:8080`` on a remote box is
-            a page nobody can open. Pass ``share=False`` for a local-only page.
+        share: Ask viser for a public URL as well as the local one. Off by
+            default: a share URL puts the page on the internet. Where the GPUs
+            are on a remote box, an SSH tunnel (``ssh -L 8080:localhost:8080``)
+            reaches the local page without one.
 
             It is viser's own share service and it is experimental: the request
             blocks until the tunnel answers, so a run that hangs before printing
-            a URL is this, and ``share=False`` is the way past it.
+            a URL is this.
+
+    The server listens on every interface (``0.0.0.0``) whatever ``share``
+    says -- Newton's ``ViewerViser`` has no host option -- so on a shared
+    network anyone who can reach ``port`` can open the page and drive the
+    scene. Firewall the port, or reach it through an SSH tunnel.
     """
 
-    def __init__(self, sim: Any, *, port: int = 8080, label: str = "", share: bool = True) -> None:
+    def __init__(self, sim: Any, *, port: int = 8080, label: str = "", share: bool = False) -> None:
         try:
             from newton.viewer import ViewerViser
         except ImportError as exc:  # pragma: no cover -- depends on the install
@@ -101,7 +106,7 @@ class Viewer:
         self.close()
 
 
-def viewer(sim: Any, *, port: int = 8080, label: str = "", share: bool = True) -> Viewer:
+def viewer(sim: Any, *, port: int = 8080, label: str = "", share: bool = False) -> Viewer:
     """A :class:`Viewer` over ``sim``: the page an example drives itself.
 
     ::
@@ -119,7 +124,7 @@ def viewer(sim: Any, *, port: int = 8080, label: str = "", share: bool = True) -
     return Viewer(sim, port=port, label=label, share=share)
 
 
-def draw(sim: Any, *, port: int = 8080, steps: int | None = None, label: str = "", share: bool = True) -> None:
+def draw(sim: Any, *, port: int = 8080, steps: int | None = None, label: str = "", share: bool = False) -> None:
     """Open a page on a built scene and step it until the tab closes.
 
     :func:`viewer` with the loop written for you: right when the question is
@@ -132,12 +137,16 @@ def draw(sim: Any, *, port: int = 8080, steps: int | None = None, label: str = "
         steps: Stop after this many control steps. ``None`` runs until you close
             the page.
         label: Shown in the page title.
-        share: Ask viser for a public URL too. On by default; see :class:`Viewer`.
+        share: Ask viser for a public URL too. Off by default; see :class:`Viewer`,
+            which also says what the server listens on.
     """
+    # A Sim steps through its own bookkeeping -- the step count, the post-step
+    # hooks -- exactly as ``sim.run`` would; a bare compiled scene has neither.
+    step = getattr(sim, "_step_once", None) or sim.pipeline.step
     with viewer(sim, port=port, label=label, share=share) as page:
         taken = 0
         while page.is_running() and (steps is None or taken < steps):
-            sim.pipeline.step()
+            step()
             taken += 1
             page.show()
 
@@ -167,16 +176,20 @@ that wants a darker page and fewer panels does not have to import a type from
 another tier to say so.
 """
 
+_VIEW_DEFAULTS: dict[str, Any] = {"panels": "drive", "render_every": 1}
+"""Where :func:`view` differs from a bare ``StudioConfig``, applied only when no
+``config`` was passed."""
+
 
 def view(
     sim: Any,
     *,
-    panels: Any = "drive",
+    panels: Any = _UNSET,
     page: Any = None,
     routines: Any = None,
-    render_every: int = 1,
+    render_every: int = _UNSET,
     port: int = _UNSET,
-    share: bool = True,
+    share: bool = _UNSET,
     handles: int = _UNSET,
     speed: str = _UNSET,
     dark: bool = _UNSET,
@@ -209,8 +222,8 @@ def view(
         panels: Which panels to build -- a key of
             :data:`~robosimstudio_studio.session.PANEL_SETS` or the keys
             themselves. **Defaults to** ``"drive"`` here and ``"all"`` on
-            :class:`~robosimstudio_studio.StudioConfig`, which is the one place
-            the two doors differ and is deliberate: this is the door a script
+            :class:`~robosimstudio_studio.StudioConfig`, which is one of the two
+            places the two doors differ and is deliberate: this is the door a script
             opens, and a script is showing one thing, so cameras, video, takes,
             material presets and the event log are noise in front of it. A
             launcher constructs the config itself and gets the whole page.
@@ -240,31 +253,31 @@ def view(
 
                 rss.view(sim, routines={"Pick it up": routine})
         render_every: Draw one frame per this many control steps. **1 here**, and
-            4 on :class:`~robosimstudio_studio.StudioConfig` -- the third of the
-            three defaults that differ between the two doors, and the one with a
-            measurement behind it.
+            4 on :class:`~robosimstudio_studio.StudioConfig` -- the other default
+            that differs between the two doors, and the one with a measurement
+            behind it.
 
             4 suits a page that is being *measured*: drawing is a fifth of a fast
             scene's step budget and a benchmark would rather have the steps. It
             is wrong for a page being *watched*, and worst exactly where watching
             matters most -- a coupled cloth scene steps at about 30 Hz, and one
             frame per four steps is 5 fps of a towel you are trying to drag.
-            Measured on ``examples/scenes/cloth``: 5.7 fps at 4 against 26.6 fps at 1,
+            Measured there: 5.7 fps at 4 against 26.6 fps at 1,
             with the step rate falling from 33.3/s to 26.6/s. A fifth of the
             throughput for four times the frame rate is the trade an interactive
             page wants and a batch job does not.
         port: What to serve on. The URL is printed.
-        share: Ask viser for a public URL as well as the local one. **On by
-            default here**, and off on
-            :class:`~robosimstudio_studio.StudioConfig`, for the same reason
-            ``panels`` differs: this is the door a person opens by hand, usually
-            onto a machine that has the GPUs and not the browser, where
-            ``localhost:8080`` is a page nobody can reach. A test or a batch job
-            builds the config itself and gets no tunnel.
+        share: Ask viser for a public URL as well as the local one. Off by
+            default, as on :class:`~robosimstudio_studio.StudioConfig`: a share
+            URL puts the page on the internet. Where the GPUs are on a remote
+            box, an SSH tunnel (``ssh -L 8080:localhost:8080``) reaches the
+            local page without one. viser's share service is experimental and
+            the request blocks until it answers, so a call that hangs before
+            printing a URL is this.
 
-            viser's share service is experimental and the request blocks until
-            it answers, so a call that hangs before printing a URL is this;
-            ``share=False`` is the way past it.
+            Either way the server listens on every interface (``0.0.0.0``) --
+            Newton's viewer has no host option -- so on a shared network,
+            firewall ``port`` or reach it through an SSH tunnel.
         handles: How many things may be held at once, per kind.
         speed: Initial playback rate, a key of
             :data:`~robosimstudio_studio.session.SPEEDS`.
@@ -274,8 +287,11 @@ def view(
         scenery: Draw the cell's furniture. Off by default because the browser
             hit-tests it first, and a table in front of an arm swallows the
             clicks meant for it.
-        config: A whole :class:`~robosimstudio_studio.StudioConfig`. Any keyword
-            above is applied on top of it, so the two compose.
+        config: A whole :class:`~robosimstudio_studio.StudioConfig`. A keyword
+            passed above is applied on top of it, so the two compose; a keyword
+            left out keeps the config's own value, ``panels`` and
+            ``render_every`` included. The defaults above apply only when no
+            config is given.
         **kwargs: Forwarded to
             :class:`~robosimstudio_studio.session.StudioSession` -- ``episode``.
 
@@ -301,8 +317,13 @@ def view(
         "lighting": lighting,
         "scenery": scenery,
     }
+    if config is None:
+        # This door's own defaults, which differ from the config's (see above).
+        # Applied only here so a caller's config keeps what it says.
+        config = StudioConfig()
+        given = {**_VIEW_DEFAULTS, **{name: value for name, value in given.items() if value is not _UNSET}}
     changes = {_CONFIG_FIELDS[name]: value for name, value in given.items() if value is not _UNSET}
-    settings = dataclasses.replace(config or StudioConfig(), **changes)
+    settings = dataclasses.replace(config, **changes)
 
     session = StudioSession(sim, config=settings, **kwargs)
     if routines:

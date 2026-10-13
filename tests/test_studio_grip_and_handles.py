@@ -207,5 +207,54 @@ class TestClickingAgainLetsGo(unittest.TestCase):
             session.teardown()
 
 
+class TestTheClothSlots(unittest.TestCase):
+    """What a cloth handle's slot holds when it is seized again or handed to another grip."""
+
+    def test_regrip_seizes_again_rather_than_letting_go(self) -> None:
+        """The newest handle sits at distance 0 from itself, which the click toggle reads as "let go"."""
+        sim = _sim(cloth=True)
+        session = _session(sim, 9321)
+        try:
+            deformables = session.deformables
+            point = np.asarray(sim["towel"].particle_q[0], dtype=np.float64)
+            deformables.click_at("towel", point)
+            deformables.drain()
+            self.assertEqual(1, len(deformables.handles.live), f"the grab missed by {deformables.miss}")
+            slot = deformables.handles.newest()
+            deformables.regrip_requested = True
+            deformables.drain()
+            self.assertEqual([slot], deformables.handles.live, "Re-grip here let go of the grip")
+            self.assertTrue(deformables.draggers[slot.index].active, "and it holds the cloth again")
+        finally:
+            session.close()
+
+    def test_a_recycled_slot_lets_go_of_its_engine_pin(self) -> None:
+        """A full set recycles the oldest handle; an engine-side pin left on it would be aimed at the new grip."""
+        import types
+
+        sim = _sim(cloth=True)
+        session = _session(sim, 9322)
+        try:
+            deformables = session.deformables
+            q = np.asarray(sim["towel"].particle_q, dtype=np.float64)
+            u, v = q[:, 0] + q[:, 1], q[:, 0] - q[:, 1]
+            corners = [q[int(np.argmin(u))], q[int(np.argmax(u))], q[int(np.argmin(v))]]  # three distinct corners
+            deformables.click_at("towel", corners[0])
+            deformables.drain()
+            oldest = deformables.handles.newest()
+            released = []
+            deformables.pins[oldest.index] = types.SimpleNamespace(
+                nodes=np.arange(3), aim=lambda position, quat: True, release=lambda: released.append(True)
+            )
+            for point in corners[1:]:  # the second fills the set, the third recycles the oldest slot
+                deformables.click_at("towel", point)
+                deformables.drain()
+            self.assertEqual([True], released, "the recycled slot's engine pin was not let go")
+            self.assertNotIn(oldest.index, deformables.pins)
+            self.assertTrue(deformables.draggers[oldest.index].active, "the slot holds its new grip through Newton")
+        finally:
+            session.close()
+
+
 if __name__ == "__main__":
     unittest.main()

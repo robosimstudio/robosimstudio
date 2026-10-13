@@ -95,8 +95,8 @@ TCP_OFFSET = (0.0, 0.0, 0.1488)
 Derived from the model rather than guessed: the ``pinch`` site sits 0.145 m along
 ``base``'s +z, and ``base`` sits 0.0038 m along ``base_mount``'s +z under a
 quarter turn *about z*, which leaves the z axis alone. So the two offsets simply
-add. ``scripts/measure_gripper.py`` is what confirms it against a built model, and
-what would catch the day the linkage's rest pose moves the pinch point.
+add. Measuring a built model (driving the hand and reading the pads) is what
+confirms it, and what would catch the day the linkage's rest pose moves the pinch point.
 """
 
 ROBOTIQ_2F85_MENAGERIE = register_gripper(

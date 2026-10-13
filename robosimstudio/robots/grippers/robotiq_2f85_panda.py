@@ -35,7 +35,7 @@ ask.** Measured on a single-gear meshing scene (2026-09-09), the
 fingertips sit past the tool-centre point along the approach axis by 5.9 mm at
 full open, 11.5 mm at a 67 mm opening and 15-16 mm closed on a 55 mm gear --
 the four-bar swings them down as it closes. ``tip_reach`` below is the
-open-hand figure, the same one ``scripts/measure_gripper.py`` reports at the rest
+open-hand figure, the one a measurement of the built model reports at the rest
 pose; the live one is ``robot.get_gripper``'s ``tip_reach_m``, which the
 graph-policy runtime's robot tools read. And the pads are not to
 be pushed onto a surface to find out: a vertical load at the fingertips folds
@@ -53,7 +53,7 @@ jaws shut in ten steps and threw the gear across the bench.
 **What this hand does not inherit is a span the cell can measure.** Five of its
 six joints are held by ``<connect>`` equalities rather than by tree structure,
 so forward kinematics leaves the pads at the rest pose and no joint sum is a
-jaw gap -- see ``scripts/measure_gripper.py``. The 85 mm is the published stroke,
+jaw gap; it has to be measured off the pads. The 85 mm is the published stroke,
 and the module it comes from swept it under physics: 84.807 mm of gap at command
 zero.
 """
