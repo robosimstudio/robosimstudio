@@ -440,7 +440,7 @@ def handle(example: str, thing: str, at: Any, *, camera: Any, lift: float = 0.10
     )
 
 
-def routine(example: str, *, speed: float, success: str, done: Any = None) -> Take:
+def routine(example: str, *, speed: float, success: str, done: Any = None, budget: int = 1_500_000) -> Take:
     """A demo: the home pose, then its Run button, filmed to the routine's end.
 
     ``done(film)`` is the demo's own success measure; a take without one is still a draft.
@@ -450,7 +450,7 @@ def routine(example: str, *, speed: float, success: str, done: Any = None) -> Ta
         fps=12,
         speed=speed,
         warmup=0.5,
-        budget=1_500_000,
+        budget=budget,
         beats=(
             Wait(seconds=0.5, label="home, hands open"),
             Run(label="Run"),
@@ -662,7 +662,8 @@ DRAFTS = (
         across=("x", 0.05),
         needs=("superdex",),
     ),
-    routine("demo/wipe_the_bar/wipe_the_bar.py", speed=2.0, success="the bar is wiped:", done=_wiped),
+    # 60 s of scene: four strokes at 3x read as a wipe and fit 2 MB; at 2x the clip was 2.6 MB at quality 46.
+    routine("demo/wipe_the_bar/wipe_the_bar.py", speed=3.0, success="the bar is wiped:", done=_wiped, budget=2_000_000),
     routine("demo/route_the_cable/route_the_cable.py", speed=2.0, success="the cable is routed:", done=_routed),
     routine("demo/fold_the_towel/fold_the_towel.py", speed=2.0, success="the towel is folded:", done=_folded),
 )
