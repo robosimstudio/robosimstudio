@@ -98,13 +98,15 @@ def ensure_initialized(precision: str = "64") -> Any:
         torch, before = None, None
 
     backend = getattr(gs, "gpu", None) or gs.cuda
-    gs.init(backend=backend, precision=str(precision), logging_level="warning")
-    _ENGINE["precision"] = str(precision)
-
-    if torch is not None and before is not None:
-        after = (torch.get_default_device(), torch.get_default_dtype())
-        if after != before:
-            torch.set_default_device(before[0])
-            torch.set_default_dtype(before[1])
-            log.debug("restored torch defaults %s that gs.init changed to %s", before, after)
+    try:
+        gs.init(backend=backend, precision=str(precision), logging_level="warning")
+        _ENGINE["precision"] = str(precision)
+    finally:
+        # Also when gs.init raises part-way: the defaults may already be changed.
+        if torch is not None and before is not None:
+            after = (torch.get_default_device(), torch.get_default_dtype())
+            if after != before:
+                torch.set_default_device(before[0])
+                torch.set_default_dtype(before[1])
+                log.debug("restored torch defaults %s that gs.init changed to %s", before, after)
     return gs

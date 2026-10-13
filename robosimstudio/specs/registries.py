@@ -103,9 +103,9 @@ same workaround for ``granular``).
 
 The head of a chain is the layout itself and is **minted by being declared**;
 every later member must already be registered, so a typo in the tail is refused
-where it is written. A typo in the head mints a layout nothing dispatches to,
-which ``tests/test_layouts.py`` catches by requiring every registered layout to
-reach at least one handler through its chain.
+where it is written. A typo in the head mints a layout nothing dispatches to;
+the way to catch that is to check that every registered layout reaches at
+least one handler through its chain.
 """
 
 

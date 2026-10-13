@@ -113,8 +113,16 @@ class PanelOverlay(Panel):
         checkbox is serviced immediately whatever the gate says: that one is a
         person waiting for something to appear.
         """
-        requests, self.session.overlay_request[:] = list(self.session.overlay_request), []
-        for key, feature, show in requests:
+        # Popped one at a time rather than copied and cleared: a checkbox can
+        # append from viser's thread between a copy and a clear, and that
+        # request would be lost. ``list.pop`` is atomic, and this is the one
+        # thread that takes from the list.
+        requests = self.session.overlay_request
+        while requests:
+            try:
+                key, feature, show = requests.pop(0)
+            except IndexError:
+                break
             if show:
                 self._show(key, feature)
             else:

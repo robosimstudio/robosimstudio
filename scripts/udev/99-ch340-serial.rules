@@ -1,15 +1,15 @@
 # Any WCH CH340/CH341 USB-serial adapter (idVendor 1a86, idProduct 55d3) gets a
 # stable /dev/ch340-<serial> symlink, keyed by the adapter's own serial number
-# rather than a role like "left"/"right" -- see README.md's Leader Arm section
+# rather than a role like "left"/"right" -- see examples/06_teleop/README.md's "The udev rule" section
 # for why: the same adapter should resolve to the same device path regardless
 # of which desk or which arm it is plugged into today, and a calibration file
-# keyed by that same serial (see tools/calibrate_leader_arms.py and
-# robosimstudio/robot/teleop/lerobot_controller.py's load_calibration)
+# keyed by that same serial (see scripts/calibrate_leader_arms.py and
+# robosimstudio/robots/teleop/lerobot_controller.py's load_calibration)
 # stays correct no matter how the roles get reassigned. One rule, not one per
 # unit -- a new adapter just works.
 #
 # Install:
-#   sudo cp tools/udev/99-ch340-serial.rules /etc/udev/rules.d/
+#   sudo cp scripts/udev/99-ch340-serial.rules /etc/udev/rules.d/
 #   sudo udevadm control --reload-rules && sudo udevadm trigger
 #
 # Find a plugged-in adapter's serial with:

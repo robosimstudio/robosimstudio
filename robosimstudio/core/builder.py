@@ -164,11 +164,12 @@ def set_body_attribute(builder: newton.ModelBuilder, key: str, value: Any, bodie
     attr = builder.custom_attributes.get(key)
     if attr is None:
         return 0
+    bodies = [int(body) for body in bodies]  # once: an iterator would be spent by the count
     values = dict(attr.values) if isinstance(attr.values, dict) else {}
     for body in bodies:
-        values[int(body)] = value
+        values[body] = value
     attr.values = values
-    return len(list(bodies))
+    return len(bodies)
 
 
 def assert_even_substeps(substeps: int) -> int:

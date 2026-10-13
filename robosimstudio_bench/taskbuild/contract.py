@@ -1,12 +1,10 @@
 # SPDX-License-Identifier: Apache-2.0
 """What a task directory may hold and what it may name: the layout contract, as functions.
 
-``docs/task_layout.md`` states the contract in prose and ``tests/test_layout.py``
-and ``tests/test_content_seam.py`` hold the checkout to it. The rules themselves
-live here, once, so a tool can certify a directory that is not in this checkout
--- somebody else's collection -- with exactly the checks the tests apply to ours.
+The rules live here, once, so a tool can certify a directory that is not in this
+checkout -- somebody else's collection -- with the same checks applied to ours.
 Every function returns plain problems as strings, empty when the directory is
-clean; the tests assert emptiness, the certifier turns them into findings.
+clean; a caller asserts emptiness or turns them into findings.
 """
 
 from __future__ import annotations

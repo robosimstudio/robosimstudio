@@ -215,8 +215,8 @@ class IntentHandle:
         """What the motion ended with, for a caller that reads one.
 
         A servo completes with the outcome dict the single-world servo returns
-        (``outcome`` / ``remaining_distance`` / ``steps``); a joint or hand move
-        with ``None``. Carried on the handle rather than raised, because "did
+        (``outcome`` / ``remaining_distance`` / ``steps``); a joint move with
+        whether it converged; a hand move with ``None``. Carried on the handle rather than raised, because "did
         not arrive" is a *result* the connector routes on, not an error."""
         self.superseded = False
         self.steps = 0

@@ -127,7 +127,7 @@ Recorded from the page in a browser.
 | `page` | `None` | A function called with the session, to add your own controls. |
 | `render_every` | `1` | Draw one frame per this many control steps. 4 trades frame rate for step rate. |
 | `port` | `8080` | The port to serve on. |
-| `share` | `True` | Ask for a public URL as well. |
+| `share` | `False` | Ask viser for a public URL as well. |
 | `handles` | `2` | How many things may be held at once, per kind. |
 | `speed` | `"1x"` | Playback rate at start: `"1x"`, `"0.5x"`, `"0.25x"`, `"0.1x"` or `"max"`. |
 | `dark` | `False` | Dark page and canvas. |
@@ -194,7 +194,9 @@ dependency group, 1.8 GB from NVIDIA's index). On a machine that cannot use it,
 leave it out with `UV_NO_GROUP=rtx`. With pip it is the `[rtx]` extra:
 
 ```bash
-pip install "robosimstudio[rtx]" --extra-index-url https://pypi.nvidia.com
+uv sync --extra rtx                     # from a checkout
+pip install "robosimstudio[rtx] @ git+https://github.com/robosimstudio/robosimstudio" \
+    --extra-index-url https://pypi.nvidia.com   # into another environment
 ```
 
 Headless, with no page open:
@@ -206,10 +208,12 @@ sim.record("clip", steps=120, camera=camera)   # clip/<camera>.mp4
 
 ## Remote machines
 
-`rss.view` asks viser for a public URL by default, so a page on a GPU box opens
-from a laptop. The request blocks until the tunnel answers. `share=False` gives
-a local page, which `ssh -L 8080:localhost:8080 <box>` reaches. Pick the GPU
-with `CUDA_VISIBLE_DEVICES`, one page per process.
+The page listens on all network interfaces (viser's default; Newton's viewer
+has no option to bind one), so anyone who can reach the port can drive the
+scene. On a shared network keep the port behind a firewall and reach it with
+`ssh -L 8080:localhost:8080 <box>`. `share=True` also asks viser for a public
+URL, which opens from anywhere; the request blocks until the tunnel answers.
+Pick the GPU with `CUDA_VISIBLE_DEVICES`, one page per process.
 
 ## The whole page from code
 

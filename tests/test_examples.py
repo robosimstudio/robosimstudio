@@ -28,13 +28,11 @@ in ``examples/10_rope/`` among them. Four older flat rope scripts remain under
 script's -- it runs, it ships two arms, the page can take hold of it, it parses
 no command line -- they are held to it by the same loop, and the loop covers the
 numbered scripts alone in a tree that does not have them. What only those older
-scripts claim is ``tests/test_examples_rope.py``.
+scripts claim is tested beside them, in a tree that has them.
 
-``scripts/studio.py`` -- the studio's launcher, once ``examples/studio.py`` -- is
-not checked here: it takes a registered task id and about fifty flags, which
-makes it a tool rather than an example, and it is
-``tests/test_studio_launcher.py``. A tree that leaves the rope or the launcher
-out leaves that module out with it.
+``scripts/studio.py`` -- the studio's launcher, in a tree that has it -- is not
+checked here: it takes a registered task id and about fifty flags, which makes
+it a tool rather than an example.
 """
 
 from __future__ import annotations
@@ -490,26 +488,27 @@ class TestEachKindsFolderStandsAlone(unittest.TestCase):
 class TestTheDoorsDifferOnPurpose(unittest.TestCase):
     """``rss.view`` and ``StudioConfig`` disagree on two defaults, both deliberately.
 
-    ``view`` is the door a *person* opens by hand, usually onto a machine that
-    has the GPUs and not the browser -- so it asks for a share URL, and it shows
-    the drive selection rather than the whole studio. A test or a batch job
-    builds the config itself: it gets every panel and, importantly, no tunnel.
-    A share request is a network round trip to an experimental external service
-    that blocks until it answers, which is not a thing a test suite should do
-    once per session, let alone once per test.
+    ``view`` is the door a *person* opens by hand, so it shows the drive
+    selection and draws every step. A test or a batch job builds the config
+    itself: it gets every panel and keeps its step budget. Neither door shares:
+    a share URL puts the page on the internet, so it is asked for, never assumed.
     """
 
-    def test_view_shares_and_a_bare_config_does_not(self) -> None:
+    def test_no_door_shares_by_default(self) -> None:
         import inspect
 
         import robosimstudio as rss
+        from robosimstudio.sim.draw import _UNSET
         from robosimstudio_studio.session import StudioConfig
 
-        self.assertTrue(inspect.signature(rss.view).parameters["share"].default)
         self.assertFalse(StudioConfig().share, "a config built directly must not open a tunnel")
+        self.assertIs(_UNSET, inspect.signature(rss.view).parameters["share"].default)
+        for door in (rss.viewer, rss.draw):
+            with self.subTest(door=door.__name__):
+                self.assertIs(False, inspect.signature(door).parameters["share"].default)
 
     def test_view_draws_every_step_and_a_bare_config_does_not(self) -> None:
-        """The third split default, and the one with a number behind it.
+        """The split default with a number behind it.
 
         The browser is redrawn once per ``render_every`` control steps, so on a
         scene that steps slowly the frame rate is the *step* rate divided by it.
@@ -518,23 +517,12 @@ class TestTheDoorsDifferOnPurpose(unittest.TestCase):
         throughput it costs (33.3 steps/s to 26.4) is what a benchmark keeps and
         a page being watched does not need.
         """
-        import inspect
-
-        import robosimstudio as rss
+        from robosimstudio.sim.draw import _VIEW_DEFAULTS
         from robosimstudio_studio.session import StudioConfig
 
-        self.assertEqual(1, inspect.signature(rss.view).parameters["render_every"].default)
+        self.assertEqual({"panels": "drive", "render_every": 1}, _VIEW_DEFAULTS)
         self.assertEqual(4, StudioConfig().render_every, "the measured page must keep its step budget")
-
-    def test_the_thin_doors_share_too(self) -> None:
-        """A remote box is a remote box whichever page you opened."""
-        import inspect
-
-        import robosimstudio as rss
-
-        for door in (rss.view, rss.viewer, rss.draw):
-            with self.subTest(door=door.__name__):
-                self.assertTrue(inspect.signature(door).parameters["share"].default)
+        self.assertEqual("all", StudioConfig().panels)
 
 
 class TestTheScriptSeam(unittest.TestCase):

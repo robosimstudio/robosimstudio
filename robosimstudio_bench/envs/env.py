@@ -12,7 +12,7 @@ does not override :meth:`~robosimstudio.sim.Sim.read`,
 :meth:`~robosimstudio.sim.Sim.make_context`, or any observation provider except
 the instruction, because there is nothing task-shaped left to put in them: an
 arm's IK does not know what it is reaching for and a camera does not know what it
-is photographing. ``tests/test_env_is_a_sim.py`` holds that to it.
+is photographing.
 
 Two behaviours are worth reading before using it:
 
@@ -46,7 +46,7 @@ from __future__ import annotations
 
 from collections.abc import Sequence
 from pathlib import Path
-from typing import Any
+from typing import TYPE_CHECKING, Any
 
 import numpy as np
 
@@ -54,20 +54,26 @@ from robosimstudio.core.env import beats
 from robosimstudio.scene import CompiledScene, compile_scene
 from robosimstudio.sim import Sim
 from robosimstudio.specs import Episode, TaskSpec, replace
-from robosimstudio_bench.goals.context import EvalResult, evaluator_for
+from robosimstudio_bench.goals.context import EvalResult, diverged_result, evaluator_for, finite_reward
 from robosimstudio_bench.taskbuild.episodes import make_episode
 from robosimstudio_bench.taskbuild.registry import get_task
 
+if TYPE_CHECKING:
+    from robosimstudio.scene.state import WorldState
+
 __all__ = ["Env", "make_env"]
 
-REPRO_EXTRA = "repro export needs the [repro] extra: pip install robosimstudio[repro]"
+REPRO_EXTRA = (
+    "repro export is not included in this release: it needs the robosimstudio_repro package, "
+    "which is not distributed with robosimstudio"
+)
 
 
 def _repro(module: str):
-    """``robosimstudio_repro.<module>``, or ``None`` when the ``[repro]`` extra is absent.
+    """``robosimstudio_repro.<module>``, or ``None`` when that package is absent.
 
-    The replay bundle is a second top-level package of the distribution, not a
-    layer of the library, and a core install may lack it. Only *its* absence is
+    The replay bundle is a separate top-level package, not a layer of the
+    library, and this release does not ship it. Only *its* absence is
     answered with ``None``: an ``ImportError`` raised from inside the package is
     a bug in it and stays loud.
     """
@@ -215,7 +221,7 @@ class Env(Sim):
         per-step cost rides on readbacks evaluation already pays for; a hot
         loop that begrudges even that sets ``env.repro_tape.enabled = False``.
 
-        ``None`` when the ``[repro]`` extra is absent: the env then records
+        ``None`` when ``robosimstudio_repro`` is absent: the env then records
         nothing, and every reader of ``repro_tape`` is guarded for it.
         """
         tape_module = _repro("tape")
@@ -314,10 +320,8 @@ class Env(Sim):
     def export_repro(self, out_dir: str | Path, **kwargs: Any) -> Path:
         """Write this run as a standalone repro bundle; return the bundle directory.
 
-        The bundle reruns with nothing but newton installed — see
-        :func:`robosimstudio_repro.export.export_repro` for the arguments and
-        for what the bundle refuses to carry. Raises ``RuntimeError`` naming
-        the ``[repro]`` extra when that package is not installed.
+        Needs the separate ``robosimstudio_repro`` package, which this release
+        does not include; without it this raises ``RuntimeError`` saying so.
         """
         export_module = _repro("export")
         if export_module is None:
@@ -432,11 +436,11 @@ class Env(Sim):
             # NaN rewards into episode rows; ending the episode with its own
             # close_kind says what actually happened and spends no more budget
             # stepping a broken world.
-            self.last_result = EvalResult(success=False, reward=0.0, metrics={"diverged": True})
+            self.last_result = diverged_result()
             terminated, truncated, info = super().evaluate()
-            info["success"] = False
-            info["reward"] = 0.0
-            info["metrics"] = {"diverged": True}
+            info["success"] = self.last_result.success
+            info["reward"] = self.last_result.reward
+            info["metrics"] = dict(self.last_result.metrics)
             info["close_kind"] = "diverged"
             return True, truncated, info
         result = self.evaluator(ctx)
@@ -444,7 +448,7 @@ class Env(Sim):
 
         terminated, truncated, info = super().evaluate()
         info["success"] = bool(result.success)
-        info["reward"] = float(result.reward)
+        info["reward"] = finite_reward(result.reward)
         info["metrics"] = result.metrics
         if result.success and self.task.terminate_on_success and beats("success", info.get("close_kind")):
             # **Success beats truncation, and loses to everything else.** On the

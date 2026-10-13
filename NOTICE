@@ -12,14 +12,27 @@ assets/embodiments/panda/
     Copyright (c) 2022 Stanford Vision and Learning Lab and UT Robot
     Perception and Learning Lab. robosuite's Panda meshes derive from
     Franka's franka_description (Apache License 2.0). panda_kinematics.urdf
-    derives from the panda_description in example-robot-data, itself taken
-    from franka_description.
+    derives from the panda_description in example-robot-data
+    (https://github.com/Gepetto/example-robot-data), itself taken from
+    franka_description. example-robot-data is BSD 3-Clause License,
+    Copyright (C) 2018-2020 LAAS-CNRS, University of Edinburgh, INRIA
+    (assets/embodiments/panda/LICENSE.example-robot-data).
 
 assets/embodiments/yam/i2rt_yam/
 assets/embodiments/yam_i2rt/
 assets/embodiments/yam_i2rt_arena/
     i2rt YAM arm and linear_4310 gripper (https://github.com/i2rt-robotics/i2rt).
-    MIT License. Copyright (c) i2rt robotics.
+    MIT License. Copyright (c) I2RT Robotics.
+
+assets/embodiments/yam/yam_bimanual_arms.xml
+assets/embodiments/yam/yam_bimanual_arm.urdf
+assets/embodiments/yam_i2rt_arena/yam_i2rt_arena_narrow_arms.xml
+    Derived from the YAM stage of Isaac Lab Arena
+    (https://github.com/isaac-sim/IsaacLab-Arena): the bimanual YAM arms and,
+    in the arena-handed file, their hand, modified as recorded in
+    assets/PROVENANCE.md. Apache License 2.0 (assets/embodiments/yam/LICENSE).
+    Copyright 2025 NVIDIA Corporation and the Isaac Lab Arena Project
+    Developers. The YAM geometry in them is i2rt's, as above.
 
 assets/embodiments/robotiq_2f85/
     Robotiq 2F-85 gripper, from MuJoCo Menagerie

@@ -12,6 +12,8 @@ One process, one browser tab, one file. `./ctl up` opens the studio on
 - The tab never reloads. The camera stays where you left it.
 - A file that does not build leaves the previous scene up. `./ctl status`
   prints the traceback.
+- A save also re-imports the helper modules beside `scene.py` (a module or a
+  package in its directory), so an edit to a helper lands with the next save.
 - `./ctl` is the command line onto the same process: status, snapshots,
   stepping, and Python against the live scene.
 
@@ -23,7 +25,7 @@ each edit land on the page.
 
 ```bash
 cd examples/live
-./ctl up                    # start the server and print its URL
+./ctl up                    # start the server and print its URL (8080, or the next free port)
 ./ctl up --share            # the same, plus a public URL
 ./ctl quit                  # stop it
 ```
@@ -35,8 +37,10 @@ claude --permission-mode acceptEdits        # or: codex -a on-request -s workspa
 ```
 
 On a remote GPU box, pick a card with `CUDA_VISIBLE_DEVICES`, then use
-`--share` or an SSH tunnel (`ssh -L 8080:localhost:8080 <box>`). The agent reads
-the procedure from `AGENTS.md` at the repository root.
+`--share` or an SSH tunnel (`ssh -L 8080:localhost:8080 <box>`). The page
+listens on all interfaces (`0.0.0.0`, viser's default), so on a shared network
+firewall its port or use the tunnel. The agent reads the procedure from `AGENTS.md` at
+the repository root.
 
 ## The contract for `scene.py`
 
@@ -65,7 +69,7 @@ scene.add(rss.robot("yam_i2rt"))  # a scene needs something that moves before it
 
 | Command | Does |
 | --- | --- |
-| `up [--port N] [--scene F] [--share]` | Start a server on the file and wait for the page. |
+| `up [--port N] [--scene F] [--share]` | Start a server on the file and wait for the page; it prints the port actually bound (the next one up when N is busy). With a page already up it names that page, and refuses when that page is on another scene file or lacks a requested `--share`. |
 | `status` | What is loaded, the names in it and where they are, the last error, the page's address. |
 | `reload` | Rebuild now. Saving the file does this too. |
 | `snapshot [--camera N] [--beside REF] [--eye x,y,z --look-at x,y,z] [--size WxH] [--note TEXT]` | A path-traced PNG of the current state, with a reference picture beside it. |
@@ -76,9 +80,10 @@ scene.add(rss.robot("yam_i2rt"))  # a scene needs something that moves before it
 | `log [--last N]` | Every snapshot, compare and check so far, with its score and the `scene.py` it measured. |
 | `play [NAME] [--record TAKE --camera N]` | Play a routine the scene file binds, as its button on the page does. |
 | `show PATH [--label TEXT]`, `show --clear` | A picture on the page's board for the person watching; `compare` puts its pair, its look sheet and a take's strip there itself. |
-| `run N` | Step N control steps, then hold. |
-| `pause`, `resume`, `reset` | As named. |
-| `eval "CODE" [--record NAME --every K --camera N]` | Python on the simulator's thread, with `sim`, `scene`, `np`, `rss` and every name `scene.py` bound. A generator plays on the page; `--record` films it. |
+| `run N` | Step N control steps, then hold. Refused while a routine plays; ends with an error if the scene is rebuilt or reset during the run. |
+| `pause`, `resume` | As named. |
+| `reset` | Reset the scene. It also stops a playing routine and finishes its take; Pause is left as it was. |
+| `eval "CODE" [--record NAME --every K --camera N]` | Python on the simulator's thread, in `scene.py`'s own namespace: `sim`, `scene`, `np`, `rss` and every name the file bound. What it binds, routines and `play` see until the next save starts the namespace over. A generator plays on the page; `--record` films it. |
 | `catalog [robots\|grippers\|cells\|assets]` | The names the registries know. |
 | `ref show PATH`, `ref hide` | A picture in the page's sidebar. |
 | `quit` | Stop the server. |
@@ -124,7 +129,10 @@ is played one `next()` per loop pass, so a routine that steps the sim between
 ```
 
 Every rebuild lands running: drag a thing, drive an arm, tick **Pause**.
-`up --hold` lands every rebuild paused instead.
+`up --hold` lands every rebuild paused instead. While a routine plays (from
+`eval`, `play` or a **Run** button) it steps the scene itself, so the page's own
+stepping is held whatever **Pause** says, and resumes as it was when the
+routine ends.
 
 ## Notes
 
@@ -329,8 +337,8 @@ What `at` places:
 
 ### Time
 
-- `sim.run(n)` advances `n` control steps. Under `rss.GENERIC
- ` a control step is 1/60 s, with 16 solver substeps.
+- `sim.run(n)` advances `n` control steps. Under `rss.GENERIC` a control step
+  is 1/60 s, with 16 solver substeps.
 - `sim.time` is the simulated time in seconds since the build.
 - `sim.sync()` waits for the GPU. Call it before reading.
 

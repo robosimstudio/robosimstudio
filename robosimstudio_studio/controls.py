@@ -25,7 +25,7 @@ import json
 import time
 from collections import deque
 from dataclasses import replace
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any
 
@@ -73,8 +73,8 @@ class PanelRecord(Panel):
     the loop by definition -- so it is the one collection path that belongs in
     the page rather than in ``scripts/bench_run.py``. What it writes is an ordinary run
     directory (``0000/``, ``0001/``, ``episode_results.jsonl``, ``run_meta.json``),
-    so ``render_offline`` re-renders a benchmark take and ``export_lerobot``
-    converts one with nothing taught about where it came from.
+    so anything that reads a benchmark run directory reads a take with nothing
+    taught about where it came from.
 
     **A take is a take on whatever the page is showing.** Start and Stop
     bracket one; the next Start opens the next number, and a session reopening
@@ -86,9 +86,9 @@ class PanelRecord(Panel):
     ``Episode(0, 0)`` the compiler gave it, which is all the recorder needs.
 
     **A bare scene's take is valid and not re-renderable.** It is the same
-    ``steps.npz``/``meta.json``/``cameras/*.mp4`` a benchmark take is, and
-    ``export_lerobot`` converts it -- but ``render_offline`` rebuilds a scene
-    from a registry task id, and a hand-assembled scene has none. The run's
+    ``steps.npz``/``meta.json``/``cameras/*.mp4`` a benchmark take is -- but
+    re-rendering one means rebuilding its scene from a registry task id, and a
+    hand-assembled scene has none. The run's
     ``run_meta.json`` says so (``provenance.re_renderable``) rather than
     carrying a task name that resolves to nothing.
 
@@ -161,7 +161,7 @@ class PanelRecord(Panel):
         # -- seed, instruction, model key -- is the loaded one's, and stays.
         self.recorder.begin(replace(self.env.episode, episode_id=self.take), self.env)
         self.steps = 0
-        self.started = datetime.now(timezone.utc).isoformat()
+        self.started = datetime.now(UTC).isoformat()
         self.mode = ""
         self._state.value = f"take {self.take:04d}: recording"
         self.session.status = f"recording take {self.take:04d}"
@@ -242,8 +242,8 @@ class PanelRecord(Panel):
 
         Per take rather than at close, because a session is ended by closing a
         browser tab or a Ctrl-C as often as by anything orderly, and a run
-        directory without ``run_meta.json`` is one ``render_offline`` refuses --
-        it is where the task name lives.
+        directory without ``run_meta.json`` cannot be re-rendered -- it is where
+        the task name lives.
         """
         rows = self.store.results()
         request = self.env.request
@@ -252,16 +252,14 @@ class PanelRecord(Panel):
         provenance: dict[str, Any] = {
             "source": "studio",
             "control_hz": request.physics.control_hz,
-            # ``render_offline`` rebuilds the scene from ``task`` through the
+            # A re-render rebuilds the scene from ``task`` through the
             # registry. A scene assembled by hand has no registry entry, so the
             # run says it cannot be re-rendered rather than naming a task that
             # resolves to nothing.
             "re_renderable": benchmarked,
         }
         if not benchmarked:
-            provenance["note"] = (
-                "recorded from a scene assembled by hand; render_offline cannot rebuild it from a task id"
-            )
+            provenance["note"] = "recorded from a scene assembled by hand; it cannot be rebuilt from a task id"
         self.store.write_run_meta(
             RunMeta(
                 run_name=self.root.name,
@@ -272,7 +270,7 @@ class PanelRecord(Panel):
                 renderer=self.env.renderer_name,
                 device=str(self.env.model.device),
                 started=self.started,
-                finished=datetime.now(timezone.utc).isoformat(),
+                finished=datetime.now(UTC).isoformat(),
                 episodes=len(rows),
                 successes=sum(1 for row in rows if row.get("success")),
                 provenance=provenance,
@@ -302,8 +300,8 @@ class PanelVideo(Panel):
     Rendering is not something this page does. It is something it *defers*:
     capturing is copying ``body_q`` and ``particle_q`` into a ring buffer, which
     costs microseconds, and the render happens on the button, through
-    :class:`~robosimstudio.core.render.offline.OfflineRenderer` -- the same
-    replay ``scripts/render_offline.py`` runs, with no solver re-run. So the video
+    :class:`~robosimstudio.core.render.offline.OfflineRenderer` -- a replay of
+    the captured state, with no solver re-run. So the video
     is the trajectory you watched, photographed afterwards, and deciding to film
     the last thirty seconds is a decision you make *after* seeing them.
 

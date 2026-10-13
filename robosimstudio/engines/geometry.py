@@ -147,6 +147,9 @@ class ShapeGeometry:
             mesh = trimesh.creation.cylinder(radius=float(scale[0]), height=2.0 * float(scale[1]), sections=24)
         elif self.kind == "cone":
             mesh = trimesh.creation.cone(radius=float(scale[0]), height=2.0 * float(scale[1]), sections=24)
+            # trimesh puts the base at z=0 and the apex at 2h; Newton's cone is
+            # centred, base at -h and apex at +h (``add_shape_cone``).
+            mesh.apply_translation((0.0, 0.0, -float(scale[1])))
         elif self.kind == "sphere":
             mesh = trimesh.creation.icosphere(radius=float(scale[0]), subdivisions=2)
         elif self.kind == "plane":

@@ -97,9 +97,9 @@ class TaskRequirements:
         min_gripper_span: The widest thing that must be grasped [m]. 0 states
             nothing, which is right for a task whose graspables are not measured.
         monolithic: The task's scene *and* its robot arrive in one import, so
-            neither axis can be swapped until a binding names the robot-stripped
-            variant ``scripts/split_*.py`` writes beside it. True for the two
-            reproduction exports. Note this blocks both axes, not just the
+            neither axis can be swapped until a binding names a robot-stripped
+            variant of the import. True for a task imported from one exported
+            scene file. Note this blocks both axes, not just the
             scene: pairing such a task with another embodiment would import that
             robot *alongside* the one already inside the arena.
     """
@@ -656,13 +656,12 @@ class TaskSpec:
     def with_pairing(self, scene: str = "", embodiment: str = "", gripper: str = "") -> TaskSpec:
         """This task pinned to a pairing, declaring one if it did not.
 
-        For the callers that *explore* rather than measure -- ``scripts/matrix.py``
-        compiling the whole admissible product, ``scripts/measure_gripper.py``
-        reading a hand that no task has been welded one onto yet, and the
-        studio's task menu, whose ``(untried)`` options are exactly these
-        combinations offered for a click. All of them need to build a
-        combination nobody has claimed, and the first two were writing the same
-        four lines to do it.
+        For the callers that *explore* rather than measure -- compiling the whole
+        admissible product (:mod:`robosimstudio_bench.taskbuild.matrix`),
+        measuring a hand that no task has been welded onto yet, and the studio's
+        task menu, whose ``(untried)`` options are exactly these combinations
+        offered for a click. All of them need to build a combination nobody has
+        claimed.
 
         This is deliberately not what ``Env`` does. ``Env`` refuses an undeclared
         pairing, because a robot silently mounted at a pose no one chose builds a

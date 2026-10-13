@@ -57,20 +57,24 @@ TIMEOUTS = {
     "reload": 330.0,
     "snapshot": 120.0,
     "eval": 300.0,
+    "play": 300.0,
     "catalog": 120.0,
     "compare": 600.0,
     "check": 600.0,
     "ref": 600.0,
 }
-"""Seconds to wait for a reply, per command; :data:`DEFAULT_TIMEOUT` for the rest."""
+"""Seconds to wait for a reply, per command; :data:`DEFAULT_TIMEOUT` for the rest.
+
+``play`` waits as long as ``eval``: with ``--record`` both render the take's
+first frame before they answer."""
 DEFAULT_TIMEOUT = 30.0
 START_HINT = "python -m robosimstudio_real2sim_agent up    (from the directory holding scene.py)"
 SERVE_FLAGS = ("hold", "no_watch", "share", "dark", "hide_scenery", "camera_view")
 """``up``'s switches that are the server's, spelled as argparse attributes."""
 CATALOGS = ("robots", "grippers", "cells", "assets")
+"""What ``catalog`` can list; ``assets`` runs the registries' discovery, which takes seconds."""
 VERBOSE = ("readings", "anchors", "entries", "checks", "motion", "objects", "drift_mm")
 """Reply fields printed only under ``--json``: the raw numbers behind a ``report``."""
-"""What ``catalog`` can list; ``assets`` runs the registries' discovery, which takes seconds."""
 
 
 class ServerDied(RuntimeError):
@@ -399,14 +403,24 @@ def build_request(args: argparse.Namespace, parser: argparse.ArgumentParser) -> 
 
 
 def wait_for_steps(sock: Path, reply: dict, steps: int) -> dict:
-    """After ``run N``: poll until the page has stepped N times or holds again."""
-    target = int(reply["step"]) + int(steps)
+    """After ``run N``: poll until the page has stepped N times or holds again.
+
+    A rebuild (a save) or a reset under the run ends it: the step count starts
+    over, so the target would never be reached, and the reply says what
+    happened instead of waiting out the deadline.
+    """
+    start = int(reply["step"])
+    target = start + int(steps)
     deadline = time.time() + 30.0 + steps / 5.0
     while time.time() < deadline:
         time.sleep(0.2)
         status = request(sock, {"cmd": "status"}, DEFAULT_TIMEOUT)
         if not status.get("ok"):
             break
+        if status.get("generation", reply.get("generation")) != reply.get("generation"):
+            return {"ok": False, "error": "the scene was rebuilt during the run; the run ended", "step": status["step"]}
+        if status["step"] < start:
+            return {"ok": False, "error": "the scene was reset during the run; the run ended", "step": status["step"]}
         if status["step"] >= target or (status["paused"] and status["playing"] == 0):
             return {
                 "ok": True,
@@ -471,6 +485,23 @@ def wait_ready(log_path: Path, alive: Callable[[], bool], deadline: float, poll:
         time.sleep(poll)
 
 
+def _differs_from_running(args: argparse.Namespace, status: dict) -> str:
+    """Why the page already up is not the one ``up`` was asked for, or ``""``.
+
+    ``up`` on a running page is a no-op that names it -- unless the scene file
+    or ``--share`` asked for differs, which a no-op would silently ignore.
+    """
+    running = status.get("file", "")
+    if running and Path(running).resolve() != Path(args.scene).resolve():
+        return (
+            f"a page is already up on {running}, not {Path(args.scene).resolve()}; "
+            "`quit` it first, or pick another --run-dir"
+        )
+    if args.share and not status.get("share_url"):
+        return "a page is already up with no public URL; `quit` it and run `up --share` again"
+    return ""
+
+
 def cmd_up(args: argparse.Namespace, sock: Path) -> int:
     scene = Path(args.scene)
     if not scene.is_file():
@@ -493,6 +524,10 @@ def cmd_up(args: argparse.Namespace, sock: Path) -> int:
         )
         return 1
     else:
+        conflict = _differs_from_running(args, status)
+        if conflict:
+            print(f"ctl: {conflict}", file=sys.stderr)
+            return 1
         reply = {
             "ok": True,
             "already": True,
@@ -503,6 +538,7 @@ def cmd_up(args: argparse.Namespace, sock: Path) -> int:
         }
         return show(reply, args.json)
     run_dir = Path(args.run_dir)
+    run_dir.mkdir(parents=True, exist_ok=True)  # before anything is written into it
     log_path = Path(args.log) if args.log else run_dir / "serve.log"
     proc = spawn_server(serve_argv(args, sock), log_path)
     (run_dir / "serve.pid").write_text(f"{proc.pid}\n")

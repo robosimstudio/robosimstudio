@@ -5,7 +5,7 @@ Nothing here is collected -- ``unittest`` discovers ``test*.py``, and these are
 deliberately named otherwise. What lives here is the machinery several test
 modules would otherwise each grow their own copy of, which is a real cost and
 not a hypothetical one: ``_teleport`` existed twice in this repo, in
-``tests/test_scenes.py`` and in a bench under ``scripts/``, and the two copies had
+a physics test module and in a bench under ``scripts/``, and the two copies had
 already drifted apart in their docstrings before the shared version landed.
 
 Three families, and they correspond to the three ways a measure can be tested

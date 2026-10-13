@@ -236,7 +236,7 @@ class TestConnecting(_Instant):
         servos, _ = self._servos(connect=no_driver)
         with self.assertRaises(LeaderUnavailable) as caught:
             servos.connect()
-        self.assertIn("robosimstudio[lerobot-feetech]", str(caught.exception))
+        self.assertIn("uv sync --extra lerobot-feetech", str(caught.exception))
 
     def test_a_port_that_will_not_open_is_one_sentence_naming_the_port(self):
         def dead(port, arms):

@@ -81,8 +81,10 @@ class CosimBridge(Protocol):
     def restore_rest(self) -> None:
         """Return the engine to the captured rest.
 
-        Called from the solver's ``reset``, *after* the entities have rewritten
-        the Newton arrays, so the engine is put back behind them. Must also
+        Called from the solver's ``reset``, which ``Sim.reset_scene`` runs
+        *before* the entities' own resets: the engine is returned to its rest
+        first, so an entity that places this episode's state (a deformable drawn
+        somewhere new) is not restored straight back to the nominal. Must also
         arrange for the next tick to teleport its mirrors rather than sweep to
         them, and zero any harvested wrench.
         """

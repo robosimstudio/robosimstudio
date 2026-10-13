@@ -20,7 +20,7 @@ against. And :mod:`~robosimstudio.scene.builtin.benches` is a flat table at thre
 heights, for a task with no opinion about the room it stands in.
 
 The roster is short on purpose, and a fourth entry should be argued for rather
-than added -- ``tests/test_layout.py`` pins it, so it is a deliberate edit.
+than added: it is a deliberate edit.
 """
 
 from __future__ import annotations

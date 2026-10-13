@@ -11,7 +11,7 @@ not arrive with a second copy.
 The rig owns no engine handle and calls no engine method. An adapter drives it:
 
     targets = rig.body_poses(state)
-    for _sub, poses in rig.substeps(mirrors, targets):
+    for _sub, poses in rig.substeps_of(mirrors, targets):
         for mirror, pose in poses:
             ...engine: put ``mirror`` at ``pose``, and zero its velocity if
                ``rig.teleport``...
@@ -19,7 +19,7 @@ The rig owns no engine handle and calls no engine method. An adapter drives it:
     rig.commit(targets)
     ...engine: harvest...
     for actor in actors:
-        rig.write_particles(state, actor.start, actor.count, positions, dt)
+        actor.prev = rig.write_particles(state, actor.start, actor.count, positions, dt, actor.prev)
 
 **Why the mirror drive is interpolated rather than jumped.** A control step is
 16.7 ms at 60 Hz and a hand can cross several millimetres in one; a mirror

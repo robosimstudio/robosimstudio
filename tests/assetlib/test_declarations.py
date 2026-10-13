@@ -104,6 +104,31 @@ class TestTheShippedAssets(unittest.TestCase):
             with self.subTest(asset=name):
                 self.assertIsInstance(json.dumps(asset_to_dict(get_asset(name))), str)
 
+    @needs_content_assets
+    def test_the_catalog_names_no_machine_path(self) -> None:
+        """Files resolved beside their declaration load absolute; the catalog lists them relative.
+
+        A catalog is pasted into an LLM prompt, and an absolute path there is the
+        author's home directory.
+        """
+        from pathlib import Path
+
+        for name in list_assets():
+            for key, path in asset_to_dict(get_asset(name)).get("files", {}).items():
+                with self.subTest(asset=name, file=key):
+                    self.assertFalse(Path(path).is_absolute(), path)
+
+    def test_a_file_beside_its_declaration_is_listed_relative_to_it(self) -> None:
+        from types import SimpleNamespace
+
+        from robosimstudio.assetlib.record import _portable_path
+
+        record = SimpleNamespace(home="/home/someone/tasks/mug")
+        self.assertEqual("meshes/mug.obj", _portable_path(record, "/home/someone/tasks/mug/meshes/mug.obj"))
+        self.assertEqual("objects/mug.obj", _portable_path(record, "objects/mug.obj"))
+        self.assertEqual("/elsewhere/mug.obj", _portable_path(record, "/elsewhere/mug.obj"))
+        self.assertEqual("/x/mug.obj", _portable_path(SimpleNamespace(home=None), "/x/mug.obj"))
+
     def test_the_shipped_kinds_are_the_declared_ones(self) -> None:
         """``KIND_NAMES`` is the deliberate list; the registry is what happened.
 

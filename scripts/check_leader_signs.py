@@ -47,7 +47,11 @@ from robosimstudio.robots.teleop.lerobot_controller import (
 def main(argv: list[str] | None = None) -> int:
     ap = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     ap.add_argument("--leader", required=True, help="<arm>:<port>, e.g. right:/dev/ch340-<serial>")
-    ap.add_argument("--calibration", default="scripts/calibration/yam_leader.json", help="keyed by adapter serial")
+    ap.add_argument(
+        "--calibration",
+        default="scripts/calibration/local/yam_leader.json",
+        help="keyed by adapter serial; the default is where scripts/calibrate_leader_arms.py writes",
+    )
     ap.add_argument("--rate", type=float, default=10.0, help="refreshes per second")
     args = ap.parse_args(argv)
 

@@ -5,7 +5,8 @@
 
 ## Changelog
 
-See [CHANGELOG.md](./CHANGELOG.md) for a full history of changes.
+See [CHANGELOG.md](https://github.com/google-deepmind/mujoco_menagerie/tree/main/robotiq_2f85/CHANGELOG.md) in MuJoCo Menagerie for a full history of
+changes (not vendored here).
 
 ## Overview
 
@@ -16,9 +17,8 @@ by [Robotiq](https://robotiq.com/). It is derived from the [publicly available
 URDF
 description](https://github.com/ros-industrial/robotiq/tree/kinetic-devel/robotiq_2f_85_gripper_visualization).
 
-<p float="left">
-  <img src="2f85.png" width="400">
-</p>
+A picture of the gripper is [`2f85.png`](https://github.com/google-deepmind/mujoco_menagerie/tree/main/robotiq_2f85/2f85.png) in MuJoCo Menagerie
+(not vendored here).
 
 ## URDF → MJCF derivation steps
 

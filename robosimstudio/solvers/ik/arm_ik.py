@@ -25,6 +25,8 @@ Nothing selects between them from outside: the URDF decides.
 
 from __future__ import annotations
 
+import logging
+import warnings
 from collections.abc import Sequence
 from contextlib import contextmanager
 from typing import Any
@@ -36,6 +38,8 @@ import warp as wp
 
 from robosimstudio.core.math import mat_to_quat, quat_multiply, quat_to_mat, transform_matrix
 from robosimstudio.core.streams import capturing
+
+log = logging.getLogger(__name__)
 
 __all__ = ["ArmIK"]
 
@@ -255,7 +259,7 @@ class ArmIK:
         else:
             self.pos_objective = self.rot_objective = self.limit_objective = None
             self.solver = None
-            print(f"[arm_ik] {self.lm_hostile}; cartesian tracking runs the FD solver instead")
+            log.warning("%s; cartesian tracking runs the FD solver instead", self.lm_hostile)
 
         # Scratch reused every frame. The objectives' setters copy into their
         # existing buffers, so the solve can sit inside a captured graph while
@@ -301,11 +305,19 @@ class ArmIK:
                 self._pyroki = IKSolverPyroki(kinematics)
             except ImportError as exc:
                 reason = f"pyroki is not installed ({exc})"
+            except SyntaxError as exc:
+                # jaxls (pyroki's solver) uses Python 3.12 syntax; on an older
+                # interpreter importing it is a SyntaxError, not an ImportError.
+                reason = f"pyroki's jaxls needs Python 3.12 or newer ({type(exc).__name__}: {exc})"
+                warnings.warn(f"{reason}; this arm is solved by Newton's own IK instead", stacklevel=2)
             except Exception as exc:
                 reason = f"{type(exc).__name__}: {exc}"
         if self._pyroki is None:
             self.solver_name = "newton"
-            print(f"[arm_ik] {reason}; this arm is solved by Newton's own IK")
+            if self.urdf:
+                log.warning("%s; this arm is solved by Newton's own IK", reason)
+            else:
+                log.info("%s; this arm is solved by Newton's own IK", reason)
         else:
             self.solver_name = "pyroki"
         return self._pyroki
@@ -484,7 +496,7 @@ class ArmIK:
                     self._solve_graph = capture.graph
                 except Exception as exc:
                     self._solve_graph = None
-                    print(f"[arm_ik] IK solve capture failed ({type(exc).__name__}: {exc}); running eager")
+                    log.warning("IK solve capture failed (%s: %s); running eager", type(exc).__name__, exc)
         if self._solve_graph is not None:
             wp.capture_launch(self._solve_graph)
         else:
@@ -642,7 +654,7 @@ class ArmIK:
             rot_err = 2.0 * np.arccos(min(1.0, align))
             if pos_err > 1.0e-4 or rot_err > 1.0e-3:
                 self.fk_host_reason = f"walk disagrees with device FK ({pos_err * 1e3:.3f} mm, {rot_err:.5f} rad)"
-                print(f"[arm_ik] host FK fell back: {self.fk_host_reason}")
+                log.warning("host FK fell back: %s", self.fk_host_reason)
                 return None
         return walk
 

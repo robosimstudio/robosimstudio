@@ -37,6 +37,12 @@
     <mesh name="link3" file="link3.stl" />
     <mesh name="link4" file="link4.stl" />
     <mesh name="link5" file="link5.stl" />
+    <mesh file="model2__12.stl" />
+    <mesh file="model2__13.stl" />
+    <mesh file="model2__14.stl" />
+    <mesh file="model2__15.stl" />
+    <mesh file="model2__16.stl" />
+    <mesh file="model2__17.stl" />
     <mesh name="camera_d405" file="d405.stl" />
     <material name="black" rgba="0.30 0.30 0.30 1" />
     <material name="white" rgba="0.9 0.9 0.9 1" />

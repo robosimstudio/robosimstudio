@@ -505,7 +505,9 @@ class CartesianServo:
         # factor on the law's ceiling is the product. ``getattr``: the contract
         # tests build a servo through ``__new__`` without a task behind it.
         scale = speed_scale * float(getattr(self, "base_speed_scale", 1.0))
-        budget = int(max_steps) or MAX_STEPS
+        # Zero or negative is "use the default", not a budget that ends the
+        # move before its first turn.
+        budget = int(max_steps) if int(max_steps) > 0 else MAX_STEPS
         rot_tol = np.radians(ROT_TOLERANCE_DEG)
         pos_tol = POS_TOLERANCE if pos_tolerance is None else float(pos_tolerance)
         # The fleet's solver at one world, or None for the old per-turn backend
@@ -593,6 +595,7 @@ class CartesianServo:
         # did. The budget, the stall window and the returned ``steps`` are
         # simulator steps whatever the host is doing.
         step = 0
+        dist = -1.0  # no measurement yet; a row cannot carry an unbound name or an infinity
         last_seen = None
         waited_since = time.monotonic()
         deadline = waited_since + max(WALL_BUDGET_FLOOR_S, budget * WALL_BUDGET_PER_STEP_S)

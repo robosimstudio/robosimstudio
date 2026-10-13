@@ -417,8 +417,7 @@ class MotionBackendCuRobo:
     def _import():
         """Lazy, so a machine with no cuRobo still imports the toolkit.
 
-        Asserted by ``tests/test_import_direction.py``: nothing under
-        ``robosimstudio/`` may name cuRobo at module scope.
+        Nothing under ``robosimstudio/`` may name cuRobo at module scope.
         """
         try:
             from curobo._src.cost.tool_pose_criteria import ToolPoseCriteria
@@ -2171,8 +2170,8 @@ class MotionBackendCuRobo:
         """The rate the connector will stream this plan at [Hz].
 
         The cell's own ``control_hz``, the way every suite planner in ``tasks/``
-        reads it -- ``tests/test_stream_rate.py`` enforces that a densification
-        rate is the cell's and never a module constant, and a plan resampled
+        reads it -- a densification rate is the cell's and never a module
+        constant, and a plan resampled
         here is a densification. Zero when there is no cell to ask, which leaves
         the plan at cuRobo's own rate rather than at a guessed one.
         """
@@ -2194,8 +2193,8 @@ class MotionBackendCuRobo:
 
         So the buffer is cut at ``interpolated_last_tstep`` first, and *then*
         resampled -- because after the cut the count is the plan's duration at
-        cuRobo's own ``dt``, and streaming that at the cell's rate is the defect
-        ``tests/test_stream_rate.py`` was written for, in a fourth place. At 41
+        cuRobo's own ``dt``, and streaming that at the cell's rate is the
+        stream-rate defect, in a fourth place. At 41
         waypoints of 0.025 s streamed at 60 Hz the move runs 1.46x fast.
 
         Args:

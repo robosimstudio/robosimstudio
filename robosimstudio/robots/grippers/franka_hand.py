@@ -68,7 +68,7 @@ FRANKA_HAND_ROBOSUITE = register_gripper(
             ("gripper0_rightfinger", "gripper0_finger_joint2_tip"),
         ),
         open_axis_signs=(1.0, -1.0),
-        # Measured on a tool-sorting scene with scripts/measure_gripper.py: the
+        # Measured on a tool-sorting scene with a gripper-measurement script: the
         # furthest pad corner sits 9.3 mm past the tool-centre point along the
         # approach axis. Small because gripper0_eef is already the point between
         # the fingertips rather than a flange above them.

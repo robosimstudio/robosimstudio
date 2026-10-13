@@ -40,7 +40,7 @@ from robosimstudio.core.render.video import VideoSet
 from robosimstudio.specs import CaptureSpec, Episode, RecordSpec, TaskSpec
 
 from .capture import CAPTURE_SCHEMA, capture_manifest
-from .store import SCHEMA, EpisodeStore
+from .store import EpisodeStore, episode_row
 
 __all__ = ["EpisodeRecorder"]
 
@@ -126,24 +126,29 @@ class EpisodeRecorder:
             self._particle_subset = self._choose_particles(env)
             if self.record_enabled:
                 self._record_anchors(env)
-            if self.capture_enabled:
-                self._capture_manifest = capture_manifest(env)
-                self._record_capture(env)
-                self._capture_events.append(
-                    {
-                        "schema": CAPTURE_SCHEMA,
-                        "event": "episode_start",
-                        "step": int(env.step_count),
-                        "sim_time": float(env.sim_time),
-                    }
-                )
-                add_observer = getattr(env, "add_step_observer", None)
-                if add_observer is not None:
-                    add_observer(self._capture_step)
-                    self._capture_env = env
-                    self._capture_observed = True
         except Exception as exc:
             self._disable("begin", exc)
+            return
+        if not self.capture_enabled:
+            return
+        try:
+            self._capture_manifest = capture_manifest(env)
+            self._record_capture(env)
+            self._capture_events.append(
+                {
+                    "schema": CAPTURE_SCHEMA,
+                    "event": "episode_start",
+                    "step": int(env.step_count),
+                    "sim_time": float(env.sim_time),
+                }
+            )
+            add_observer = getattr(env, "add_step_observer", None)
+            if add_observer is not None:
+                add_observer(self._capture_step)
+                self._capture_env = env
+                self._capture_observed = True
+        except Exception as exc:
+            self._disable_capture("begin", exc)
 
     def _choose_particles(self, env) -> np.ndarray | None:
         """Which particles to record, subsampling deterministically past the limit.
@@ -190,18 +195,22 @@ class EpisodeRecorder:
         """Record one control step. Reads only what the step already produced."""
         if not self.enabled or self._dir is None:
             return
-        try:
-            if (
-                self.capture_enabled
-                and not self._capture_observed
-                and env.step_count % max(1, self.capture_spec.every) == 0
-            ):
+        # Raw capture runs on its own cadence and its own gate: it is the
+        # canonical tape, so neither the demonstration recorder being off nor
+        # the start-on-motion trigger may thin it. Its failures turn off capture
+        # alone, and ordinary recording carries on.
+        if (
+            self.capture_enabled
+            and not self._capture_observed
+            and env.step_count % max(1, self.capture_spec.every) == 0
+        ):
+            try:
                 self._record_capture(env)
-            # Raw capture runs on its own cadence and its own gate: it is the
-            # canonical tape, so neither the demonstration recorder being off
-            # nor the start-on-motion trigger may thin it.
-            if not self.record_enabled or env.step_count % max(1, self.spec.every):
-                return
+            except Exception as exc:
+                self._disable_capture("capture step", exc)
+        if not self.record_enabled or env.step_count % max(1, self.spec.every):
+            return
+        try:
             if not self._motion_started:
                 # Trigger from the commanded robot target, not measured
                 # proprioception. During perception/model warm-up the controller
@@ -262,9 +271,14 @@ class EpisodeRecorder:
             return True
         if now + 1.0e-9 < self._next_video_sim_time:
             return False
-        # Anchor the next deadline to this emitted frame. This avoids bursts of
-        # duplicate frames if ``every`` skips across more than one deadline.
-        self._next_video_sim_time = now + 1.0 / fps
+        # Advance the deadline on its own grid, not from this frame's time:
+        # anchoring to ``now`` would emit one frame every ceil(hz / fps) steps
+        # (50 Hz into 30 FPS gives 25 FPS, played back 1.2x fast). A step that
+        # skips several deadlines still emits one frame, and the deadline jumps
+        # to the first grid point after it, so there is never a burst.
+        period = 1.0 / fps
+        missed = int(np.floor((now + 1.0e-9 - self._next_video_sim_time) / period)) + 1
+        self._next_video_sim_time += missed * period
         return True
 
     def _capture_step(self, env, action, obs, reward: float, info: dict[str, Any]) -> None:
@@ -277,7 +291,7 @@ class EpisodeRecorder:
         try:
             self._record_capture(env)
         except Exception as exc:
-            self._disable("capture step", exc)
+            self._disable_capture("capture step", exc)
 
     def _record_capture(self, env) -> None:
         """Append one raw state point. No relations or labels are derived."""
@@ -376,17 +390,10 @@ class EpisodeRecorder:
             return row
         try:
             if self.capture_enabled:
-                recorded_steps = [int(v) for v in self._capture.get("step", [])]
-                if not recorded_steps or recorded_steps[-1] != int(env.step_count):
-                    self._record_capture(env)
-                self._capture_events.append(
-                    {
-                        "schema": CAPTURE_SCHEMA,
-                        "event": "episode_end",
-                        "step": int(env.step_count),
-                        "sim_time": float(env.sim_time),
-                    }
-                )
+                try:
+                    self._end_capture(env)
+                except Exception as exc:
+                    self._disable_capture("end", exc)
                 # The row is also an index into the evidence. Rebuild it after
                 # adding a missing terminal endpoint so ``captured_steps`` is
                 # the number actually written to capture.npz.
@@ -401,15 +408,11 @@ class EpisodeRecorder:
                 arrays.update(self._anchors)
                 np.savez_compressed(self._dir / "privileged.npz", **arrays)
             if self.capture_enabled:
-                np.savez_compressed(
-                    self._dir / "capture.npz", **{k: np.stack(v) for k, v in self._capture.items() if v}
-                )
-                (self._dir / "capture_manifest.json").write_text(
-                    json.dumps(self._capture_manifest, indent=2, default=str)
-                )
-                self._write_jsonl(self._dir / "events.jsonl", self._capture_events)
-                self._write_jsonl(self._dir / "spans.jsonl", self._capture_spans)
-                self._write_jsonl(self._dir / "contacts.jsonl", self._capture_contacts)
+                try:
+                    self._write_capture(self._dir)
+                except Exception as exc:
+                    self._disable_capture("end", exc)
+                    row = self._results_row(env, info, wall, extra or {})
             (self._dir / "meta.json").write_text(json.dumps(row, indent=2, default=str))
         except Exception as exc:
             self._disable("end", exc)
@@ -419,42 +422,48 @@ class EpisodeRecorder:
             self._episode = None
         return row
 
+    def _end_capture(self, env) -> None:
+        recorded_steps = [int(v) for v in self._capture.get("step", [])]
+        if not recorded_steps or recorded_steps[-1] != int(env.step_count):
+            self._record_capture(env)
+        self._capture_events.append(
+            {
+                "schema": CAPTURE_SCHEMA,
+                "event": "episode_end",
+                "step": int(env.step_count),
+                "sim_time": float(env.sim_time),
+            }
+        )
+
+    def _write_capture(self, directory: Path) -> None:
+        np.savez_compressed(directory / "capture.npz", **{k: np.stack(v) for k, v in self._capture.items() if v})
+        (directory / "capture_manifest.json").write_text(json.dumps(self._capture_manifest, indent=2, default=str))
+        self._write_jsonl(directory / "events.jsonl", self._capture_events)
+        self._write_jsonl(directory / "spans.jsonl", self._capture_spans)
+        self._write_jsonl(directory / "contacts.jsonl", self._capture_contacts)
+
     @staticmethod
     def _write_jsonl(path: Path, rows: list[dict[str, Any]]) -> None:
         path.write_text("".join(json.dumps(row, default=str) + "\n" for row in rows))
 
     def _results_row(self, env, info: dict[str, Any], wall: float, extra: dict[str, Any]) -> dict[str, Any]:
-        episode = env.episode
-        sim_time = env.sim_time
-        # Provenance off the task when there is one, off the request when there
-        # is not: a bare ``Sim`` has no task and still has a scene worth writing
-        # down. A request spells the place ``cell`` where a task spells it
-        # ``scene``, and its embodiment may be a spec rather than a name.
-        source = getattr(env, "task", None) or env.request
-        embodiment = getattr(source, "embodiment", "")
-        return {
-            "schema": SCHEMA,
-            "task": getattr(source, "full_name", "") if getattr(env, "task", None) is not None else "",
-            "scene": getattr(source, "scene", "") or getattr(source, "cell", ""),
-            "embodiment": str(getattr(embodiment, "name", embodiment) or ""),
-            "episode_id": episode.episode_id,
-            "seed": episode.seed,
-            "instruction": episode.instruction,
-            "model_key": episode.model_key,
-            "success": bool(info.get("success", False)),
-            "reward": float(info.get("reward", 0.0)),
-            "episode_length": int(env.step_count),
-            "close_kind": info.get("close_kind", "unknown"),
-            "termination_reason": info.get("termination_reason", ""),
-            "metrics": info.get("metrics", {}),
-            "wall_s": round(wall, 3),
-            "sim_s": round(sim_time, 3),
-            "realtime_factor": round(sim_time / wall, 3) if wall > 0 else 0.0,
-            "recorded_steps": self._recorded,
-            "captured_steps": len(self._capture.get("step", ())) if self.capture_enabled else 0,
-            "video_frames": self._video_frames,
-            **extra,
-        }
+        return episode_row(
+            getattr(env, "task", None),
+            env.episode,
+            request=getattr(env, "request", None),
+            success=bool(info.get("success", False)),
+            reward=float(info.get("reward", 0.0)),
+            episode_length=int(env.step_count),
+            close_kind=info.get("close_kind", "unknown"),
+            termination_reason=info.get("termination_reason", ""),
+            metrics=info.get("metrics", {}),
+            wall_s=wall,
+            sim_s=float(env.sim_time),
+            recorded_steps=self._recorded,
+            captured_steps=len(self._capture.get("step", ())) if self.capture_enabled else 0,
+            video_frames=self._video_frames,
+            extra=extra,
+        )
 
     def close(self) -> None:
         """Finish the run. Reports once if anything was dropped."""
@@ -463,7 +472,8 @@ class EpisodeRecorder:
             self._videos.close()
             self._videos = None
         if self.failures:
-            print(f"[record] recording was disabled after {len(self.failures)} failure(s): {self.failures[0]}")
+            what = "capture" if all(f.startswith("capture ") for f in self.failures) else "recording"
+            print(f"[record] {what} was disabled after {len(self.failures)} failure(s): {self.failures[0]}")
 
     def _detach_capture_observer(self) -> None:
         if self._capture_env is not None:
@@ -472,6 +482,14 @@ class EpisodeRecorder:
                 remove(self._capture_step)
         self._capture_env = None
         self._capture_observed = False
+
+    def _disable_capture(self, where: str, exc: Exception) -> None:
+        """Turn off raw capture alone; ordinary recording, if on, carries on."""
+        self.capture_enabled = False
+        self._detach_capture_observer()
+        self._capture = {}
+        self.failures.append(f"capture {where}: {type(exc).__name__}: {exc}")
+        self.enabled = self.record_enabled
 
     def _disable(self, where: str, exc: Exception) -> None:
         self.enabled = False

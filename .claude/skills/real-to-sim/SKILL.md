@@ -84,6 +84,10 @@ name.
   the arm panels off while it drives a gripper.
 - `./ctl eval`, `run`, `pause`, `resume`, `reset`, `catalog`: as
   named; python against the live scene, stepping, pictures, the registries.
+  `eval` runs in `scene.py`'s own namespace, so what it binds routines and
+  `play` see until the next save. `run N` is refused while a routine plays,
+  and `reset` stops a playing routine and finishes its take. While a routine
+  plays the page's own stepping is held, whatever Pause says.
 
 ## What a finished twin is
 
@@ -122,7 +126,7 @@ grain or the room that closes it is the next save, before the next take.
   the page draws the bench and what you added.
 - A rebuild costs about 6 s (measured; half of it is CoACD on the
   fingertips). `eval` blocks the page for as long as it runs unless it
-  yields.
+  yields. A save also re-imports the helper modules beside `scene.py`.
 - `run/` holds every snapshot, comparison, take and the log, and is not
   committed; `scene.py` is your result, so leave it in the state you are
   reporting.

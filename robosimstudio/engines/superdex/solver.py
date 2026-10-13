@@ -21,6 +21,11 @@ class SolverSuperdex(SolverHost):
         threads: Worker threads for the engine's one-per-process initialize.
         feedback: ``"auto"`` or ``"off"`` -- contact-wrench harvest for
             two-way mirrors.
+        feedback_alpha: EMA coefficient for a *rising* harvested force; 1.0
+            disables the ramp. See
+            :class:`~robosimstudio.engines.feedback.WrenchAccumulator`.
+        feedback_dv_max: The most velocity [m/s] one control step's harvested
+            wrench may add to a body; scales the whole wrench, torque with it.
         pose_source: ``"fresh"`` reads this step's poses off the state (zero
             coupling lag, one extra small device read); ``"snapshot"`` reads
             the free batched host copy, one control period stale.
@@ -30,6 +35,10 @@ class SolverSuperdex(SolverHost):
         mirror_smoothing: ``penalty_smoothing_half_distance`` [m] on the
             mirrored colliders -- the knob that decides whether a gripper
             presses a deformable or sinks into it. See
+            :func:`~robosimstudio.engines.superdex.mirror.build_mirror_actors`.
+        mirror_friction_falloff: ``friction_falloff_vel`` [m/s] on the
+            mirrors -- the speed at which regularised friction reaches its
+            Coulomb cap, below which a held object creeps. See
             :func:`~robosimstudio.engines.superdex.mirror.build_mirror_actors`.
         mirror_threshold: ``penalty_threshold_default`` [m] on the mirrors, or
             ``None`` for the engine's 1 mm -- the stand-off at which a pad starts
@@ -79,8 +88,6 @@ class SolverSuperdex(SolverHost):
         """
         from .bridge import SuperdexBridge
 
-        self.shell_young = float(shell_young)
-        self.shell_poisson = float(shell_poisson)
         return SuperdexBridge(
             model,
             {

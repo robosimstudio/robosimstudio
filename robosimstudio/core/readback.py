@@ -129,8 +129,11 @@ def launch_finite_check(
 class HostSnapshot:
     """The host copy of one control step's observable state.
 
-    Every array is a **view** into the read-back's pinned buffers: the next
-    read-back overwrites it. Anything that must outlive a step copies.
+    The state arrays (``body_q`` through ``particle_qd``) are float64 copies
+    made when the snapshot is built, so they keep their values. ``finite`` and
+    ``extra`` are **views** into the read-back's pinned buffers: the next
+    read-back overwrites them, so anything of theirs that must outlive a step
+    copies.
 
     Attributes:
         step: The control step it was taken at.

@@ -22,12 +22,21 @@ array around.
 
 from __future__ import annotations
 
+import math
 from dataclasses import dataclass, field
 from typing import Any, Protocol, runtime_checkable
 
 from robosimstudio.scene.state import WorldState
 
-__all__ = ["EvalResult", "Evaluator", "EvaluatorNone", "WorldState", "evaluator_for"]
+__all__ = [
+    "EvalResult",
+    "Evaluator",
+    "EvaluatorNone",
+    "WorldState",
+    "diverged_result",
+    "evaluator_for",
+    "finite_reward",
+]
 
 
 @dataclass
@@ -49,6 +58,27 @@ class EvalResult:
     success: bool = False
     reward: float = 0.0
     metrics: dict[str, Any] = field(default_factory=dict)
+
+
+def diverged_result() -> EvalResult:
+    """The verdict for a world whose physics has diverged.
+
+    One definition for the serial :meth:`~robosimstudio_bench.envs.env.Env.evaluate`
+    and the batched :func:`~robosimstudio_bench.run.fleet.score_world`, so the same
+    broken episode is scored the same whichever runner stepped it: no success,
+    no reward, and the evaluator never consulted on NaN state.
+    """
+    return EvalResult(success=False, reward=0.0, metrics={"diverged": True})
+
+
+def finite_reward(value: Any) -> float:
+    """``value`` as a float, with NaN and infinities read as 0.0.
+
+    A non-finite reward is a measurement that failed, not a score; written into
+    a row it poisons every mean taken over the run.
+    """
+    number = float(value)
+    return number if math.isfinite(number) else 0.0
 
 
 @runtime_checkable

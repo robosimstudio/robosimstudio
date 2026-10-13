@@ -41,7 +41,11 @@ BENCH_TOP = 0.75
 
 
 def _importable(module: str) -> bool:
-    return importlib.util.find_spec(module) is not None
+    """Whether ``module`` can be found; False, not a raise, when a parent package is missing."""
+    try:
+        return importlib.util.find_spec(module) is not None
+    except ModuleNotFoundError:
+        return False
 
 
 def _arrangement(**superdex):

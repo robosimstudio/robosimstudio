@@ -39,9 +39,8 @@ invented sentence. Straightness is a ``states=`` entry like any other.
 
 The name stays the task's: this **builds** a record and never registers one.
 Which task calls a rod ``cable_rod`` and which calls it ``hang_line`` is content
-vocabulary, and the library does not get to hold it. (``test_content_seam`` reads
-this package for the registering call by plain text search, which is crude and
-exactly right -- so even an example of one does not belong here.)
+vocabulary, and the library does not get to hold it, so even an example of the
+registering call does not belong here.
 """
 
 from __future__ import annotations

@@ -63,8 +63,8 @@ class RendererBase:
     camera list -- so anything it needs *about* the scene (the segmentation
     label table, which shapes recolour while the scene runs, the visual parts a
     mesh rasteriser draws) has to be passed in. Declaring the names here is how
-    a backend asks: :meth:`robosimstudio.sim.Sim.renderer` holds one provider
-    per name and supplies exactly the ones a class lists.
+    a backend asks: :meth:`robosimstudio.sim.Sim.make_renderer` knows how to
+    produce each scene fact and supplies exactly the ones a class lists.
 
     Stated rather than branched on, because the branch was a closed ``if
     backend == "rtx"`` chain over the five built-in names and a sixth backend --

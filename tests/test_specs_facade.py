@@ -7,9 +7,6 @@ lives in". It was false for **28 of 72** names -- ``ShapeSpec``, ``HostActor``
 and the whole ``params`` vocabulary (``ui``, ``LIVE``, ``RECAPTURE``,
 ``REBUILD``) among them, which is exactly what a person annotating a new spec's
 fields with change tiers reaches for first.
-
-Its own file rather than another class in ``test_specs.py``: that module is on
-``test_layout``'s oversized ledger, which may only shrink.
 """
 
 from __future__ import annotations

@@ -679,10 +679,19 @@ def bind(
     # measure is smoothed. Separate from the handler on purpose: the atom is the
     # contract, the handler is one implementation of it, and a second handler
     # must not be free to want its operands in a different shape.
-    atom = ATOMS.get(measure)
+    # A handler with no declaration is refused as a BindError: every read below
+    # (operand forms, ``reads_scene``, ``primary``, smoothing) is the
+    # declaration's, and ``ATOMS.get`` raises ``KeyError`` for an undeclared name.
+    try:
+        atom = ATOMS.get(measure)
+    except KeyError as exc:
+        raise BindError(
+            f"{condition.head}: a handler implements {measure!r}, but no atom declares it, so there "
+            f"is no contract for how its operands are read or what it reports ({exc})"
+        ) from None
 
-    key = wanted_key or (atom.primary if atom is not None else "")
-    if wanted_key and atom is not None and wanted_key not in atom.returns:
+    key = wanted_key or atom.primary
+    if wanted_key and wanted_key not in atom.returns:
         raise BindError(
             f"atom {measure!r} does not report {wanted_key!r}; it reports {list(atom.returns)}. "
             "A clause selects one of a measure's declared returns, and a typo here would "
@@ -869,9 +878,8 @@ def _verdict(
     The dict branch raises when the wanted key is absent, but keying a scalar by
     ``head`` puts it under ``winding_turns`` while every reader resolves the same
     clause to ``turns`` through
-    :func:`~robosimstudio_bench.goals.reward.reading_key`. Nothing raises:
-    ``Peak`` and ``Progress`` fall back to the leaf's own reward, which is
-    ``float(verdict)``, so a graded measure silently becomes a boolean one.
+    :func:`~robosimstudio_bench.goals.reward.reading_key`, so ``Peak``,
+    ``Integral`` and ``Progress`` would each raise on a key nobody reported.
     """
     if not isinstance(reported, dict):
         if key and primary and key != primary:

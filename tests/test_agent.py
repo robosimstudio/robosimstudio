@@ -1,8 +1,8 @@
 # SPDX-License-Identifier: Apache-2.0
 """``robosimstudio_real2sim_agent`` with no page: the file's contract, the wire, the command line, and ``up``.
 
-:mod:`tests.test_agent_live` starts a page on a GPU and drives it the way an
-agent does. This is the half that needs neither a GPU nor a browser, and it
+:mod:`tests.test_agent_server` starts a page on a GPU and drives it the way
+an agent does. This is the half that needs neither a GPU nor a browser, and it
 is the half that gates every commit: the scene file's contract holds on files
 that never build, the socket answers one line for one line with a handler
 that is not a simulator, every command line parses and every ``--help`` exits
@@ -199,6 +199,40 @@ class TestTheWire(unittest.TestCase):
         self.assertFalse(path.exists(), "close unlinks the socket")
         with self.assertRaises(wire.NoServer):
             wire.request(path, {"cmd": "status"}, 1.0)
+
+    def test_a_live_socket_is_refused_and_a_stale_one_replaced(self) -> None:
+        path = Path(tempfile.mkdtemp(prefix="w-")) / "ctl.sock"
+        first = wire.ControlSocket(path, lambda request: {"ok": True, "who": "first"})
+        first.start()
+        try:
+            second = wire.ControlSocket(path, lambda request: {"ok": True, "who": "second"})
+            with self.assertRaises(FileExistsError, msg="a running server's socket is not taken over"):
+                second.start()
+            second.close()
+            self.assertEqual(
+                wire.request(path, {"cmd": "status"}, 5.0)["who"],
+                "first",
+                "and the refused one did not unlink it on the way out",
+            )
+        finally:
+            first.close()
+        # A socket file nobody answers on: what a server killed with -9 leaves.
+        stale = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
+        stale.bind(str(path))
+        stale.close()
+        self.assertTrue(path.exists())
+        third = wire.ControlSocket(path, lambda request: {"ok": True, "who": "third"})
+        third.start()
+        try:
+            self.assertEqual(wire.request(path, {"cmd": "status"}, 5.0)["who"], "third")
+        finally:
+            third.close()
+
+    def test_a_bind_failure_is_the_callers(self) -> None:
+        """Raised by ``start`` on the caller's thread, so the server never prints a ready line over it."""
+        path = Path(tempfile.mkdtemp(prefix="w-")) / ("s" * 200 + ".sock")
+        with self.assertRaises(OSError):
+            wire.ControlSocket(path, lambda request: {"ok": True}).start()
 
 
 class TestTheCommandLine(unittest.TestCase):
@@ -408,6 +442,50 @@ class TestTheCommandLine(unittest.TestCase):
         self.assertIn(" up", done.stderr)
 
 
+class _FakePage:
+    """A socket answering ``status`` from a dict the test changes, for the client's half."""
+
+    def __init__(self, path: Path, status: dict) -> None:
+        self.status = dict(status)
+        self.socket = wire.ControlSocket(path, lambda request: {"ok": True, **self.status})
+        self.socket.start()
+
+    def close(self) -> None:
+        self.socket.close()
+
+
+class TestTheRunWait(unittest.TestCase):
+    """``run N`` polls until N steps are taken; what ends the run otherwise must end the wait too."""
+
+    def setUp(self) -> None:
+        self.path = Path(tempfile.mkdtemp(prefix="run-")) / "ctl.sock"
+        base = {"step": 0, "time": 0.0, "finite": True, "paused": False, "playing": 0, "generation": 1}
+        self.page = _FakePage(self.path, base)
+        self.addCleanup(self.page.close)
+
+    def test_a_rebuild_under_the_run_ends_it(self) -> None:
+        self.page.status.update(step=3, generation=2)
+        started = time.time()
+        reply = ctl.wait_for_steps(self.path, {"ok": True, "step": 40, "generation": 1}, 1000)
+        self.assertFalse(reply["ok"])
+        self.assertIn("rebuilt", reply["error"])
+        self.assertLess(time.time() - started, 5.0, "said at once, not at the deadline")
+
+    def test_a_reset_under_the_run_ends_it(self) -> None:
+        self.page.status.update(step=2)
+        reply = ctl.wait_for_steps(self.path, {"ok": True, "step": 40, "generation": 1}, 1000)
+        self.assertFalse(reply["ok"])
+        self.assertIn("reset", reply["error"])
+
+    def test_steps_taken_end_it(self) -> None:
+        self.page.status.update(step=50)
+        reply = ctl.wait_for_steps(self.path, {"ok": True, "step": 40, "generation": 1}, 10)
+        self.assertEqual(reply, {"ok": True, "step": 50, "time": 0.0, "finite": True})
+
+    def test_play_waits_as_long_as_eval(self) -> None:
+        self.assertEqual(ctl.TIMEOUTS["play"], ctl.TIMEOUTS["eval"])
+
+
 class TestUp(unittest.TestCase):
     def setUp(self) -> None:
         self.tmp = Path(tempfile.mkdtemp(prefix="up-"))
@@ -466,6 +544,35 @@ class TestUp(unittest.TestCase):
                 known,
                 "a switch `up` forwards that the server does not take",
             )
+
+    def test_up_makes_the_run_dir_before_writing_into_it(self) -> None:
+        from unittest import mock
+
+        scene = _write(self.tmp, SCENE)
+        run_dir = self.tmp / "new" / "run"
+        line = wire.ready_line("http://localhost:1", run_dir / "ctl.sock", scene)
+        code = f"print({line!r}, flush=True)\nimport time\ntime.sleep(60)\n"
+        real = ctl.spawn_server
+
+        def spawn(argv, log_path):
+            proc = real([sys.executable, "-c", code], log_path)
+            self.procs.append(proc)
+            return proc
+
+        with mock.patch.object(ctl, "spawn_server", spawn):
+            rc = ctl.main(["--run-dir", str(run_dir), "up", "--scene", str(scene), "--timeout", "30"])
+        self.assertEqual(rc, 0)
+        self.assertEqual(int((run_dir / "serve.pid").read_text()), self.procs[0].pid)
+
+    def test_up_on_a_running_page_says_when_it_is_not_the_one_asked_for(self) -> None:
+        scene = _write(self.tmp, SCENE)
+        page = _FakePage(self.tmp / "ctl.sock", {"file": str(scene.resolve()), "share_url": None, "url": "u", "pid": 1})
+        self.addCleanup(page.close)
+        argv = ["--run-dir", str(self.tmp), "up", "--scene"]
+        self.assertEqual(ctl.main([*argv, str(scene)]), 0, "the same file: a no-op naming the page")
+        other = _write(self.tmp, SCENE, name="other.py")
+        self.assertEqual(ctl.main([*argv, str(other)]), 1, "another file is not silently ignored")
+        self.assertEqual(ctl.main([*argv, str(scene), "--share"]), 1, "nor is --share on a page without one")
 
     def test_up_refuses_a_missing_scene_file(self) -> None:
         rc = ctl.main(["--run-dir", str(self.tmp), "up", "--scene", str(self.tmp / "absent.py")])

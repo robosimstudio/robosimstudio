@@ -16,7 +16,7 @@ from __future__ import annotations
 
 import time
 from dataclasses import dataclass, field
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any
 
@@ -25,6 +25,7 @@ from robosimstudio.specs import JobSpec, RecordSpec
 from robosimstudio_bench.envs.env import Env
 
 from ..solutions import SolutionBase, load_solution
+from .jobs import job_task
 from .summary import RunSummary
 
 __all__ = ["RolloutResult", "RunnerEval", "rollout"]
@@ -175,11 +176,11 @@ class RunnerEval:
     def run(self) -> list[RolloutResult]:
         """Run every episode, appending results as they finish."""
         job = self.job
-        started = datetime.now(timezone.utc).isoformat()
+        started = datetime.now(UTC).isoformat()
         wall0 = time.perf_counter()
 
         env = Env(
-            job.task,
+            job_task(job),
             scene=job.scene,
             embodiment=job.embodiment,
             gripper=job.gripper,
@@ -263,7 +264,7 @@ class RunnerEval:
                 renderer=job.renderer,
                 device=job.device,
                 started=started,
-                finished=datetime.now(timezone.utc).isoformat(),
+                finished=datetime.now(UTC).isoformat(),
                 episodes=len(self.results),
                 successes=successes,
                 # The same keys a pooled run writes, so a run directory reads the

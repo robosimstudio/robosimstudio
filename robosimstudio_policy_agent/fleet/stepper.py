@@ -612,7 +612,9 @@ class StepService:
         """Whether one motion is over, and what to wake its thread with.
 
         ``(done, error, result)``: a servo completes with the outcome dict the
-        single-world servo returns, a joint or hand move with ``None``, and
+        single-world servo returns, a joint move with whether it converged
+        (the facade's ``move_to_joints_blocking`` answer), a hand move with
+        ``None``, and
         nothing here raises for running out of budget -- see the servo branch.
         """
         if program.kind == "gripper":
@@ -651,7 +653,7 @@ class StepService:
             # cares checks the resulting pose itself.
             if arrived or self.step >= program.deadline:
                 self._release_arm(world, name)
-                return True, None, None
+                return True, None, bool(arrived)
             return False, None, None
 
         if program.kind == "servo":

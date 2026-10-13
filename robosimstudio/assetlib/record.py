@@ -255,8 +255,25 @@ def _with_sha(spec: FeatureSpec, mesh_sha: str) -> FeatureSpec:
     return replace(spec, mesh_sha=mesh_sha)
 
 
+def _portable_path(record: AssetRecord, path: str) -> str:
+    """``path`` relative to the record's home when it lies under it, else unchanged."""
+    if record.home is None or not Path(path).is_absolute():
+        return path
+    try:
+        return Path(path).relative_to(Path(record.home)).as_posix()
+    except ValueError:
+        return path
+
+
 def asset_to_dict(record: AssetRecord) -> dict[str, Any]:
-    """An asset as plain JSON-able data -- the catalog form an agent reads."""
+    """An asset as plain JSON-able data -- the catalog form an agent reads.
+
+    ``files`` are written as declared, not as resolved: registration rewrites a
+    file shipped beside its declaration to an absolute path so it loads from
+    anywhere, and that path names the machine it was built on (a home
+    directory, in a catalog that is pasted into a model's prompt). The catalog
+    form is relative to the declaring module's directory instead.
+    """
     out: dict[str, Any] = {
         "name": record.name,
         "substrate": record.substrate,
@@ -274,7 +291,7 @@ def asset_to_dict(record: AssetRecord) -> dict[str, Any]:
     if record.sim is not None:
         out["sim"] = sim_to_dict(record.sim)
     if record.files:
-        out["files"] = dict(record.files)
+        out["files"] = {key: _portable_path(record, path) for key, path in record.files.items()}
     if record.mesh_sha:
         out["mesh_sha"] = record.mesh_sha
     if record.provenance:

@@ -303,6 +303,8 @@ _REWARD_CLAUSES = ("progress", "shrinking")
 goal tree it is scored beside -- so there is nothing here to resolve."""
 
 _MASK_WORDS = ("gated-by", "gated_by")
+_GATE_WORDS = ("gate", "gate-at")
+"""``goals/reward.py``'s spellings of the gate, checked here for being > 0."""
 
 
 def _check_reward(doc: TaskDoc, catalog: Catalog) -> list[CheckProblem]:
@@ -337,12 +339,24 @@ def _check_reward(doc: TaskDoc, catalog: Catalog) -> list[CheckProblem]:
         seen_measure = False
         for part in parts:
             keyword = str(part[0]).lstrip(":") if isinstance(part, list) and part else ""
-            if keyword in _MASK_WORDS and len(part) == 2 and isinstance(part[1], list):
+            if keyword in _GATE_WORDS and len(part) == 2 and not _positive(part[1]):
+                out.append(
+                    CheckProblem(MALFORMED, f"(:{keyword} V) must be a number > 0, got {part[1]!r}", f"reward.{word}")
+                )
+            elif keyword in _MASK_WORDS and len(part) == 2 and isinstance(part[1], list):
                 out += _visit_reward_form(part[1], doc, catalog, f"reward.{word}.gated-by", "check", parse_condition)
             elif not keyword.startswith(("gate", "gated")) and not seen_measure and isinstance(part, list):
                 seen_measure = True
                 out += _visit_reward_form(part, doc, catalog, f"reward.{word}", "observe", parse_condition)
     return out
+
+
+def _positive(value: Any) -> bool:
+    """Whether a gate value is a number above zero -- what ``Progress`` divides by."""
+    try:
+        return float(value) > 0.0
+    except (TypeError, ValueError):
+        return False
 
 
 def _visit_reward_form(
