@@ -21,3 +21,7 @@ robosimstudio_stripped_*.xml
 # Claude Code: local state, except the project skills, which are source.
 .claude/*
 !.claude/skills/
+
+# A leader arm's own calibration, written by scripts/calibrate_leader_arms.py.
+# The tracked scripts/calibration/yam_leader.json is a sample.
+scripts/calibration/local/

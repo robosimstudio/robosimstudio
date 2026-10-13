@@ -8,15 +8,17 @@ The suite splits by what a test *needs*, not by what it is about:
     handler contracts, atom arithmetic on synthetic geometry, goal-tree semantics
     on scripted snapshots, structural rules about the tree itself.
 ``medium``
-    A GPU, and a scene or two. Build, reset, settle, a handful of steps. Runs per
-    pull request.
+    A GPU, and a scene or two. Build, reset, settle, a handful of steps. Run by
+    hand on a GPU machine; no CI workflow runs it.
 ``slow``
     A GPU and minutes. Full rollouts, routine baselines, render backends, capture
-    cycles. Runs nightly.
+    cycles. Run by hand on a GPU machine, like ``medium``.
 
 The tier is declared by each module as a ``TIER`` constant and read **by AST**,
 never by importing -- so listing the slow tier costs nothing and does not
-initialise CUDA. That matters more than it sounds: a selector that imports what
+initialise CUDA. A ``test_*.py`` module that declares no ``TIER`` would run in no
+tier at all, so this script refuses to list or run anything while one exists,
+and exits non-zero naming it. That matters more than it sounds: a selector that imports what
 it is selecting is a selector nobody can run on a laptop.
 
     uv run python scripts/testrun.py --list
@@ -44,10 +46,9 @@ TESTS = ROOT / "tests"
 def declared_tier(path: pathlib.Path) -> str:
     """The module's ``TIER``, read without importing it.
 
-    Returns ``""`` for a module that declares none, which
-    ``tests/test_layout.py`` turns into a failure -- an undeclared tier means a
-    test silently runs nowhere, which is worse than one that runs in the wrong
-    place.
+    Returns ``""`` for a module that declares none, which :func:`main` turns
+    into a failure -- an undeclared tier means a test silently runs nowhere,
+    which is worse than one that runs in the wrong place.
     """
     try:
         tree = ast.parse(path.read_text())
@@ -62,12 +63,8 @@ def declared_tier(path: pathlib.Path) -> str:
     return ""
 
 
-def modules(tier: str = "") -> list[str]:
-    """Dotted module names for one tier, or for every declared module.
-
-    Sorted, so a run is reproducible and a failure is findable in the output of
-    the run before it.
-    """
+def test_files() -> list[pathlib.Path]:
+    """Every ``test_*.py`` the runner selects from, sorted."""
     found = list(TESTS.rglob("test_*.py"))
     # A collection (a top-level directory with a ``tasks/`` of its own -- see
     # robosimstudio.roots) carries its tests beside its suites; they are selected
@@ -77,8 +74,17 @@ def modules(tier: str = "") -> list[str]:
             continue
         if (child / "tasks").is_dir() and (child / "tests").is_dir():
             found.extend((child / "tests").rglob("test_*.py"))
+    return sorted(found)
+
+
+def modules(tier: str = "") -> list[str]:
+    """Dotted module names for one tier, or for every declared module.
+
+    Sorted, so a run is reproducible and a failure is findable in the output of
+    the run before it.
+    """
     out: list[str] = []
-    for path in sorted(found):
+    for path in test_files():
         got = declared_tier(path)
         if not got or (tier and got != tier):
             continue
@@ -94,15 +100,20 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("rest", nargs="*", help="extra arguments for unittest")
     args = parser.parse_args(argv)
 
+    undeclared = [str(p.relative_to(ROOT)) for p in test_files() if declared_tier(p) not in TIERS]
+    if undeclared:
+        print(
+            f"error: no TIER = {' | '.join(map(repr, TIERS))} in {undeclared}: these would run in no tier",
+            file=sys.stderr,
+        )
+        return 1
+
     if args.list or not args.tier:
-        undeclared = [p.name for p in sorted(TESTS.rglob("test_*.py")) if not declared_tier(p)]
         for tier in TIERS:
             names = modules(tier)
             print(f"{tier:<7} {len(names):>3} module(s)")
             for name in names:
                 print(f"          {name}")
-        if undeclared:
-            print(f"\nundeclared TIER: {undeclared}  (tests/test_layout.py fails on these)")
         return 0
 
     names = modules(args.tier)

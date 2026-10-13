@@ -50,14 +50,27 @@ large binaries out of the package.
 ## `embodiments/yam/` — I2RT YAM bimanual arena
 
 **Source:** the arena's `sim_models/` directory, in a read-only reference
-checkout of the Isaac Lab Arena YAM stage.
+checkout of the Isaac Lab Arena YAM stage
+([isaac-sim/IsaacLab-Arena](https://github.com/isaac-sim/IsaacLab-Arena),
+Apache-2.0, Copyright 2025 NVIDIA Corporation and the Isaac Lab Arena Project
+Developers). The arm geometry and meshes in it are i2rt's YAM (MIT). `LICENSE`
+beside `yam_bimanual_arms.xml` is the Apache License 2.0 text that covers the
+arena-authored files; `i2rt_yam/LICENSE` is i2rt's MIT licence for the meshes.
 
 **Files**
 
 | File | What it is |
 | --- | --- |
-| `yam_bimanual_arms.xml` | The arena's two YAM arms and nothing else, authored at their own base origin: the scene as authored (two YAM arms, a gate, cameras, a table, seven free-jointed props) with every free-jointed body and the home keyframe removed, then the cell's scenery deleted and the arm roots moved to the origin. Written by `scripts/strip_yam_scenery.py` (development tree), which checks its result against the source. **This is what the embodiment imports.** |
-| `i2rt_yam/` | Meshes, and the per-arm URDF. Unmodified. Carries its own `LICENSE`. |
+| `yam_bimanual_arms.xml` | The arena's two YAM arms and nothing else, authored at their own base origin: the scene as authored (two YAM arms, a gate, cameras, a table, seven free-jointed props) with every free-jointed body and the home keyframe removed, then the cell's scenery deleted and the arm roots moved to the origin. Written by a development script that is not included in this repository, which checked its result against the source; the checked-in file is the source of truth. **This is what the embodiment imports.** |
+| `yam_bimanual_arm.urdf` | One arm's kinematic chain (`base_link`, `link_1`..`link_6`, joints `joint1`..`joint6`) transcribed from `yam_bimanual_arms.xml`'s bodies: each body's `pos`/`quat` as the joint origin, each joint's axis and range, in chain order. No geometry or inertia. For the PyRoKi IK solver, which checks it against the MJCF at construction and refuses drift. Named by `yam_bimanual` (`robots/embodiments/yam_bimanual.py`). |
+| `i2rt_yam/` | The meshes the MJCF names. Unmodified. Carries its own `LICENSE`. |
+| `LICENSE` | Isaac Lab Arena's `LICENSE.md` (Apache License 2.0), under which the arena distributes the files this directory derives from; fetched from `isaac-sim/IsaacLab-Arena` @ `9abd5dd0` on 2026-10-13. |
+
+The arena's checkout also carried i2rt's per-arm `yam.urdf` and its meshes
+under `i2rt_yam/urdf/`. Nothing loaded them (that file lists `joint6` first and
+was refused by the IK solver's drift check), so they are not shipped; the
+arena's 9 MB `base_visual_gate.stl`, declared by no geom once the scenery was
+stripped, is not shipped either.
 
 **Why stripped:** the arena declares six bottles and a bin container as loose
 props. A task supplies its own objects, so those are removed — and the home
@@ -81,7 +94,7 @@ invisible surface 22 mm below the real one. The arm roots were baked at
 the robot, and the 0.2525 and the 0.75 become `EmbodimentSpec.base_offset`
 against a scene's work surface.
 
-**Arena constants**, restated in `embodiments/yam_bimanual.py` rather than
+**Arena constants**, restated in `robosimstudio/robots/embodiments/yam_bimanual.py` rather than
 imported from the reference: table top at `z = 0.728 m`, table centred at
 `(0.6, 0.0)` with half-extents `(0.30, 0.40)`, per-arm home
 `[0, 1.047, 1.047, 0, 0, 0]`, grasp site `0.1347 m` along the wrist's `+z` with
@@ -109,7 +122,7 @@ this again, for whoever is handed the directory without this file.
 
 | File | What it is |
 | --- | --- |
-| `panda_standalone.xml` | The export's `robot0_base` subtree at its own origin, the `mount0_*` pedestal dropped, with its nine `<position>` actuators and two sensors. **What `panda` imports.** Written in the collection by its tool-sort split script. |
+| `panda_standalone.xml` | The export's `robot0_base` subtree at its own origin, the `mount0_*` pedestal dropped, with its nine `<position>` actuators and two sensors. **What `panda` imports.** Written in the collection by a development script that is not included in this repository; the checked-in file is the source of truth. |
 | `panda_nohand_standalone.xml` | The same with the `gripper0_right_gripper` subtree and everything naming it removed, ending at `robot0_right_hand` with the seven arm actuators. **What `panda_robotiq` and `panda_robotiq_roll` import**, to weld a 2F-85 onto. |
 | `assets/` | The 61 meshes those two files name — 11 STL, 50 OBJ, 39.9 MB — and no others. |
 | `LICENSE`, `README.md` | robosuite's MIT licence, and the note that travels with the files. |
@@ -153,7 +166,9 @@ contact.
 
 **Source:** `example-robot-data` @ `d0d9098d752014aec3725b07766962acf06c5418`
 (`robots/panda_description/urdf/panda.urdf`, via the machine's
-`robot_descriptions` cache).
+`robot_descriptions` cache). BSD 3-Clause, Copyright (C) 2018-2020 LAAS-CNRS,
+University of Edinburgh, INRIA: `LICENSE.example-robot-data` is that
+repository's `LICENSE` at the same commit, and `NOTICE` credits it.
 
 **Files**
 
@@ -162,7 +177,7 @@ contact.
 | `panda_kinematics.urdf` | The URDF with every `<visual>` and `<collision>` element removed — joints, links, limits and inertials only. |
 
 **Why stripped:** the PyRoKi IK backend
-(`robosimstudio.robot.ik.pyroki`) consumes kinematics alone, and a
+(`robosimstudio.solvers.ik.pyroki`) consumes kinematics alone, and a
 kinematics-only file has no mesh paths to break. The scene's *physics* Panda
 is the MJCF above, out of the tool-sort export — this file is never simulated,
 only solved against.
@@ -215,8 +230,8 @@ stay enclosing, before they are trusted. The arm spheres need neither.
 
 ## `embodiments/yam_i2rt/` — i2rt YAM bimanual pair with linear_4310 grippers
 
-**Source:** `i2rt-robotics/i2rt` @ `c40b4125` (the `newton_tasks` submodule
-pin; read from a mirror of that repository), files
+**Source:** `i2rt-robotics/i2rt` @ `c40b4125` (read from a mirror of that
+repository), files
 `i2rt/robot_models/arm/yam/{yam.xml,assets/*.stl}` and
 `i2rt/robot_models/gripper/linear_4310/{linear_4310.xml,assets/*.stl}`. MIT
 licensed; `LICENSE` copied beside the meshes.
@@ -225,19 +240,19 @@ licensed; `LICENSE` copied beside the meshes.
 
 | File | What it is |
 | --- | --- |
-| `yam_i2rt_bimanual.xml` | Two composed YAM+linear_4310 arms, `left_`/`right_` prefixed, bases baked at the newton_tasks workcell mounts. **Generated by `scripts/compose_yam_i2rt.py` (development tree) — edit that, not this.** |
-| `yam_i2rt_arms.xml` | The same two arms with the baked mount taken out: the arm roots moved from `(0.2525, ±0.31, 0.75)` to the origin, the ±0.31 shoulder separation kept, the 0.2525 and the 0.75 becoming `EmbodimentSpec.base_offset`. Written by `scripts/strip_yam_scenery.py` (development tree). **What `yam_i2rt` imports.** |
+| `yam_i2rt_bimanual.xml` | Two composed YAM+linear_4310 arms, `left_`/`right_` prefixed, bases baked at the reference workcell's mounts. Generated by a development script that is not included in this repository; the checked-in file is the source of truth. |
+| `yam_i2rt_arms.xml` | The same two arms with the baked mount taken out: the arm roots moved from `(0.2525, ±0.31, 0.75)` to the origin, the ±0.31 shoulder separation kept, the 0.2525 and the 0.75 becoming `EmbodimentSpec.base_offset`. Written by a development script that is not included in this repository; the checked-in file is the source of truth. **What `yam_i2rt` imports.** |
 | `assets/` | The 9 STLs the MJCF references. Byte-identical copies. |
 | `LICENSE` | i2rt's MIT license. |
-| `yam_i2rt_arm.urdf` | One arm's chain (`base_link`, `link_1`..`link_6`) transcribed from `yam_i2rt_arms.xml`'s `right_` bodies: each body's `pos`/`quat` as the joint origin, each joint's own axis and range, joints `joint1`..`joint6` in chain order. For the PyRoKi solver family, which refuses the stock `embodiments/yam/i2rt_yam/urdf/yam.urdf` on this arm -- its check reads the tool-link-to-TCP transform drifting 268.58 mm / 10.524 deg between two configurations on the crate-washing scene, measured 2026-10-03 (that file lists `joint6` first, and puts `joint1` at 63.1 mm where the MJCF has 67) -- and accepts this one on both arms. No geometry or inertia, by design: it is a kinematic chain. Named by `yam_i2rt`; `yam_i2rt_arena_narrow` has the same chain but deliberately names no URDF (see `robots/embodiments/yam_i2rt_arena.py`). **Generated** by the crate-washing task's embodiment script (development tree), and drift-tested there. |
+| `yam_i2rt_arm.urdf` | One arm's chain (`base_link`, `link_1`..`link_6`) transcribed from `yam_i2rt_arms.xml`'s `right_` bodies: each body's `pos`/`quat` as the joint origin, each joint's own axis and range, joints `joint1`..`joint6` in chain order. For the PyRoKi solver family, which refuses i2rt's stock `yam.urdf` (not shipped) on this arm -- its check reads the tool-link-to-TCP transform drifting 268.58 mm / 10.524 deg between two configurations on the crate-washing scene, measured 2026-10-03 (that file lists `joint6` first, and puts `joint1` at 63.1 mm where the MJCF has 67) -- and accepts this one on both arms. No geometry or inertia, by design: it is a kinematic chain. Named by `yam_i2rt`; `yam_i2rt_arena_narrow` has the same chain but deliberately names no URDF (see `robots/embodiments/yam_i2rt_arena.py`). Generated by a development script that is not included in this repository; the checked-in file is the source of truth, and the IK solver's drift check at construction is what holds it to the MJCF. |
 
 **What changed on the way in** (all in the generator, none in the meshes):
 
-* The single-arm composition replicates `newton_tasks/sim/yam_asset.py`
+* The single-arm composition replicates the YAM builder in the original reference sims
   (itself a re-implementation of i2rt's `combine_arm_and_gripper_xml()`):
   fixed `base` wrap, linear_4310 mounted on `link6` with the transform from
   i2rt's `linear_4310.yml`, `joint6` axis overridden to `0 0 -1`.
-* Actuator physics the stock MJCF omits, from `yam_asset.py` verbatim:
+* Actuator physics the stock MJCF omits, from that builder verbatim:
   reflected armature `N²·I_rotor`, damping, frictionloss and true DM4340/DM4310
   torque limits per joint; position actuators kp=300/kv=30 (arms) and
   kp=600/kv=20 (fingers).
@@ -246,7 +261,7 @@ licensed; `LICENSE` copied beside the meshes.
 * **Both fingers actuated and the stock `joint7 == joint8` equality dropped**:
   Newton's MJCF import applies that equality with inverted polarity
   (`joint8 = -joint7`), which translates the jaw pair sideways instead of
-  closing it. The newton_tasks kamino sims carry the same fix
+  closing it. The original reference sims carry the same fix
   (`skip_equality_constraints=True` plus a second actuator); both fingers are
   always commanded to the same value, so the coupling is preserved by
   construction.
@@ -264,8 +279,10 @@ grafted onto the wrist unchanged: the `{side}_link_6` subtree of
 collider, both finger linkages with their `<equality>` coupling — hung under the
 composed `{side}_link6` as a fixed child, rotated by `quat 0 -1 1 0` and not
 translated. Shoulders at ±0.17 m. `assets/` holds the STLs the file names;
-`LICENSE` is i2rt's MIT licence, as for `yam_i2rt/`. **Generated by
-`scripts/graft_arena_hand.py` (development tree) — edit that, not this.**
+`LICENSE` is i2rt's MIT licence, as for `yam_i2rt/`; the grafted hand comes
+from Isaac Lab Arena (Apache-2.0, see `embodiments/yam/` above and `NOTICE`).
+Generated by a development script that is not included in this repository; the
+checked-in file is the source of truth.
 `robosimstudio/robots/embodiments/yam_i2rt_arena.py` records why the hand sits
 where it does and what was measured.
 
@@ -275,13 +292,14 @@ where it does and what was measured.
 
 **Source:** `google-deepmind/mujoco_menagerie` @ `affef083`, folder
 `robotiq_2f85`. The commit is Newton's own `MENAGERIE_REF`, read off
-`newton._src.utils.download_assets`; fetched by `scripts/fetch_menagerie.py`
-(development tree). The model is **BSD 2-Clause**: `LICENSE` is the file
+`newton._src.utils.download_assets`; fetched by a development script that is
+not included in this repository. The model is **BSD 2-Clause**: `LICENSE` is the file
 Menagerie ships beside it, "Copyright (c) 2013, ROS-Industrial", and the
 vendored `README.md` says the same.
 
 **Files:** Menagerie's own bytes, untouched — `2f85.xml`,
-`assets/*.stl`, `LICENSE`, `README.md`. Nothing is generated here: this is the
+`assets/*.stl`, `LICENSE` — and its `README.md`, with the two links to files
+not vendored here (`CHANGELOG.md`, `2f85.png`) pointed at Menagerie instead. Nothing is generated here: this is the
 first hand in the repo that is *welded on at build time* rather than composed
 into an arm asset, so the file the weld imports is the file that was vendored.
 

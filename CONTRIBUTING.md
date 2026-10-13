@@ -21,8 +21,10 @@ uv run --extra gap python scripts/testrun.py --tier medium   # needs the GPU; bu
 uvx ruff@0.16.1 check . && uvx ruff@0.16.1 format . --check
 ```
 
-Every test module declares `TIER = "fast" | "medium" | "slow"`. A test that
-builds a scene is `medium`.
+Every test module declares `TIER = "fast" | "medium" | "slow"`;
+`scripts/testrun.py` exits non-zero, naming the module, while one does not. A
+test that builds a scene is `medium`. CI runs the fast tier only; run the medium
+tier on a GPU machine before a change that touches simulation.
 
 ## Where things go
 

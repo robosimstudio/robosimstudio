@@ -62,7 +62,6 @@
     <mesh file="model2__15.stl" />
     <mesh file="model2__16.stl" />
     <mesh file="model2__17.stl" />
-    <mesh name="base_visual_gate" file="base_visual_gate.stl" />
     <mesh name="camera_d405" file="d405.stl" />
 
     <texture type="skybox" builtin="gradient" rgb1="1.0 1.0 1.0" rgb2="0.98 0.98 0.98" width="512" height="3072" />
