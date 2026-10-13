@@ -224,8 +224,9 @@ class SuperdexBridge:
             for the pinch that measured it.
         hand_friction_falloff: The same, for the mirrors a robot's hand
             carries alone (a record's ``hand``), or ``None`` for
-            ``mirror_friction_falloff`` on them too: a static pinch at the pads
-            without static friction on the bar the pinched thing is pressed on.
+            ``mirror_friction_falloff`` on them too. Neither reaches a contact
+            while the mirrors are static: SuperDex then uses the deformable's
+            falloff. See :func:`build_mirror_actors`.
         mirror_smoothing: ``penalty_smoothing_half_distance`` [m] for every
             mirrored collider -- see :func:`build_mirror_actors`. The engine's
             own 5 mm lets a fingertip sit 2 mm inside a foam block; this
