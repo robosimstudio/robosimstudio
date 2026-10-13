@@ -198,9 +198,12 @@ class PanelArm(Panel):
     The fingers are the slider and nothing else. There is no propose-a-grasp
     step and no scripted approach: what the hand ends up holding is whatever its
     friction and the contact settings let it hold, which is the thing this stack
-    exists to show. On cloth in particular that is the honest question -- a
-    frictional pinch on a sheet is not a solved problem here, and a button that
-    said "Grasp" implied it was.
+    exists to show, and why the button says "Close" and not "Grasp". Whether it
+    holds is the scene's physics: a rigid body under ``MUJOCO_500HZ``, a sheet
+    under one-way coupling with full-surface contact, a rope with sticky
+    contacts and a sponge with its own friction falloff all lift by friction
+    (``examples/PHYSICS.md`` has the measurements); under ``GENERIC`` a hand
+    pushes a free body and does not pinch it.
 
     **Not collision aware.** The arm goes where the gizmo is put: asked to
     descend through a bin rim, the hand descends through the bin rim.

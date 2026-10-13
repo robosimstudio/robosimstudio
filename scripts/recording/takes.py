@@ -132,6 +132,24 @@ def _stiffened(film) -> tuple[bool, str]:
     )
 
 
+def _routed(film) -> tuple[bool, str]:
+    """The cable demo's own goal terms (its ``board.routed``): seated in both spools, its end in the port."""
+    import board  # the demo's folder is on sys.path while its script runs
+
+    r = board.routed(film.sim)
+    ok = r["seat0"] >= 0.04 and r["seat1"] >= 0.04 and r["port"] >= 0.06 and r["end"] >= 1.0
+    return ok, f"seats {r['seat0']:.2f}/{r['seat1']:.2f} (need 0.04), port {r['port']:.2f} (0.06), end {r['end']:.0f}"
+
+
+def _folded(film) -> tuple[bool, str]:
+    """The fold demo's own measures (its ``fold_measures``), against the cloth_fold suite's gate."""
+    import sys
+
+    m = sys.modules["__main__"].fold_measures(film.sim)  # runpy installs the running script as __main__
+    ok = m["fold_extent"] <= 0.6 and m["fold_score"] >= 0.85
+    return ok, f"extent {m['fold_extent']:.3f} (need <= 0.6), score {m['fold_score']:.3f} (need >= 0.85)"
+
+
 def _succeeded(film) -> tuple[bool, str]:
     """The task's own verdict on the scene as the take left it."""
     result = film.sim.evaluate()[-1]
@@ -374,8 +392,11 @@ def grasp(example: str, thing: str, *, at: Any = None, lift: float = 0.12, pendi
     )
 
 
-def routine(example: str, *, speed: float, success: str) -> Take:
-    """A demo: the home pose, then its Run button, filmed to the routine's end."""
+def routine(example: str, *, speed: float, success: str, done: Any = None) -> Take:
+    """A demo: the home pose, then its Run button, filmed to the routine's end.
+
+    ``done(film)`` is the demo's own success measure; a take without one is still a draft.
+    """
     return Take(
         example,
         fps=12,
@@ -389,10 +410,9 @@ def routine(example: str, *, speed: float, success: str) -> Take:
         ),
         expect=(
             Check(lambda film: film.ended.endswith(": done"), "the routine ran to its end:"),
-            # TODO(after merge): the demo's own success measure, once it exposes one.
-            Check(lambda film: True, success),
+            Check(done or (lambda film: True), success),
         ),
-        pending="the demo and its routine are being built on another branch",
+        pending="" if done else "the demo and its routine are being built on another branch",
     )
 
 
@@ -515,8 +535,8 @@ DRAFTS = (
         camera=ROPE_VIEW,
     ),
     routine("demo/wipe_the_bar/wipe_the_bar.py", speed=2.0, success="the bar is wiped:"),
-    routine("demo/route_the_cable/route_the_cable.py", speed=2.0, success="the cable is in its clips:"),
-    routine("demo/fold_the_towel/fold_the_towel.py", speed=2.0, success="the towel is folded:"),
+    routine("demo/route_the_cable/route_the_cable.py", speed=2.0, success="the cable is routed:", done=_routed),
+    routine("demo/fold_the_towel/fold_the_towel.py", speed=2.0, success="the towel is folded:", done=_folded),
 )
 
 TAKES: tuple[Take, ...] = (*FINAL, *DRAFTS)
@@ -529,8 +549,6 @@ KEPT: dict[str, str] = {
     "06_teleop/leader_sim": "the --simulate page 06_teleop/00_leader_arm films; kept until the README shows one of the two",
     "06_teleop/force_feedback_sim": "the --simulate page 06_teleop/01_force_feedback films; kept until the README shows one",
     "09_demos/00_wipe_the_bar": "moving to demo/wipe_the_bar/, whose take films it there",
-    "09_demos/01_route_the_cable": "moving to demo/route_the_cable/, whose take films it there",
-    "09_demos/02_fold_the_towel": "moving to demo/fold_the_towel/, whose take films it there",
 }
 """Clips no take films, each with why its existing file stands. Keyed like :attr:`Take.key`."""
 

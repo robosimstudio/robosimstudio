@@ -151,11 +151,11 @@ physics = rss.replace(
     collision=rss.CollisionSpec(full_surface_contact=True),
 )
 
-scene = rss.Scene(cell="void", physics=physics)
+scene = rss.Scene(cell="bench_0728", physics=physics)
 scene.add(rss.robot("yam_bimanual"))
-scene.add(rss.sheet(name="towel", size=(0.35, 0.35), cells=(30, 30), at=(-0.175, -0.175, 0.25)))
+scene.add(rss.sheet(name="towel", size=(0.35, 0.35), cells=(30, 30), at=(-0.175, -0.20, 0.02)))
 sim = scene.build(control_mode="joint_position")
-rss.view(sim)    # close a gripper on an edge of the towel
+rss.view(sim)    # fingertips down to the bench at an edge, Close, lift
 ```
 
 - `rss.coupler` chooses how the robot's solver and
@@ -163,11 +163,89 @@ rss.view(sim)    # close a gripper on an edge of the towel
 - `full_surface_contact` adds contacts on the cloth's edges and faces. Without
   it, a finger pad narrower than a cloth cell finds no vertex to hold.
 
+Then the pads hold the sheet by friction alone; nothing is pinned. A YAM hand
+put its fingertips on the bench at a lying terry towel's edge, closed and lifted
+100 mm: the edge rose 96 mm, and 6 of the 7 particles within 20 mm of the tool
+centre stayed in the hand, in 3 of 3 runs
+([`02_cloth/00_towel.py`](02_cloth/00_towel.py)). The fold demo,
+[`demo/fold_the_towel`](../demo/fold_the_towel/README.md), folds a towel in half
+the same way, from the home pose.
+
+- **On a flat sheet the fingertips must reach the bench**, or the pads close
+  over the edge rather than around it. A tool centre 20 mm up held nothing.
+- **Under `one_way` the arm feels nothing from the cloth**, so a shut hand
+  closes right through it. On a thin membrane close to about its contact
+  thickness instead: the Panda in
+  [`02_cloth/04_your_own_cloth.py`](02_cloth/04_your_own_cloth.py) holds a
+  draped hem at **Grip amount** 0.95 (pads 5 mm apart on a 4 mm sheet) and
+  lets it slip at **Close**.
+- The coupler hands the cloth solver the arm's previous pose and its new one,
+  and friction acts on the pad's motion between them. (Before this release it
+  handed over the new pose twice, every finger looked still, and no setting of
+  friction made a pinch hold.)
+
 | Coupler | What it does |
 | --- | --- |
 | `proxy` | The default. The robot pushes things and they push back. |
 | `one_way` | The robot leads. Cloth collides with it and does not push back. |
 | `admm` | Registered. No shipped example uses it. |
+
+## Letting a gripper hold a rope
+
+A capsule-chain rod held between fingers needs static friction, which the
+default contact law does not have: a pinched 22 mm cable crept through the pads
+at 15 mm/s and fell out of a 0.15 m/s lift. Anchored contacts hold it:
+
+```python
+physics = rss.replace(
+    rss.GENERIC.with_backend("*", rss.backend("vbd", rigid_body_contact_buffer_size=256, rigid_contact_history=True)),
+    collision=rss.CollisionSpec(contact_matching="sticky"),
+)
+cable = rss.rod(name="cable", length=0.6, radius=0.011, segments=28,
+                allow_grasp_latch=False, scene_friction=True)
+```
+
+- `scene_friction=True` gives the pads the rod's `mu_gripper` (60) and the bench
+  0.02; `allow_grasp_latch=False` says nothing else holds it.
+- With them a 120 mm lift held the cable to 0.25 mm in the fingers, in 3 of 3
+  runs ([`10_rope/00_cable.py`](10_rope/00_cable.py)), and two arms route a
+  600 mm cable through two spools into a port from home
+  ([`demo/route_the_cable`](../demo/route_the_cable/README.md)).
+- **Drag the gizmo, don't flick it.** On a rope scene the arm has no
+  rate-limited IK, so a jump of the cursor is a fast move of the hand, and a
+  0.4 m/s jerk drops the cable.
+
+## Letting a gripper hold a sponge or a SuperDex cable
+
+SuperDex's friction has no static part: below a falloff speed it grows with
+slip, so a held thing creeps. Against a hand, **the falloff that counts is the
+deformable's own** -- the hand's colliders are static actors to the engine,
+which then uses the colliding body's value:
+
+```python
+foam = rss.replace(FIRM_FOAM, friction_falloff=1.0e-3)          # from robosimstudio.domains.soft
+grip = rss.ActuationSpec(target_ke=1500.0, target_kd=60.0, effort_limit=8.0)   # [N] per finger
+physics = rss.GENERIC.with_backend("soft", rss.backend("superdex", substeps=2, feedback_dv_max=20.0))
+```
+
+- **Falloff.** A lifted sponge slid 1.4 mm in 2.5 s and 4.5 mm in the next 10 s
+  at the engine's 10 mm/s, and 0.1 mm and 0.1 mm at 1 mm/s. A SuperDex cable
+  takes `RodSpec(friction_falloff=1e-3)` the same way: 0.5-1.3 mm of slip over
+  a lift, against 3.2-4.0 mm. `rss.backend("superdex", mirror_friction_falloff=...)`
+  sets the hand's value, which no contact reads, and measured identical.
+- **A capped grip.** At 8 N per finger the Panda's jaws stop at 44 mm on a
+  50 mm firm sponge; uncapped they cut it to 34 mm.
+- **Feedback on, and allowed to push.** The foam's push on a 10 g pad is capped
+  at what moves it `feedback_dv_max` in a control step. At the default 0.5 m/s
+  that is 0.3 N, and the jaws closed the foam to 6 mm; at 20 m/s the foam holds
+  them where the grip and its push balance.
+
+With these the Panda lifts a sponge 99 mm on **Close**, 1.7 mm of slip, in 3 of
+3 runs ([`03_soft/00_sponge.py`](03_soft/00_sponge.py)). A YAM hand holds it in a
+plain lift as well, but not through a pressed wipe: the sponge twisted out of
+the jaws on the second or third stroke in every run we made, which is why the
+wipe demo latches it once the grip has closed
+([`demo/wipe_the_bar`](../demo/wipe_the_bar/README.md)).
 
 ## Extras
 

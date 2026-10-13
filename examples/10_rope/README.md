@@ -12,18 +12,21 @@ YAM hands that hold it by friction alone.
 
 ![Drag a cable](media/00_cable.webp)
 
-A cable lying on the bench between two arms: click any segment and drag it, or close a gripper on it and lift.
+A cable lying on the bench under an open hand: drag the hand down onto it, close it and lift, or click any segment and drag it.
 
-A rope is a chain of short capsules on cable joints, and every capsule answers
-a click on its own, so pulling it by an end and by its middle are two different
-pulls. Take a handle on each end and `Move together` to carry it by both.
-`at` places the cable's first end, not its middle.
+The right hand starts pointing down over the capsule nearest the cable's middle.
+Drag its gizmo straight down until the fingertips are just over the bench, press
+**Close**, and drag it up slowly: the pads hold the cable by friction alone, so a
+grip that slips is a grip that slips. That takes static friction, which the
+default contact law does not have: `contact_matching="sticky"` keeps each
+contact's anchor from step to step. A click on any segment puts a handle on it
+instead, and `at` places the cable's first end, not its middle.
 
 **Key features:**
 
-* `rss.rod` for a cable, a rope or a cord
-* `rss.RodSpec`, what `rss.rod` returns, for its stiffness and friction
-* `rss.robot` with `"yam_bimanual"` for two arms to pick it up with
+* `rss.rod` for a cable, a rope or a cord, with `scene_friction` for the pads' grip
+* `rss.CollisionSpec` `contact_matching="sticky"` for friction that holds still
+* `rss.ArmSpec` `home_q` for a hand that starts over the cable
 * `rss.view` to drag it and drive the arms from the page
 
 ```bash
