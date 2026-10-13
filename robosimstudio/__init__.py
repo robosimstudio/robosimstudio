@@ -116,6 +116,7 @@ _EXPORTS: dict[str, str] = {
     "list_cells": "robosimstudio.scene",
     # Saying how it is simulated.
     "GENERIC": "robosimstudio.specs",
+    "MUJOCO_500HZ": "robosimstudio.specs",
     "ArrangementSpec": "robosimstudio.specs",
     "CollisionSpec": "robosimstudio.specs",
     "SimRequirements": "robosimstudio.specs",
@@ -124,6 +125,7 @@ _EXPORTS: dict[str, str] = {
     "contacts_with": "robosimstudio.specs",
     "replace": "robosimstudio.specs",
     # Saying what it is.
+    "ActuationSpec": "robosimstudio.specs",
     "ArmSpec": "robosimstudio.specs",
     "AssetSpec": "robosimstudio.specs",
     "CameraSpec": "robosimstudio.specs",

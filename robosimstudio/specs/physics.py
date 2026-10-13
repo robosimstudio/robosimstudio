@@ -42,7 +42,7 @@ subsystem, and every public name is re-exported here so that
 * :mod:`~robosimstudio.specs.declare` -- what an asset declares it needs:
   :class:`SimRequirements`, :class:`ContactRule`, :class:`HostActor`.
 * :mod:`~robosimstudio.specs.arrangement` -- the data an arrangement is made
-  of, :class:`ArrangementSpec` itself, and :data:`GENERIC`.
+  of, :class:`ArrangementSpec` itself, :data:`GENERIC` and :data:`MUJOCO_500HZ`.
 * :mod:`~robosimstudio.specs.manifest` -- :class:`PhysicsManifest` and its
   records.
 
@@ -53,7 +53,16 @@ engines: nothing is registered by importing this module.
 
 from __future__ import annotations
 
-from .arrangement import GENERIC, ArrangementSpec, BackendSpec, CollisionSpec, CouplerSpec, backend, coupler
+from .arrangement import (
+    GENERIC,
+    MUJOCO_500HZ,
+    ArrangementSpec,
+    BackendSpec,
+    CollisionSpec,
+    CouplerSpec,
+    backend,
+    coupler,
+)
 from .declare import COUPLINGS, ContactRule, HostActor, SimRequirements, contacts_with, sim_to_dict
 from .manifest import ChannelRecord, IslandRecord, PhysicsManifest
 from .registries import (  # noqa: F401 -- the names outside __all__ are public and imported by name across the tree
@@ -95,6 +104,7 @@ __all__ = [
     "COUPLINGS",
     "DOMAINS",
     "GENERIC",
+    "MUJOCO_500HZ",
     "ROLES",
     "STATE_KINDS",
     "ArrangementSpec",

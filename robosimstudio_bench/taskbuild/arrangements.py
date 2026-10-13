@@ -130,27 +130,17 @@ def list_camera_rigs() -> list[str]:
 def _install_defaults() -> None:
     from dataclasses import replace
 
-    from robosimstudio.specs import ArrangementSpec, CollisionSpec, backend
-    from robosimstudio.specs.physics import GENERIC
+    from robosimstudio.specs.physics import GENERIC, MUJOCO_500HZ
 
     register_arrangement("rigid_mujoco@v1", replace(GENERIC, substeps=4))
     """A rigid-only scene: ``GENERIC`` at the four substeps its docstring says a rigid scene should state."""
-    register_arrangement(
-        "mujoco_500hz@v1",
-        ArrangementSpec(
-            control_hz=50.0,
-            substeps=10,
-            backends=(("*", backend("mujoco", nconmax=512, njmax=512, enable_multiccd=True)),),
-            collision=CollisionSpec(contact_ke=6.0e4, contact_kd=500.0, rigid_gap=2.0e-3),
-        ),
-    )
-    """The arm and every free rigid body in one MuJoCo island, 50 Hz control over 500 Hz.
+    register_arrangement("mujoco_500hz@v1", MUJOCO_500HZ)
+    """The arm and every free rigid body in one MuJoCo island: ``rss.MUJOCO_500HZ``, under its task-language name.
 
     The bundle a hand can hold a rigid object in. ``GENERIC`` (and
     ``rigid_mujoco@v1``) puts free bodies on VBD behind a proxy coupler, which
-    pushes and cannot pinch: a Panda closing on a 50 mm cube there lets it slide
-    out or flings it. Here the fingers stall on the faces and carry it. The rates
-    and contact law are the tool-sorting benchmark's own, measured there."""
+    pushes and cannot pinch. The rates and contact law are the tool-sorting
+    benchmark's own, measured there."""
     register_arrangement("cloth_vbd@v1", GENERIC)
     register_arrangement("rod_vbd@v1", GENERIC)
     """A sheet or a cable on VBD beside a MuJoCo arm, exactly as ``GENERIC`` composes them."""
