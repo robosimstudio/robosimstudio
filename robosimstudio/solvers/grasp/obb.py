@@ -212,7 +212,8 @@ def grasp_from_obb(
 def top_down_grasp_quat(home_quat_xyzw: Sequence[float], handle_yaw: float) -> np.ndarray:
     """Yaw the home (downward-pointing) gripper so the fingers cross the handle.
 
-    The yaw is wrapped into (-90, 90] degrees: the hand is symmetric under a
+    The yaw is wrapped into [-90, 90) degrees -- the reference's own
+    ``(yaw + pi/2) % pi - pi/2``, kept identical: the hand is symmetric under a
     180-degree flip, so the wrapped yaw grasps identically while keeping the
     last wrist joint away from its limit.
     """

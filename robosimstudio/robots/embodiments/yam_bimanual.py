@@ -91,7 +91,8 @@ YAM_BIMANUAL = register_embodiment(
         # first and was refused with 230 mm of drift, and yam_i2rt's transcription
         # is a different build of the arm, off by up to 2.8 mm at the tool.
         urdf="embodiments/yam/yam_bimanual_arm.urdf",
-        # The arms alone, at their own base origin. See scripts/strip_yam_scenery.py.
+        # The arms alone, at their own base origin, stripped of the arena's
+        # scenery by a development-tree script (see assets/PROVENANCE.md).
         asset=AssetSpec(path="embodiments/yam/yam_bimanual_arms.xml"),
         # Mounted 0.3475 m behind the work surface's centre and 22 mm *above*
         # it: this arena's arms stand on a gantry that clears its play table.

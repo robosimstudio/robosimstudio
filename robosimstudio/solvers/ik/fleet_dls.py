@@ -361,7 +361,7 @@ def polish_pose_batched(
 
     Per world, masked like the rest of this module: a world that is done, or
     did not ask, comes back bit-identical, and every world's answer is the one
-    it gets alone (``tests/test_fleet_polish_math.py``).
+    it gets alone.
     """
     q = np.asarray(q, dtype=np.float64).copy()
     n_worlds, n_coords = q.shape

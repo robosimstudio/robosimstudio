@@ -396,7 +396,10 @@ def resolve_leaders(
     except (ImportError, ValueError):
         driver = None
     if driver is None:
-        raise LeaderUnavailable("the Feetech bus driver is not installed: pip install 'robosimstudio[lerobot-feetech]'")
+        raise LeaderUnavailable(
+            "the Feetech bus driver is not installed: install the lerobot-feetech extra "
+            "(from a checkout: `uv sync --extra lerobot-feetech`)"
+        )
     return leaders
 
 
@@ -446,7 +449,8 @@ def open_leader(leader: LeaderPort, connect: Any = None) -> Any:
         return connect(leader.port, [leader.calibration])
     except ModuleNotFoundError as exc:
         raise LeaderUnavailable(
-            "the Feetech bus driver is not installed: pip install 'robosimstudio[lerobot-feetech]'"
+            "the Feetech bus driver is not installed: install the lerobot-feetech extra "
+            "(from a checkout: `uv sync --extra lerobot-feetech`)"
         ) from exc
     except Exception as exc:
         raise LeaderUnavailable(

@@ -1,31 +1,29 @@
 # SPDX-License-Identifier: Apache-2.0
-"""The robot library: what an arm is, how it is driven, and how it decides.
+"""How a robot is driven and how it decides: the solvers under every arm.
 
-Everything about robots that is not about any particular task, gathered from the
-four places it used to be scattered over -- ``core/control``, ``toolkit/embodiments``,
-``toolkit/grippers`` and the IK, motion and grasp modules that had ended up
-inside the graph-policy runtime because that is where they were first needed.
+The behaviour half of the robot library. What an arm and a hand *are* -- the
+embodiment and gripper specs, measured geometry, the leader-arm buses -- lives in
+:mod:`robosimstudio.robots`; this package is what turns an intent into joint
+targets and a frame, whatever robot it is handed.
 
-Seven folders, split by what kind of knowledge each holds (this said "four" while
-listing six of them, which is the sort of number a roster should not carry):
+Five folders, split by what kind of question each answers:
 
-* :mod:`~robosimstudio.robots.embodiments` and :mod:`~robosimstudio.robots.grippers`
-  -- the robots and hands themselves, one module each, registering a spec that
-  states measured geometry. **Descriptions, not behaviour.**
-* :mod:`~robosimstudio.solvers.control` -- the action spaces a policy writes into,
-  and the drivers that turn intent into per-substep targets.
-* :mod:`~robosimstudio.solvers.ik` -- inverse kinematics, one module per backend.
-* :mod:`~robosimstudio.solvers.motion` -- gripper commands, operational-space
-  control, the Cartesian servo, and collision-aware planning.
+* :mod:`~robosimstudio.solvers.control` -- the action spaces a policy writes
+  into (joint position, absolute and delta end-effector pose), single-world and
+  batched, and the drivers that turn intent into per-substep targets.
+* :mod:`~robosimstudio.solvers.ik` -- inverse kinematics, one module per
+  backend: Newton's own IK, PyRoKi, damped least squares, and their batched
+  fleet forms.
+* :mod:`~robosimstudio.solvers.motion` -- what runs over time: gripper
+  commands, operational-space control, and the rate a planned path is
+  densified at.
 * :mod:`~robosimstudio.solvers.grasp` -- where to put the jaws: an oriented-box
   heuristic and an antipodal sampler over the real mesh.
-* :mod:`~robosimstudio.robots.teleop` -- **physical** input: a leader arm's servo
-  ticks mapped to the same joint vector a policy would have written. One module
-  per hardware bus, each importing its driver library lazily, so a checkout
-  without the hardware pays nothing.
+* :mod:`~robosimstudio.solvers.render` -- how a frame is computed: the RTX path
+  tracer and Newton's tiled ray tracer, behind ``core/render``'s contract.
 
-**It reads downward only.** The robot library imports ``specs`` and ``core`` and
-nothing above: it does not know what a task is, what a scene contains, or that a
+**It reads downward only.** This package imports ``specs``, ``core`` and the
+registry and nothing above: it does not know what a task is, what a scene contains, or that a
 graph policy exists. That is what lets an agent, a routine, a studio panel and a
 graph tool all drive the same arm through the same objects.
 """

@@ -7,8 +7,8 @@ to mean something precise -- so this module records the verdict sequence and
 reduces it to a fixed set of statistics that a later run can be checked against.
 
 **Why a summary and not the raw sequence.** Per-step equality is not available.
-``scripts/invariance_check.py`` documents identical code scoring 0.84 and 0.90 on
-consecutive folds of one towel: the nondeterminism is GPU-atomic, not seeded, and
+Identical code has been measured scoring 0.84 and 0.90 on consecutive folds of
+one towel: the nondeterminism is GPU-atomic, not seeded, and
 no amount of care removes it. A raw trace diff would therefore be red on every
 run and would teach everyone to ignore it. What *is* stable is the shape of the
 episode, and each field below is chosen because a specific kind of mistake moves
@@ -95,7 +95,7 @@ class TraceRecorder:
 
     def step(self, env: Any, action: Any, obs: Any, reward: float, info: dict[str, Any], stage: Any = None) -> None:
         # `stage` is accepted and dropped: this class duck-types `EpisodeRecorder`,
-        # which grew the parameter in 0e4a434, and a trace that did not follow it
+        # which grew the parameter, and a trace that did not follow it
         # made the certifier's solve stage raise `TypeError` before its first
         # step, under every verb. A trace records
         # verdicts, not frames, so which stage produced a row is not a thing it

@@ -5,8 +5,8 @@
 taken out: which poses this step reads, how a mirror is swept across the
 engine's substeps, when a sweep becomes a jump, and how the deformable state
 lands back in Newton's particle arrays. All of it is checkable without an
-engine, a GPU or a scene, and this is where that is done -- ``test_superdex.py``
-covers the same code with an engine in the loop but cannot say *why* a number
+engine, a GPU or a scene, and this is where that is done -- the SuperDex scenes
+at the medium tier (``tests/test_superdex_contact.py`` among them) cover the same code with an engine in the loop but cannot say *why* a number
 came out, only that it did.
 """
 

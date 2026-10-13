@@ -5,9 +5,9 @@
 of things, and it turns them into something you can step::
 
     scene = rss.Scene(cell="bench_075")
-    cube = scene.add(rss.body(name="cube", half=(0.025,) * 3, at=(0, 0, 0.2)))
+    cube = scene.add(rss.box(name="cube", half=(0.025,) * 3, at=(0, 0, 0.2)))
     sim = scene.build()
-    sim.step(120)
+    sim.run(120)
     print(cube.position)
 
 **There is exactly one way to put something in: :meth:`add`.** There is
@@ -216,34 +216,53 @@ class Scene:
 
         Returns:
             A :class:`~robosimstudio.scene.ref.Ref`, of whatever class the
-            entity declares. For a robot, a region or a camera there is nothing
-            to hand back and a bare ``Ref`` on the name is returned.
+            entity declares. A robot's reads the robot's bodies (its
+            :attr:`~robosimstudio.scene.ref.Ref.pose` is its base's), a
+            region's has the region's :attr:`~robosimstudio.scene.ref.Ref.handle`,
+            and a camera's carries its spec as ``.spec`` -- its name is what
+            ``sim.render(camera)`` takes.
 
         Raises:
-            ValueError: On a second thing with a name already taken. Two things
-                under one name is a scene where half the accessors silently
-                answer about the wrong one.
+            ValueError: On a second thing with a name already taken, robots,
+                regions and cameras included. Two things under one name is a
+                scene where half the accessors silently answer about the wrong
+                one. Also on a second robot: a scene holds one, and a two-armed
+                setup is one :class:`~robosimstudio.specs.EmbodimentSpec` with
+                two arms.
             KeyError: When the spec names an entity class nothing has
                 registered -- raised **here**, where the line that added it is
                 on the stack, rather than inside the compiler.
         """
         if isinstance(spec, Robot):
+            if self._robot is not None:
+                raise ValueError(
+                    f"the scene already has a robot, {self._robot.label!r}, and holds one: a two-armed setup is "
+                    "one EmbodimentSpec with two ArmSpecs. Scene.remove the first to replace it"
+                )
+            ref = self._claim(spec.label, _RobotRef)
             self._robot = spec
-            return Ref(None, spec.label)
+            return ref
         if isinstance(spec, RegionSpec):
+            ref = self._claim(spec.name, Ref)
             self.regions.append(spec)
-            return Ref(None, spec.name)
+            return ref
         if isinstance(spec, CameraSpec):
+            ref = self._claim(spec.name, _CameraRef)
+            ref._spec = spec
             self.cameras.append(spec)
-            return Ref(None, getattr(spec, "name", "camera"))
+            return ref
 
         name = getattr(spec, "name", "")
         if not name:
             raise ValueError(f"{type(spec).__name__} has no name, and a name is how everything else finds it")
+        ref = self._claim(name, _ref_class(spec))
+        self._specs.append(spec)
+        return ref
+
+    def _claim(self, name: str, ref_cls: type[Ref]) -> Ref:
+        """Reserve ``name`` and make the ref :meth:`build` will bind, or refuse a name already taken."""
         if name in self._refs:
             raise ValueError(f"the scene already has something called {name!r}")
-        ref_cls = _ref_class(spec)
-        self._specs.append(spec)
         ref = ref_cls(None, name)
         self._refs[name] = ref
         return ref
@@ -253,14 +272,18 @@ class Scene:
         return tuple(self.add(spec) for spec in specs)
 
     def remove(self, name: str) -> None:
-        """Take one thing out again, by name.
+        """Take one thing out again, by name -- an entity, the robot, a region or a camera.
 
         Raises:
             KeyError: If nothing in the scene is called that.
         """
         if name not in self._refs:
             raise KeyError(f"nothing called {name!r} in this scene; there is {sorted(self._refs)}")
+        if self._robot is not None and self._robot.label == name:
+            self._robot = None
         self._specs = [s for s in self._specs if getattr(s, "name", "") != name]
+        self.regions = [r for r in self.regions if r.name != name]
+        self.cameras = [c for c in self.cameras if c.name != name]
         del self._refs[name]
 
     def __contains__(self, name: str) -> bool:
@@ -402,6 +425,35 @@ class Scene:
         """
         self.physics = replace(self.physics, **changes)
         return self
+
+
+class _RobotRef(Ref):
+    """The robot :meth:`Scene.add` placed. It is the scene's embodiment rather
+    than a named entity, so that is what it reads."""
+
+    __slots__ = ()
+
+    @property
+    def entity(self) -> Any:
+        return self._scene.embodiment
+
+
+class _CameraRef(Ref):
+    """A camera :meth:`Scene.add` declared. Its name is what ``sim.render``
+    takes; it has no body, so the ref carries the spec it was added as."""
+
+    __slots__ = ("_spec",)
+
+    @property
+    def spec(self) -> CameraSpec:
+        return self._spec
+
+    @property
+    def pose(self):
+        raise ValueError(
+            f"{self.name!r} is a camera and owns no body; where it looks from is .spec (eye, look_at, xform), "
+            f"and sim.render({self.name!r}) photographs through it"
+        )
 
 
 def _ref_class(spec: Any) -> type[Ref]:

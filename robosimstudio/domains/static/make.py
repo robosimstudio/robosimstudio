@@ -10,9 +10,16 @@ whose *return type* changes with an argument, which is exactly the hidden
 knowledge this tier exists to remove. A thing that falls and a thing that does
 not are not the same thing with a switch.
 
-Poses here are **world coordinates**, not the work-surface frame: a cell's own
-furniture is what defines that frame, and a place is not positioned relative to
-itself.
+Poses here are in the **work-surface frame** once the spec is added to a scene
+or task -- the compiler places scenery through the cell's surface frame, like
+every other entity -- so ``at=(0.0, -0.17, 0.22)`` is 170 mm to the side of the
+bench's middle and 220 mm over its top, whatever bench::
+
+    scene.add(rss.slab(name="panel", half=(0.10, 0.01, 0.22), at=(0.0, -0.17, 0.22)))
+
+The exceptions are a cell's *own* furniture (``CellSpec.statics``), which is
+built before that frame exists and is what defines it, so is stated in world
+coordinates; and a spec passed ``world_xform=True``.
 """
 
 from __future__ import annotations

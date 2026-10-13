@@ -44,7 +44,7 @@ import numpy as np
 from robosimstudio.specs import RecordSpec, TaskSpec
 
 from .capture import CAPTURE_SCHEMA, capture_manifest
-from .store import SCHEMA, EpisodeStore
+from .store import EpisodeStore, episode_row
 
 __all__ = ["FleetRecorder"]
 
@@ -221,9 +221,12 @@ class FleetRecorder:
             # wrote only bodies re-rendered as a robot closing on a sponge that
             # never moved -- the tape held the particles, in ``capture.npz``,
             # and the replay does not read that file.
-            particles = None
-            if self.spec.privileged and int(getattr(self._fleet.model, "particle_count", 0) or 0):
-                _joint_qd, particles, _particle_qd = self._fleet_arrays()
+            #
+            # One read a tick, shared with capture when both want it.
+            capture_due = self.capture_enabled and snapshot.step % max(1, int(self.capture_spec.every)) == 0
+            has_particles = bool(int(getattr(self._fleet.model, "particle_count", 0) or 0))
+            arrays = self._fleet_arrays() if capture_due or (self.spec.privileged and has_particles) else None
+            particles = arrays[1] if arrays is not None and self.spec.privileged else None
             # The colours a running scene rewrites -- a stripe wiped off a bar
             # -- are state as much as a pose is, and the serial tape carries
             # them (``shape_color_live``). A wave that wrote poses and
@@ -259,13 +262,13 @@ class FleetRecorder:
                             anchors["shape_color_live_index"] = live_shapes
                             if labels is not None:
                                 anchors["shape_color_live_label"] = labels
-            if self.capture_enabled and snapshot.step % max(1, int(self.capture_spec.every)) == 0:
-                self._capture_points(snapshot, slots, live)
+            if capture_due:
+                self._capture_points(snapshot, slots, live, arrays=arrays)
             self._recorded += 1
         except Exception as exc:
             self._disable("step", exc)
 
-    def _capture_points(self, snapshot, slots: list, live: np.ndarray) -> None:
+    def _capture_points(self, snapshot, slots: list, live: np.ndarray, *, arrays=None) -> None:
         """One raw state point per live world. No relations or labels derived.
 
         The same keys the single-world tape carries, each taken from this
@@ -275,7 +278,7 @@ class FleetRecorder:
         same thing either way.
         """
         settled = {int(s.world): s.settled_body_q for s in slots if getattr(s, "settled_body_q", None) is not None}
-        joint_qd, particle_q, particle_qd = self._fleet_arrays()
+        joint_qd, particle_q, particle_qd = arrays if arrays is not None else self._fleet_arrays()
         worlds = snapshot.worlds
         wall = time.time()
         for world in np.flatnonzero(live):
@@ -370,7 +373,7 @@ class FleetRecorder:
                         "schema": CAPTURE_SCHEMA,
                         "event": "episode_end",
                         "step": int(getattr(slot, "steps", 0) or 0),
-                        "sim_time": float(getattr(slot, "sim_time", 0.0) or 0.0),
+                        "sim_time": self._sim_s(slot),
                     }
                 )
                 tape = {k: np.stack(v) for k, v in self._capture[index].items() if v}
@@ -396,29 +399,40 @@ class FleetRecorder:
     def _write_jsonl(path: Path, rows: list[dict[str, Any]]) -> None:
         path.write_text("".join(json.dumps(row, default=str) + "\n" for row in rows))
 
+    def _task_of(self, slot) -> Any:
+        """The document this world ran -- a mixed wave's is not the job's -- else the job's."""
+        task = getattr(slot, "task", None)
+        return task if task is not None else self.task
+
+    def _sim_s(self, slot) -> float:
+        """Simulated seconds the world ran: its control steps at its control rate."""
+        physics = getattr(self._task_of(slot), "physics", None)
+        hz = float(getattr(physics, "control_hz", 0.0) or 0.0)
+        return int(getattr(slot, "steps", 0) or 0) / hz if hz > 0 else 0.0
+
     def _meta(self, slot, extra: dict[str, Any]) -> dict[str, Any]:
-        """The episode's metadata, in the shape a recorded episode has always had."""
-        task = self.task
-        episode = slot.episode
-        return {
-            "schema": SCHEMA,
-            "task": task.full_name if task is not None else "",
-            "scene": task.scene if task is not None else "",
-            "embodiment": task.embodiment if task is not None else "",
-            "episode_id": episode.episode_id,
-            "seed": episode.seed,
-            "instruction": episode.instruction,
-            "model_key": episode.model_key,
-            "success": bool(slot.success),
-            "reward": float(slot.reward),
-            "episode_length": int(slot.steps),
-            "close_kind": slot.close_kind or "unknown",
-            "metrics": slot.metrics,
-            "wall_s": slot.wall_s,
-            "world": int(slot.world),
-            "recorded_steps": len(self._steps[int(slot.world)].get("sim_time", [])),
-            **extra,
-        }
+        """The episode's metadata: the serial recorder's row, plus ``world``."""
+        index = int(slot.world)
+        info = getattr(slot, "info", None) or {}
+        return episode_row(
+            self._task_of(slot),
+            slot.episode,
+            success=bool(slot.success),
+            reward=float(slot.reward),
+            episode_length=int(slot.steps),
+            close_kind=slot.close_kind,
+            termination_reason=info.get("termination_reason", ""),
+            metrics=slot.metrics,
+            wall_s=float(slot.wall_s),
+            sim_s=self._sim_s(slot),
+            # This world's recorded ticks: what the serial recorder counts per
+            # episode, and what ``steps.npz`` holds.
+            recorded_steps=len(self._steps[index].get("sim_time", [])),
+            captured_steps=len(self._capture[index].get("step", ())) if self.capture_enabled else 0,
+            # The fleet does not render; video comes from ``render_offline``.
+            video_frames=0,
+            extra={"world": index, **extra},
+        )
 
     def _append(self, world: int, key: str, value) -> None:
         self._steps[world].setdefault(key, []).append(value)
@@ -430,9 +444,9 @@ class FleetRecorder:
         """Lose the recording, not the run."""
         self.enabled = False
         self.failures[where] = f"{type(exc).__name__}: {exc}"
-        print(f"[fleet-record] disabled at {where} ({type(exc).__name__}: {exc}); the run continues")
 
     def close(self) -> None:
         """Report once what recording cost, if anything went wrong."""
         if self.failures:
-            print(f"[fleet-record] {len(self.failures)} failure(s): {self.failures}")
+            where, why = next(iter(self.failures.items()))
+            print(f"[fleet-record] recording was disabled after {len(self.failures)} failure(s): {where}: {why}")

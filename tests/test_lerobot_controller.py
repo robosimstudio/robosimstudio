@@ -265,7 +265,7 @@ class TestResolvingLeaders(unittest.TestCase):
     def test_a_missing_driver_names_the_extra(self) -> None:
         with mock.patch.object(lerobot_controller.importlib.util, "find_spec", return_value=None):
             message = self._sentence({"right": "ABC"}, self._file({"ABC": self.ENTRY}), check_ports=False)
-        self.assertIn("robosimstudio[lerobot-feetech]", message)
+        self.assertIn("uv sync --extra lerobot-feetech", message)
 
     def test_a_leader_that_checks_out_carries_its_own_calibration(self) -> None:
         with mock.patch.object(lerobot_controller.importlib.util, "find_spec", return_value=object()):

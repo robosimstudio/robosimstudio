@@ -2,10 +2,11 @@
 """The composed i2rt YAM wearing the arena's hand: the suites that were measured
 on the arena, on the one arm.
 
-The tool-hanging cell, written by ``scripts/graft_arena_hand.py``: shoulders at
-+/-0.17 m and the raised, forward mount that cell needs for lift-and-rotate
-clearance. It replaces ``yam_tool_hanging`` cell for cell, measured in the
-benchmark's YAM campaign record of 2026-09-06.
+The tool-hanging cell, written by the development-tree ``graft_arena_hand.py``
+(not shipped; see ``assets/PROVENANCE.md``): shoulders at +/-0.17 m and the
+raised, forward mount that cell needs for lift-and-rotate clearance. It replaced
+an earlier tool-hanging embodiment, since retired, cell for cell, measured in
+the benchmark's YAM campaign record of 2026-09-06.
 
 The generator takes ``--shoulder-y``, so the play table's +/-0.31 m pair is one
 flag away. It is not registered because nothing asks for it: the cloth-folding
@@ -14,11 +15,12 @@ ruling. Re-opening that would have to answer the arm-clearance measurement taken
 during the arena migration.
 
 This is ``yam_i2rt``'s links, meshes, inertias and joint physics -- the arm
-composed from i2rt's own part files with ``yam_asset.py``'s motor model -- and
+composed from i2rt's own part files with the YAM motor model -- and
 the ``yam_linear_arena`` hand grafted onto the wrist unchanged, palm capsules
 and camera included, in the ``{side}_link_6`` frame every one of that hand's
 constants is measured in. See the generator's docstring for where the graft
-sits and why, and ``scripts/yam_arm_parity.py`` for the measurement it rests on.
+sits and why; the measurement it rests on is an arm-parity comparison made
+during development.
 
 **What moved and by how much.** The arena export and this arm are not one
 kinematic chain: axis directions agree to 0.0000 deg, axis lines differ by
@@ -48,7 +50,7 @@ measurement shows the two exports share joint zeros and signs."""
 
 SHOULDER_HEIGHT_DELTA_M = 0.007517
 """How much higher this arm's shoulder sits above its base origin than the
-arena's did (scripts/graft_arena_hand.py). Subtracted from the arena's mounts."""
+arena's did (measured by the graft generator). Subtracted from the arena's mounts."""
 
 
 def _arm(side: str) -> ArmSpec:
@@ -73,7 +75,7 @@ def _spec(name: str, base_offset: tuple[float, ...]) -> EmbodimentSpec:
     return EmbodimentSpec(
         name=name,
         # No URDF, on purpose: this host is served by damped least squares, as
-        # yam_tool_hanging (which also names none) is. The vendor yam.urdf it
+        # the retired tool-hanging embodiment (which also named none) was. The vendor yam.urdf it
         # used to name was refused by PyRoKi on both arms anyway (231.53 mm /
         # 15.994 deg of drift on the level-1 pliers scene), so PyRoKi here
         # already fell back to DLS. yam_i2rt's transcribed
@@ -106,7 +108,7 @@ YAM_I2RT_ARENA_NARROW = register_embodiment(
         "yam_i2rt_arena_narrow",
         # The tool-hanging cell's mount -- 50 mm forward and 60 mm higher than
         # the arena's -- less the same convention: same shoulder height as
-        # yam_tool_hanging.
+        # the retired tool-hanging embodiment.
         (-0.2975, 0.0, 0.082 - SHOULDER_HEIGHT_DELTA_M, 0.0, 0.0, 0.0, 1.0),
     )
 )

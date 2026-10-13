@@ -134,9 +134,10 @@ def _objects(env, model) -> list[dict[str, Any]]:
                 "quat_xyzw": [round(float(v), 6) for v in pose[3:7]],
                 # Split because they answer different questions: a pile that is
                 # sliding and a pile that is buzzing in place look the same in a
-                # single magnitude.
-                "linear_speed": round(float(np.abs(velocity[3:]).max()), 6),
-                "angular_speed": round(float(np.abs(velocity[:3]).max()), 6),
+                # single magnitude. Newton's body_qd is (linear, angular),
+                # linear first (see SceneState.body_qd).
+                "linear_speed": round(float(np.abs(velocity[:3]).max()), 6),
+                "angular_speed": round(float(np.abs(velocity[3:]).max()), 6),
                 "mass_kg": round(float(mass[body]), 6),
             }
         )
@@ -222,20 +223,21 @@ def snapshot(env, *, note: str = "", evaluate: bool = False) -> dict[str, Any]:
     model = env.model
     bodies = _bodies(env)
     penetration = _penetration(env, model, bodies)
-    task = env.task
+    # A bare ``Sim`` has no task; its header still carries the step.
+    task = getattr(env, "task", None)
     return {
         "taken": time.strftime("%Y-%m-%dT%H:%M:%S"),
         "note": note,
         "task": {
-            "name": task.full_name,
-            "scene": task.scene,
-            "embodiment": task.embodiment,
-            "gripper": task.gripper,
+            "name": getattr(task, "full_name", None),
+            "scene": getattr(task, "scene", None),
+            "embodiment": getattr(task, "embodiment", None),
+            "gripper": getattr(task, "gripper", None),
             # `env.episode` is the resolved Episode, not an index, so the id is
             # read off it rather than off the environment.
             "episode": int(getattr(getattr(env, "episode", None), "episode_id", 0) or 0),
             "step": int(getattr(env, "step_count", 0)),
-            "instruction": task.instruction,
+            "instruction": getattr(task, "instruction", None),
         },
         "finite": bool(env.state_is_finite()),
         "worst_penetration_mm": penetration[0]["depth_mm"] if penetration else 0.0,

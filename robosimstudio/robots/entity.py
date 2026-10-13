@@ -106,6 +106,8 @@ class ArmIndex:
             or mimic constraint carries. Never written a target -- the solver
             ignores it -- but read, because on a mirrored pair whose twin is a
             follower they are what makes the gap exactly measurable.
+        gripper_follower_dofs: ``joint_qd`` indices of the same follower joints,
+            so a reset can zero their rates along with the driven fingers'.
         gripper_span: Fingertip separation at full open [m].
         home_q: Home joint positions, or an empty array.
         approach_axis: Gripper-local axis pointing from the wrist towards the
@@ -128,6 +130,7 @@ class ArmIndex:
         "gripper_coords",
         "gripper_dofs",
         "gripper_follower_coords",
+        "gripper_follower_dofs",
         "gripper_open",
         "gripper_open_q",
         "gripper_span",
@@ -151,6 +154,7 @@ class ArmIndex:
         self.gripper_open_q: tuple[float, ...] = ()
         self.gripper_closed_q: tuple[float, ...] = ()
         self.gripper_follower_coords: tuple[int, ...] = ()
+        self.gripper_follower_dofs: tuple[int, ...] = ()
         self.gripper_span: float = 0.08
         self.home_q: np.ndarray = np.zeros(0, dtype=np.float32)
         self.approach_axis: np.ndarray = np.array([0.0, 0.0, 1.0])
@@ -1146,9 +1150,9 @@ class EntityEmbodiment(Entity):
             # The followers, for measurement only. label_index raises on a name
             # that matches nothing, so a hand claiming a follower it does not
             # have is a loud error rather than a silently unmeasurable jaw.
-            index.gripper_follower_coords = (
-                tuple(int(q_start[label_index(joint_labels, n)]) for n in hand.follower_names) if hand else ()
-            )
+            followers = [label_index(joint_labels, n) for n in hand.follower_names] if hand else []
+            index.gripper_follower_coords = tuple(int(q_start[j]) for j in followers)
+            index.gripper_follower_dofs = tuple(int(qd_start[j]) for j in followers)
             index.gripper_open_q = tuple(float(v) for v in hand.finger_open_q) if hand else ()
             index.gripper_closed_q = tuple(float(v) for v in hand.finger_closed_q) if hand else ()
             # effective_span rather than the arithmetic restated: one rule, on
@@ -1302,9 +1306,10 @@ class EntityEmbodiment(Entity):
             # step, which reads as a controller overshooting rather than as a
             # reset that stopped halfway. Only this robot's DOFs -- the coord
             # and DOF layouts coincide for revolute and prismatic joints, which
-            # is every joint an arm has.
+            # is every joint an arm has. The followers as well: a mimic finger
+            # still swinging from the last episode drags its driver with it.
             for index in self.arms.values():
-                for d in (*index.arm_dofs, *index.gripper_dofs):
+                for d in (*index.arm_dofs, *index.gripper_dofs, *index.gripper_follower_dofs):
                     qd[d] = 0.0
             state.joint_qd.assign(qd)
 

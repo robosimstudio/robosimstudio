@@ -187,12 +187,12 @@ def capture_manifest(env: Any, episode: Any = None) -> dict[str, Any]:
             # Flat per side, and NOT redundant with ``finger_groups`` for the
             # reader that wants it: attributing a contact to a finger SIDE is a
             # set-membership test on shape indices, and the grouped form makes
-            # every consumer rebuild this to do it. ``gap-self-learning``'s
-            # ``gsl/capture/facts.py`` reads exactly this key, twice, to decide
-            # which side of which hand a contact belongs to -- which is how a
-            # grasp, a hold, a carry and a release are derived from the tape. It
-            # reads it with a ``.get(..., ())`` default, so dropping this key
-            # does not raise there: it silently reports that nothing is held.
+            # every consumer rebuild this to do it. Downstream tape readers use
+            # exactly this key to decide which side of which hand a contact
+            # belongs to -- which is how a grasp, a hold, a carry and a release
+            # are derived from the tape. A reader that defaults it with
+            # ``.get(..., ())`` does not raise if it is dropped: it silently
+            # reports that nothing is held.
             "finger_shapes": [[int(shape) for _body, shapes in side for shape in shapes] for side in arm.finger_groups],
             "shapes": _ints(arm.shapes),
         }
@@ -225,16 +225,22 @@ def capture_manifest(env: Any, episode: Any = None) -> dict[str, Any]:
         for name, handle in sorted(handles.regions.items())
     }
     episode = episode if episode is not None else getattr(env, "episode", None)
-    task = env.task
+    # Off the task when there is one, off the request when there is not: the
+    # recorder accepts a bare ``Sim``, which has no task (``EpisodeRecorder``'s
+    # results row reads provenance the same way).
+    task = getattr(env, "task", None)
+    source = task if task is not None else getattr(env, "request", None)
+    embodiment = getattr(source, "embodiment", "")
+    physics = getattr(source, "physics", None)
     return {
         "schema": CAPTURE_SCHEMA,
         "task": {
-            "name": task.full_name,
-            "scene": task.scene,
-            "embodiment": task.embodiment,
-            "gripper": task.gripper,
-            "instruction": str(getattr(episode, "instruction", task.instruction)),
-            "control_hz": float(task.physics.control_hz),
+            "name": getattr(source, "full_name", "") if task is not None else "",
+            "scene": getattr(source, "scene", "") or getattr(source, "cell", ""),
+            "embodiment": embodiment if isinstance(embodiment, str) else str(getattr(embodiment, "name", embodiment)),
+            "gripper": getattr(source, "gripper", None),
+            "instruction": str(getattr(episode, "instruction", getattr(source, "instruction", ""))),
+            "control_hz": float(physics.control_hz) if physics is not None else None,
             "episode_id": int(getattr(episode, "episode_id", -1)),
             "seed": int(getattr(episode, "seed", -1)),
             "sampled": _json_safe(dict(getattr(episode, "overrides", ()) or ())),

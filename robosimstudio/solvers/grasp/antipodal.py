@@ -314,7 +314,7 @@ class GraspCandidate:
         comfortable. Measured on a tool-sorting scene: 40.9 degrees of residual
         roll against a hard stop, where the flip solves to 0.9.
 
-        The old box heuristic did this by wrapping its yaw into (-90, 90]. A
+        The old box heuristic did this by wrapping its yaw into [-90, 90). A
         sampler that reads real faces cannot wrap an angle it never computed, so
         it hands both over and lets whoever owns an IK pick.
         """

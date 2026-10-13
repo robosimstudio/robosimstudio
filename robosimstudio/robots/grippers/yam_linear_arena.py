@@ -88,7 +88,7 @@ YAM_LINEAR_ARENA = register_gripper(
         tcp_offset=GRASP_SITE_OFFSET,
         tcp_offset_rot=GRASP_SITE_QUAT_XYZW,
         # Measured, by driving the hand open to shut and reading the pad's own
-        # travel in the tool frame -- ``uv run python scripts/measure_gripper.py``.
+        # travel in the tool frame.
         # This is the third of the three defects in the module docstring, and the
         # most quietly expensive: the axis was never stated, so it inherited the
         # class default of local +y, and the pads really slide along local **x**.

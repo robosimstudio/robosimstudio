@@ -27,15 +27,12 @@ from __future__ import annotations
 import importlib
 import pkgutil
 from collections.abc import Callable, Iterator
-from typing import Any, Generic, TypeVar
+from typing import Any
 
 __all__ = ["Registry"]
 
 
-T = TypeVar("T")
-
-
-class Registry(Generic[T]):
+class Registry[T]:
     """A name-to-value map that refuses to be written twice.
 
     Args:

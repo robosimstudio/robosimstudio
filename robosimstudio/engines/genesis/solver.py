@@ -27,6 +27,11 @@ class SolverGenesis(SolverHost):
             :mod:`robosimstudio.engines.genesis.runtime`.
         feedback: ``"auto"`` or ``"off"`` --- the IPC constraint-reaction harvest
             for two-way mirrors.
+        feedback_alpha: EMA coefficient for a *rising* harvested force; 1.0
+            disables the ramp. See
+            :class:`~robosimstudio.engines.feedback.WrenchAccumulator`.
+        feedback_dv_max: The most velocity [m/s] one control step's harvested
+            wrench may add to a body; scales the whole wrench, torque with it.
         pose_source: ``"fresh"`` or ``"snapshot"``.
         shell_young: Cloth elastic modulus [Pa], island-wide. A cloth spec speaks
             its Newton solver's stiffnesses, not Young and Poisson, so these ride

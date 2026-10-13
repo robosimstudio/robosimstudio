@@ -1,7 +1,7 @@
 # SPDX-License-Identifier: Apache-2.0
 """The fold measures, pinned on synthetic geometry.
 
-Split out of ``tests/test_specs.py`` on 2026-09-14. ``cloth_fold_error`` and the
+``cloth_fold_error`` and the
 shirt's three-crease score are library vocabulary
 (``robosimstudio.assetlib.vocabulary.measures``), scored here on sheets built
 in the test rather than on any scene -- the number the benchmark reports has to

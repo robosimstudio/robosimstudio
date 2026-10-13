@@ -40,7 +40,8 @@ def region_bounds(region: dict, origin=(0.0, 0.0, 0.0)) -> tuple[np.ndarray, np.
     """A region's world corners, given where its frame currently is.
 
     Args:
-        region: ``{"xy_ranges": [x0, y0, x1, y1], "z_range": [lo, hi]}``.
+        region: ``{"xy_ranges": [x0, y0, x1, y1], "z_range": [lo, hi]}``;
+            ``z_range`` defaults to BDDL's 0 to 0.15 m, as the lowering's does.
         origin: Where the region's frame sits now [m]. For a world-anchored
             region this is the origin; for one riding a drawer it is the drawer.
 
@@ -52,7 +53,7 @@ def region_bounds(region: dict, origin=(0.0, 0.0, 0.0)) -> tuple[np.ndarray, np.
     held *above* an open bin is not in it, and one resting on the bin floor is.
     """
     x0, y0, x1, y1 = (float(v) for v in region["xy_ranges"])
-    z0, z1 = (float(v) for v in region["z_range"])
+    z0, z1 = (float(v) for v in region.get("z_range", (0.0, 0.15)))
     base = np.asarray(origin, dtype=np.float64)
     lo = base + np.array([min(x0, x1), min(y0, y1), min(z0, z1)])
     hi = base + np.array([max(x0, x1), max(y0, y1), max(z0, z1)])

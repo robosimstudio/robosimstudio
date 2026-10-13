@@ -5,7 +5,7 @@ No GPU and no browser. What is checked here is the part of direct manipulation
 that is pure bookkeeping -- which slot a click takes, which one it recycles when
 they are all taken, and the rigid transform that carries the other handles when
 one is dragged -- because that is the half that can be silently wrong. Whether
-the wrench then lifts the box is physics, and lives in ``tests.test_scenes``.
+the wrench then lifts the box is physics, and lives in ``tests.test_robot_drag``.
 """
 
 from __future__ import annotations

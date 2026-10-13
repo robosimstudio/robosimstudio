@@ -4,7 +4,7 @@
 Operational-space control, the waypoint runner, and the action spaces a policy
 writes into -- all of them over stub arms, because what is being tested is the
 arithmetic and the contract rather than any particular robot. Anything needing a
-built model is in ``test_scenes.py``.
+built model belongs to the medium tier.
 
 Split out of ``test_core.py`` when the control stack moved to
 ``robosimstudio.solvers``: a test module follows the code it tests.
@@ -395,3 +395,39 @@ class TestOscWaypoints(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class _DeltaArm:
+    """The three things ``ActionEEDelta`` asks of an ``ArmIK``, recorded."""
+
+    def __init__(self, pos, quat) -> None:
+        self.home_pose = (np.asarray(pos, dtype=np.float64), np.asarray(quat, dtype=np.float64))
+        self.target = None
+
+    def ee_pose(self, state):
+        return self.home_pose
+
+    def set_target(self, pos, quat) -> None:
+        self.target = (np.asarray(pos), np.asarray(quat))
+
+    def solve_into(self, joint_q, joint_target_q) -> None:
+        pass
+
+
+class TestEEDeltaToolConvention(unittest.TestCase):
+    """``"tool"`` is ManiSkill's ``ee`` frame: ``prev_pose * delta``, translating along the pre-step axes."""
+
+    def test_a_combined_move_translates_along_the_pre_step_orientation(self):
+        from robosimstudio.solvers import ActionEEDelta
+
+        arm = _DeltaArm((0.0, 0.0, 0.0), (0.0, 0.0, 0.0, 1.0))
+        space = ActionEEDelta([(arm, None)], convention="tool")
+        # 10 cm along the tool's x while turning a quarter about its z.
+        space.apply(
+            [0.1, 0.0, 0.0, 0.0, 0.0, np.pi / 2, 0.0],
+            SimpleNamespace(joint_target_q=None),
+            SimpleNamespace(joint_q=None),
+        )
+        pos, quat = arm.target
+        np.testing.assert_allclose(pos, [0.1, 0.0, 0.0], atol=1e-9)
+        np.testing.assert_allclose(np.abs(quat), np.abs(quat_from_axis_angle([0, 0, 1], np.pi / 2)), atol=1e-9)

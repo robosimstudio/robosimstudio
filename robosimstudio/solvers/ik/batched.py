@@ -45,6 +45,7 @@ the array pair -- the pattern and the fallback are
 
 from __future__ import annotations
 
+import logging
 from collections.abc import Sequence
 
 import newton
@@ -53,6 +54,8 @@ import numpy as np
 import warp as wp
 
 from robosimstudio.core.streams import capturing
+
+log = logging.getLogger(__name__)
 
 __all__ = ["BatchedArmIK", "RobotIKRig"]
 
@@ -315,7 +318,7 @@ class RobotIKRig:
                     self._graph = capture.graph
                 except Exception as exc:
                     self._graph = None
-                    print(f"[batched_ik] solve capture failed ({type(exc).__name__}: {exc}); running eager")
+                    log.warning("batched IK solve capture failed (%s: %s); running eager", type(exc).__name__, exc)
         if self._graph is not None:
             wp.capture_launch(self._graph)
         else:
