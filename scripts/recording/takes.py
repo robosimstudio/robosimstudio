@@ -36,6 +36,8 @@ from .beats import (
     Grasp,
     Held,
     Layout,
+    Mid,
+    Nearest,
     Orbit,
     Policy,
     Press,
@@ -47,6 +49,7 @@ from .beats import (
     Slider,
     Squashed,
     Toggle,
+    Top,
     Wait,
 )
 
@@ -358,7 +361,7 @@ def grasp(example: str, thing: str, *, at: Any = None, lift: float = 0.12, pendi
     """The planned gesture as a draft: the nearest hand over the thing, down, Close, up."""
     return Take(
         example,
-        camera=kw.pop("camera", Orbit(At(thing, dz=0.06), distance=0.6, azimuth=-15.0, elevation=28.0)),
+        camera=kw.pop("camera", Orbit(Mid(At(thing), Nearest(thing)), distance=0.85, azimuth=-15.0, elevation=25.0)),
         warmup=kw.pop("warmup", 1.0),
         beats=(
             Wait(seconds=0.5),
@@ -392,6 +395,8 @@ def routine(example: str, *, speed: float, success: str) -> Take:
         pending="the demo and its routine are being built on another branch",
     )
 
+
+ROPE_VIEW = Orbit(Mid(Segment("cable", 0.5), Nearest("cable")), distance=1.0, azimuth=-20.0, elevation=30.0)
 
 DRAFTS = (
     grasp("examples/02_cloth/00_towel.py", "towel", at=Corner("towel", -1, -1, 0.03), lift=0.10),
@@ -437,11 +442,13 @@ DRAFTS = (
     Take(
         "examples/03_soft/00_sponge.py",
         name="press_sponge",
-        camera=Orbit(At("sponge"), distance=0.5, azimuth=-15.0, elevation=20.0),
+        camera=Orbit(Mid(At("sponge"), Nearest("sponge")), distance=0.75, azimuth=-15.0, elevation=22.0),
         warmup=1.0,
         beats=(
             Wait(seconds=0.5),
-            Drag("right", "z", to=At("sponge"), seconds=1.4, label="down onto the sponge"),
+            # The Panda's hand starts at bench (-0.143, -0.115), off the sponge: over it first.
+            DragTo("right", Top("sponge", dz=0.08), label="over the sponge"),
+            Drag("right", "z", to=Top("sponge", dz=-0.012), seconds=1.4, label="down into it"),
             Wait(seconds=0.8, mark="pressed", label="it squashes under the jaw"),
             Drag("right", "z", 0.08, seconds=1.0, label="up"),
             Wait(seconds=1.0, label="and it recovers"),
@@ -454,7 +461,7 @@ DRAFTS = (
     Take(
         "examples/04_extending/01_new_kind.py",
         camera=Orbit(At("chain"), distance=0.7, azimuth=-15.0, elevation=30.0),
-        warmup=1.0,
+        warmup=3.0,  # the stack of loose links is still falling over at 1 s
         beats=(
             Wait(seconds=0.5),
             Click(At("chain"), label="click a link: a handle"),
@@ -463,6 +470,8 @@ DRAFTS = (
             Press(text="Release all"),
             Wait(seconds=1.2),
         ),
+        # TODO(after merge): the chain is loose links, and a handle lifts the one it
+        # holds: measure that link, not the heap's middle (which rose 3.9 mm).
         expect=(Rose("chain", 0.03, at="lifted"),),
         pending=PENDING,
     ),
@@ -476,8 +485,16 @@ DRAFTS = (
     ),
     grasp("examples/07_tasks/01_goals_and_rewards.py", "cube"),
     grasp("examples/07_tasks/02_episodes.py", "cube"),
-    grasp("examples/10_rope/00_cable.py", "cable", at=Segment("cable", 0.5), lift=0.10),
-    grasp("examples/10_rope/02_superdex.py", "cable", at=Segment("cable", 0.5), lift=0.10, needs=("superdex",)),
+    # Back to a metre: the cable runs the bench's width, and the nearer hand starts at its far end.
+    grasp("examples/10_rope/00_cable.py", "cable", at=Segment("cable", 0.5), lift=0.10, camera=ROPE_VIEW),
+    grasp(
+        "examples/10_rope/02_superdex.py",
+        "cable",
+        at=Segment("cable", 0.5),
+        lift=0.10,
+        needs=("superdex",),
+        camera=ROPE_VIEW,
+    ),
     routine("demo/wipe_the_bar/wipe_the_bar.py", speed=2.0, success="the bar is wiped:"),
     routine("demo/route_the_cable/route_the_cable.py", speed=2.0, success="the cable is in its clips:"),
     routine("demo/fold_the_towel/fold_the_towel.py", speed=2.0, success="the towel is folded:"),

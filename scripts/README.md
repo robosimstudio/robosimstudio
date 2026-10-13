@@ -12,6 +12,31 @@ Every script here runs by path: `uv run python scripts/<name>.py`. Each answers
 | `example_readmes.py` | Write each example folder's README sections from its scripts' docstrings; `--check` says whether they are up to date. |
 | `bench_run.py` | Run a policy over a task's episodes and write a run directory: one results row per episode and the success rate. `--task-root` adds a folder of your tasks, `--num-worlds` runs them side by side. |
 
+## Media
+
+| script | what it does |
+| --- | --- |
+| `record_examples.py` | Film the clips the example READMEs show: each example's own page, drawn on the GPU in a headless Chromium, with a cursor that drags the gizmo, presses Close and moves the sliders. A take whose physics checks hold is written into its folder's `media/`; every take leaves its clip, a contact sheet and a timeline in `outputs/record/<folder>/<clip>/`. The takes are `recording/takes.py`. |
+
+The recorder needs the `media` dependency group and its browser, once:
+
+```bash
+uv sync --group media --extra superdex --extra gap
+uv run --group media playwright install chromium
+```
+
+Then, from the repository root:
+
+```bash
+uv run --group media python scripts/record_examples.py --list                 # every take, and the clips kept as they are
+CUDA_VISIBLE_DEVICES=1 uv run --group media python scripts/record_examples.py 01_rigid    # one take, by any part of its name
+CUDA_VISIBLE_DEVICES=1 uv run --group media python scripts/record_examples.py drag_cube --probe   # frame it: probe.png, no beats
+uv run --group media python scripts/record_examples.py --final --gpus 1,2 -j 4   # every finished take, two at a time per card
+```
+
+A pending take (a draft on physics still being changed) is filmed into
+`outputs/record/` only. `--no-install` keeps any take out of `examples/`.
+
 ## Hardware
 
 | script | what it does |

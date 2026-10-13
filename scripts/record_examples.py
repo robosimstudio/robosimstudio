@@ -104,11 +104,11 @@ def film_one(
         log("the example opened no page")
         return 1
     if probe:
-        (out / "probe.png").write_bytes(film.screenshot)
-        log(f"camera {film.camera}")
-        for name in ("/studio/right/cursor", "/studio/left/cursor"):
-            log(f"{name}: {film.page and 'see probe.png'}")
-        log(f"wrote {out / 'probe.png'}")
+        if film.screenshot:
+            (out / "probe.png").write_bytes(film.screenshot)
+        record = {"take": take.key, "verdict": "probe", "renderer": film.renderer, "camera": film.camera}
+        encode.timeline(out / "probe.json", record | {"error": film.error, "probe": str(out / "probe.png")})
+        log(f"camera {film.camera}; wrote {out / 'probe.png'}")
         return 0 if not film.error else 1
 
     verdicts = film.judge()
@@ -218,7 +218,7 @@ def run_all(chosen: list[Take], args) -> int:
                 proc.kill()
                 proc.wait()
             running.remove(item)
-            print(_summary(take, args.out, proc.returncode, time.perf_counter() - started), flush=True)
+            print(_summary(take, args.out, proc.returncode, time.perf_counter() - started, args.probe), flush=True)
             if proc.returncode != 0:
                 failed.append(take.key)
     if failed:
@@ -226,12 +226,16 @@ def run_all(chosen: list[Take], args) -> int:
     return 1 if failed else 0
 
 
-def _summary(take: Take, out_root: Path, code: int, wall: float) -> str:
-    path = out_root / take.key / "timeline.json"
+def _summary(take: Take, out_root: Path, code: int, wall: float, probe: bool) -> str:
+    path = out_root / take.key / ("probe.json" if probe else "timeline.json")
     if not path.is_file():
         tail = (out_root / take.key / "log.txt").read_text(errors="replace").splitlines()[-15:]
         return f"{take.key}: exit {code} after {wall:.0f} s, no timeline\n    " + "\n    ".join(tail)
     record = json.loads(path.read_text())
+    if record.get("verdict") == "probe":
+        return f"{take.key}: probe ({wall:.0f} s) -> {record['probe']}" + (
+            f"; {record['error']}" if record["error"] else ""
+        )
     webp = record.get("webp", {})
     fails = [v["reading"] for v in record.get("expect", []) if not v["passed"]]
     return (

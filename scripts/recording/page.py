@@ -288,11 +288,19 @@ class Page:
         finds the pixel drei agrees is on it is not.
         """
         (ox, oy), (tx, ty) = arrow["origin"], arrow["tip"]
+        left, top, width, height = self.js("canvasRect")
+        mx, my = (ox + tx) / 2, (oy + ty) / 2
+        if not (left <= mx <= left + width and top <= my <= top + height):
+            raise RuntimeError(
+                f"{gizmo}: arrow {index} is outside the 3D view at ({mx:.0f}, {my:.0f}); frame the camera on it"
+            )
         nx, ny = -(ty - oy), tx - ox
         norm = math.hypot(nx, ny) or 1.0
         candidates = [
             (ox + (tx - ox) * k + nx / norm * side, oy + (ty - oy) * k + ny / norm * side)
-            for k in (0.6, 0.55, 0.65, 0.5, 0.7, 0.45, 0.75, 0.4, 0.8)
+            # Middle out, then towards the cone: an arm's gizmo is depth tested, and a
+            # hand in front of the arrow's middle can leave only its far end to press.
+            for k in (0.6, 0.55, 0.65, 0.5, 0.7, 0.45, 0.75, 0.4, 0.8, 0.85, 0.9, 0.35, 0.3)
             for side in (0, -2, 2, -4, 4)
         ]
         self.glide(*candidates[0], approach)
