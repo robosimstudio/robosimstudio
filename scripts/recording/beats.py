@@ -122,6 +122,27 @@ class Hand(Target):
         return film.hand(self.arm)
 
 
+@dataclass(frozen=True)
+class Nearest(Target):
+    """The tool centre of the hand nearest a thing."""
+
+    name: str = ""
+
+    def resolve(self, film):
+        return film.hand(film.nearest_arm(self.name))
+
+
+@dataclass(frozen=True)
+class Mid(Target):
+    """Halfway between two targets: a camera aimed here keeps a hand and what it is going for in one view."""
+
+    a: Any = None
+    b: Any = None
+
+    def resolve(self, film):
+        return tuple((p + q) / 2.0 for p, q in zip(resolve(self.a, film), resolve(self.b, film), strict=True))
+
+
 def resolve(target, film) -> tuple[float, float, float]:
     """A :class:`Target`, a callable ``(film) -> xyz``, or a plain xyz."""
     if isinstance(target, Target):
