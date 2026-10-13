@@ -141,11 +141,24 @@ def _routed(film) -> tuple[bool, str]:
     return ok, f"seats {r['seat0']:.2f}/{r['seat1']:.2f} (need 0.04), port {r['port']:.2f} (0.06), end {r['end']:.0f}"
 
 
-def _folded(film) -> tuple[bool, str]:
-    """The fold demo's own measures (its ``fold_measures``), against the cloth_fold suite's gate."""
+def _script(film):
+    """The take's script as a module of its own, for the measures it defines; loaded once, its ``main()`` not run."""
+    import importlib.util
+    import pathlib
     import sys
 
-    m = sys.modules["__main__"].fold_measures(film.sim)  # runpy installs the running script as __main__
+    path = pathlib.Path(__file__).resolve().parents[2] / film.take.example
+    name = "_take_" + path.stem
+    if name not in sys.modules:
+        spec = importlib.util.spec_from_file_location(name, path)
+        sys.modules[name] = module = importlib.util.module_from_spec(spec)
+        spec.loader.exec_module(module)
+    return sys.modules[name]
+
+
+def _folded(film) -> tuple[bool, str]:
+    """The fold demo's own measures (its ``fold_measures``), against the cloth_fold suite's gate."""
+    m = _script(film).fold_measures(film.sim)
     ok = m["fold_extent"] <= 0.6 and m["fold_score"] >= 0.85
     return ok, f"extent {m['fold_extent']:.3f} (need <= 0.6), score {m['fold_score']:.3f} (need >= 0.85)"
 
