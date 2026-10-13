@@ -95,8 +95,10 @@ dev = ["ruff==0.16.1"]
 # It is 1.8 GB from NVIDIA's index; on a GPU without RT cores it is never
 # imported, and UV_NO_GROUP=rtx (or --no-group rtx) leaves it out. A group rather
 # than a base dependency, because pip needs NVIDIA's index named to find ovrtx.
+# ovrtx ships wheels for Linux (glibc 2.35+, x86_64 and aarch64) and Windows only,
+# so the marker keeps a macOS checkout installable.
 [dependency-groups]
-rtx = ["robosimstudio[rtx]"]
+rtx = ["robosimstudio[rtx]; sys_platform == 'linux' or sys_platform == 'win32'"]
 
 [project.urls]
 Repository = "https://github.com/robosimstudio/robosimstudio"
