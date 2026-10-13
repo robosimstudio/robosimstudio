@@ -1,9 +1,8 @@
 # SPDX-License-Identifier: Apache-2.0
 """``rss.sheet(held_by=...)``: a sheet a body holds from the start, as a spec and a registered entity.
 
-No GPU: these are the seam's rules as data. What the hold does to a scene -- the patch riding
-the wrist, the fingers blind to the cloth, the hold surviving a reset -- is built and stepped in
-``tests/test_demo_fold_the_towel.py``.
+No GPU: these are the seam's rules as data. No shipped example or demo holds a sheet this way
+any more: the fold demo's hand holds its towel by friction (``tests/test_demo_fold_the_towel.py``).
 """
 
 from __future__ import annotations
