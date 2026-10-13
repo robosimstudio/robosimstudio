@@ -103,10 +103,14 @@ Recorded from the page in a browser.
 - Click a patch of cloth to pin it to a handle. A second click elsewhere adds a
   second handle, and **Move together** carries both as one.
 - Drag an arm's gizmo to move the arm through IK. **Grip** opens and closes its
-  fingers.
+  fingers. What they close on stays in them only by friction, and that needs
+  `physics=rss.MUJOCO_500HZ` (arm and rigid bodies in one engine); under the
+  default a hand pushes a free body and cannot pinch one.
 - **Pause**, **Speed** and **Reset** are in the Simulation folder.
 
-`rss.view` opens with the `drive` panels, which are the ones above.
+`rss.view` opens with the `drive` panels, which are the ones above. On a task
+it keeps the task's own as well: the **Goal**, the regions it is about, and the
+**Policy** folder with **Run** ([Tasks](../07_tasks/README.md)).
 `rss.view(sim, panels="all")` adds the rest:
 
 | Folder | What it does |
