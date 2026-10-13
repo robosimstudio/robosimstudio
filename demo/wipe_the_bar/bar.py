@@ -1,34 +1,39 @@
 # SPDX-License-Identifier: Apache-2.0
-"""The scene ``00_wipe_the_bar.py`` drives: a real cell's grab bar, sponge and marker stripe, measured off its clip.
+"""The scene ``wipe_the_bar.py`` runs: a real cell's grab bar, sponge and marker stripe, measured off its clip.
 
 The cell is a real one: a YAM pair, a chrome grab bar bolted into two black
-blocks on a gridded foam mat, a kitchen sponge, and a blue marker line drawn
-along the bar's crown. Every number in :class:`Layout` was measured off the
-clip's frames against the mat's 25 mm grid. They are what makes this a twin;
-the rest of the file builds what they describe.
+blocks on a gridded foam mat, a kitchen sponge lying on the mat, and a blue
+marker line drawn along the bar's crown. Every number in :class:`Layout` was
+measured off the clip's frames against the mat's 25 mm grid, as the
+``surface_prep`` task this demo follows measured it. They are what makes this a
+twin; the rest of the file builds what they describe.
 
 In order:
 
-1. **The layout**: where everything stands, and the physics it was measured under.
+1. **The layout**: where everything stands, and the physics it is stepped under.
 2. **The bar**: a 25 mm tube on two elbows, welded into its blocks as the real one is bolted.
 3. **The stripe**: the marker line, which wears off where the foam presses *and* slides.
-4. **The scene**: two YAMs, the mat, the blocks, the bar, the sponge in the air where the hand will hold it.
-5. **The holds**: where each hand goes, and the latch that keeps the sponge in the right one.
-6. **The contact map**: the stripe unrolled, with the press drawn on it.
+4. **The scene**: two YAMs at home, the mat, the blocks, the bar, and the sponge on the mat.
+5. **The contact map**: the stripe unrolled, with the press drawn on it.
+
+Nothing here holds the sponge. The right hand's jaws do, by their squeeze and
+the foam's friction, in ``routine.py``.
 """
 
 from __future__ import annotations
 
 import itertools
 import math
+from collections import deque
 from dataclasses import dataclass, replace
 
 import newton
 import numpy as np
 import warp as wp
+from robosimstudio.domains.soft import FIRM_FOAM
 
 import robosimstudio as rss
-from robosimstudio.core.math import quat_multiply, quat_to_mat
+from robosimstudio.core.math import quat_to_mat
 from robosimstudio.core.render.finish import BRUSHED_METAL, MATTE, SATIN
 from robosimstudio.core.render.room import LAB_GRID_MAT, LAB_MAT_GREY
 from robosimstudio.domains.capabilities import host_bridge
@@ -47,6 +52,8 @@ class Layout:
 
     Measured off the clip against the mat's 25 mm grid (300 mm tiles): the tube is
     one square across, the sponge three squares long, the end blocks three wide.
+    The bar's origin is the one the ``surface_prep`` task moved it to so the rig's
+    overhead camera frames the bar and the sponge together.
     """
 
     mat_thickness: float = 0.010  # an EVA puzzle mat over the whole bench top
@@ -56,10 +63,12 @@ class Layout:
     leg_drop: float = 0.050  # bar axis to the blocks' top face: two tube diameters
     block_half: tuple[float, float, float] = (0.038, 0.040, 0.035)  # 76 deep, 80 along the bar, 70 tall
     block_inset: tuple[float, float] = (0.018, 0.020)  # block centre from its leg: +x, and outward along the bar
-    bar_x: float = 0.0
-    bar_y: float = -0.02  # a shade toward the working (right, -y) arm
+    bar_x: float = -0.05
+    bar_y: float = 0.05
     sponge_size: tuple[float, float, float] = (0.050, 0.075, 0.030)  # three squares by two, long axis along the bar
     sponge_cells: tuple[int, int, int] = (9, 13, 6)  # ~5.5 mm nodes, 980 of them
+    sponge_gap: float = 0.070  # clear mat between the near block's outer face and the sponge
+    sponge_forward: float = 0.035  # the sponge lies this far past the bar's line, away from the arms
     stripe_half: float = 0.100  # the marker line covers the middle 200 mm of the run
     stripe_half_angle_deg: float = 9.0  # and is ~4 mm wide round the tube
     support_u: float = 0.170  # the left hand steadies the far elbow's tangent point
@@ -77,17 +86,38 @@ class Layout:
     def crown_z(self) -> float:
         return self.bar_z + self.tube_radius
 
+    @property
+    def leg_u(self) -> float:
+        """Along the bar from its centre to a leg's axis."""
+        return self.straight_half + self.bend_radius
+
     def block_centre(self, sign: float) -> tuple[float, float, float]:
         """A block's centre; ``sign`` is +1 for the far (+y) end, -1 for the near."""
-        leg_u = self.straight_half + self.bend_radius
         return (
             self.bar_x + self.block_inset[0],
-            self.bar_y + sign * (leg_u + self.block_inset[1]),
+            self.bar_y + sign * (self.leg_u + self.block_inset[1]),
             self.mat_top + self.block_half[2],
         )
 
+    @property
+    def sponge_at(self) -> tuple[float, float, float]:
+        """The sponge's bottom-face centre on the mat, past the near block's outer face."""
+        outer = self.block_centre(-1.0)[1] - self.block_half[1]
+        return (self.bar_x + self.sponge_forward, outer - self.sponge_gap - 0.5 * self.sponge_size[1], self.mat_top)
+
 
 LAYOUT = Layout()
+
+FOAM = replace(FIRM_FOAM, friction_falloff=1.0e-4)
+"""A firm foam, with as much static friction as SuperDex's regularised law gives.
+
+Firm because the jaws are narrow: squeezed at 8 N a finger, the clip's soft
+kitchen foam (20 kPa) flowed out between the pads until they met and the sponge
+stayed on the mat; this one (80 kPa) is squeezed from 50 mm to 45.5 mm and comes
+up. Below ``friction_falloff`` of slip SuperDex's friction grows with the slip,
+so nothing is held still, and against a collider it drives by pose -- every pad,
+the bar, the mat -- the value it uses is the sponge's, not the collider's. Even
+at 0.1 mm/s the foam slides in the jaws under the wipe: see the README."""
 
 PHYSICS = rss.ArrangementSpec(
     control_hz=60.0,
@@ -108,19 +138,25 @@ PHYSICS = rss.ArrangementSpec(
                 enable_multiccd=True,
             ),
         ),
-        # feedback="off": the foam does not push back on the arm. Squeezed in the jaws it hands
-        # the fingers a steady couple, and the page, which re-seats an idle gizmo on the hand,
-        # turns that into a hand creeping 0.5 mm/s. The arm presses by position instead; at a
-        # few newtons the stiffened servos below would yield about a millimetre.
-        ("soft", rss.backend("superdex", substeps=2, feedback="off")),
+        # The foam pushes back on what presses it. Its push on a body is capped at
+        # what moves that body ``feedback_dv_max`` in a control step, and a YAM
+        # fingertip is 71 g: at the default 0.5 m/s that is 2.1 N against an 8 N
+        # grip. On the Panda's 10 g pads the same cap let the jaws close a 50 mm
+        # sponge to 6 mm (examples/03_soft/00_sponge.py); at 5 m/s it is 21 N.
+        ("soft", rss.backend("superdex", substeps=2, feedback_dv_max=5.0)),
     ),
     collision=rss.CollisionSpec(contact_ke=6.0e4, contact_kd=500.0, rigid_contact_max=8192, rigid_gap=2.0e-4),
 )
-"""The arrangement the twin was measured under, less the foam's push on the arm."""
+"""The arrangement the twin was measured under."""
 
 ARM = ActuationSpec(target_ke=1600.0, target_kd=70.0)
 """Stiffened arm servos: at the robot file's own gain the hand lags ~10 mm under a press."""
-GRIPPER = ActuationSpec(target_ke=20000.0, target_kd=20.0)
+GRIPPER = ActuationSpec(target_ke=20000.0, target_kd=20.0, effort_limit=8.0, joint_damping=100.0)
+"""The jaws squeeze with 8 N a finger and no harder, and close at no more than 80 mm/s.
+
+The damping is what makes **Close** a grip on foam. Undamped, the capped jaws
+shut from 78 mm to 2 mm in a sixth of a second, through the sponge, on firm foam
+and soft alike; damped at 100 N s/m they stop on it at 45.5 mm."""
 
 CHROME = (0.80, 0.80, 0.80)
 INK = (0.060, 0.090, 0.300)
@@ -226,6 +262,8 @@ class StripeSpec:
     reach: float = 0.004  # how far one contact sample wipes
     k_p: float = 1.2e-2  # Preston coefficient [1/(Pa m)]: a 4 N, 30 mm/s stroke clears a cell in ~2 s
     p_min: float = 300.0  # [Pa] the contact's 2 mm padding band reports samples at ~0 N; they wipe nothing
+    cleared_below: float = 0.1  # a cell with this much ink or less counts as clean
+    window: int = 5  # control steps the press is averaged over: the solver drops a settled pair for a step or two
     color: tuple[float, float, float] = INK
     bare: tuple[float, float, float] = CHROME
 
@@ -259,7 +297,19 @@ class MarkerStripe(rss.Entity):
                 color=spec.color,
                 label=f"{spec.name}_{i:03d}",
             )
-        self.bridge, self.press, self.peak, self.samples = None, 0.0, 0.0, np.zeros((0, 3))
+        self.bridge, self.samples = None, np.zeros((0, 3))
+        self.press, self.peak, self.recent = 0.0, 0.0, deque(maxlen=spec.window)
+
+    @property
+    def cleaned(self) -> float:
+        """The share of the stripe's cells wiped clean: the job's measure of success."""
+        return float(np.mean(self.ink <= self.spec.cleared_below))
+
+    @property
+    def held_press(self) -> float:
+        """The press [N] averaged over the last few steps it was nonzero, which a force loop can steer by."""
+        live = [f for f in self.recent if f > 0.0]
+        return float(np.mean(live)) if live else 0.0
 
     def apply_display(self, builder: newton.ModelBuilder) -> None:
         super().apply_display(builder)
@@ -289,6 +339,7 @@ class MarkerStripe(rss.Entity):
         pressure = force / np.maximum(s["area"], 1.0e-9)
         u, angle = local[:, 2], np.arctan2(local[:, 1], local[:, 0])
         self.press = float(force[on_tube].sum())
+        self.recent.append(self.press)
         self.peak = float(pressure[on_tube].max()) if on_tube.any() else 0.0
         self.samples = np.stack([u, angle, pressure], axis=1)[on_tube]
         live = on_tube & (pressure >= spec.p_min)
@@ -318,6 +369,7 @@ class MarkerStripe(rss.Entity):
     def reset(self, pipeline, episode, *, world: int = 0) -> None:
         self.ink[:] = 1.0
         self.press, self.peak, self.samples = 0.0, 0.0, np.zeros((0, 3))
+        self.recent.clear()
         if self.model is not None:
             self.paint()
 
@@ -326,46 +378,9 @@ class MarkerStripe(rss.Entity):
 # 4. The scene
 # =============================================================================
 
-TILT_DEG = 35.0
-"""How far the right hand leans along the bar. The real hand does; upright, the
-wrist runs out of orientation at the far end of the stripe."""
-GRIP_GAP = 0.032  # [m] the right jaws squeeze the 50 mm sponge to this, 36 % strain
-SUPPORT_GAP = 2 * LAYOUT.tube_radius + 0.004  # [m] the left jaws rest on the tube: a steadying hand, not a clamp
-PAD_OFFSET = (0.001, 0.0, 0.007)
-"""Where the YAM's pads touch a held object, in the tool frame [m]: measured off
-MuJoCo's contact table on a working grasp. The pads lead the tool centre by 7 mm."""
-HOVER = 0.010  # [m] the sponge's lowest point starts this far above the crown
-
-
-def hand_quat(tilt_deg: float = 0.0) -> np.ndarray:
-    """Top-down, jaws closing across x, leaning ``tilt_deg`` about x so the hand tips toward +y."""
-    down = quat_multiply((0.0, 0.0, -math.sin(math.pi / 4), math.cos(math.pi / 4)), (1.0, 0.0, 0.0, 0.0))
-    t = math.radians(tilt_deg)
-    return np.asarray(quat_multiply((math.sin(t / 2), 0.0, 0.0, math.cos(t / 2)), down), dtype=np.float64)
-
-
-def sponge_in_hand(layout: Layout = LAYOUT) -> tuple[np.ndarray, np.ndarray, np.ndarray]:
-    """Where the right hand holds the sponge at the start [surface frame].
-
-    Over the stripe's near end, leaning, the foam's lowest point :data:`HOVER`
-    above the crown. Returns the tool centre, the hand's quaternion and the
-    sponge's bottom-face centre -- one calculation, so the sponge is built
-    exactly where the hand is then posed.
-    """
-    half = 0.5 * np.asarray(layout.sponge_size)
-    tilt = math.radians(TILT_DEG)
-    rot = quat_to_mat((math.sin(tilt / 2), 0.0, 0.0, math.cos(tilt / 2)))
-    corners = np.array([[x, y, z] for x in (-1, 1) for y in (-1, 1) for z in (-1, 1)]) * half
-    u = -layout.stripe_half + half[1] - 0.025  # the sponge's near edge 25 mm past the stripe's end
-    centre = np.array([layout.bar_x, layout.bar_y + u, 0.0])
-    centre[2] = layout.crown_z + HOVER - float((corners @ rot.T)[:, 2].min())
-    quat = hand_quat(TILT_DEG)
-    tcp = centre - quat_to_mat(quat) @ np.asarray(PAD_OFFSET)
-    return tcp, quat, centre - rot @ np.array([0.0, 0.0, half[2]])
-
 
 def scene(layout: Layout = LAYOUT) -> rss.Scene:
-    """Two YAMs on the bench, the gridded mat, the blocks, the bar, the sponge in the air where the hand will hold it."""
+    """Two YAMs at home with their hands open, the gridded mat, the blocks, the bar, and the sponge on the mat."""
     sc = rss.Scene(cell="bench_075", name="wipe_the_bar", physics=PHYSICS)
     sc.add(rss.robot("yam_i2rt", arm=ARM, gripper=GRIPPER))
     fixture = rss.SimRequirements(domain="static", contacts=rss.contacts_with("objects", "robot", "deformables"))
@@ -403,16 +418,13 @@ def scene(layout: Layout = LAYOUT) -> rss.Scene:
             ),
         )
     )
-    _, _, bottom = sponge_in_hand(layout)
-    tilt = math.radians(TILT_DEG)
     sc.add(
         rss.sponge(
             name="sponge",
             size=layout.sponge_size,
             cells=layout.sponge_cells,
-            at=tuple(bottom),
-            quat=(math.sin(tilt / 2), 0.0, 0.0, math.cos(tilt / 2)),
-            settle_frames=0,  # it is held, not dropped: the example closes the hand on it
+            at=layout.sponge_at,
+            material=FOAM,
             color=(0.93, 0.94, 0.94),
             finish=replace(MATTE, roughness=0.95),
             sim=rss.SimRequirements(
@@ -425,75 +437,11 @@ def scene(layout: Layout = LAYOUT) -> rss.Scene:
 
 
 # =============================================================================
-# 5. The holds
+# 5. The contact map
 # =============================================================================
 
-GRIPS = {"right": GRIP_GAP, "left": SUPPORT_GAP}
-"""Jaw gap [m] each hand closes to."""
-
-
-def holds(sim, layout: Layout = LAYOUT) -> dict[str, tuple[np.ndarray, np.ndarray]]:
-    """Where each tool centre goes [m, world] and how it is turned: the right hand
-    where the sponge was built, the left astride the tube at the far elbow."""
-    cell = rss.get_cell("bench_075")
-    tcp, quat, _ = sponge_in_hand(layout)
-    bar = sim["bar"].pose
-    elbow = bar[:3] + quat_to_mat(bar[3:7]) @ np.array([0.0, 0.0, layout.support_u])
-    return {
-        "right": (tcp + np.array([cell.center[0], cell.center[1], cell.surface_z]), quat),
-        "left": (elbow + np.array([0.0, 0.0, 0.004]), hand_quat(0.0)),  # pads straddling the tube
-    }
-
-
-class Latch:
-    """The foam under the right pads, pinned to the pad frame and carried with it every control step.
-
-    The jaws hold the sponge by friction, and SuperDex's friction has no static
-    part below 10 mm/s of slip: an idle hand lets the foam creep out in about ten
-    seconds, and a press into a round bar with the hand leaning twists it out on
-    the first stroke. So, as the real rig's twin does, the patch under each pad
-    is pinned with the engine's own compliant node constraints to where it sits
-    in the hand. The rest of the block is free foam and still wraps the tube.
-    Opening the right hand lets go of it. Install it in ``sim.post_step_hooks``.
-    """
-
-    def __init__(self, sim) -> None:
-        sponge = sim["sponge"]
-        self.bridge = sponge.entity.bridge
-        self.command = sim.gripper("right").command_for_width(GRIP_GAP)
-        pos, quat = sim.arm("right").ee_pose(sim.state)
-        local = (sponge.particle_q - pos) @ quat_to_mat(quat)  # every node, in the hand's frame
-        pad = np.asarray(PAD_OFFSET)
-        # A 14 mm disc on each gripped face: the jaws close along the hand's y.
-        disc = np.hypot(local[:, 0] - pad[0], local[:, 2] - pad[2]) <= 0.014
-        face = np.abs(local[:, 1]) >= 0.5 * GRIP_GAP - 0.006
-        self.local = local[disc & face]
-        self.pin = self.bridge.pin_nodes(
-            "sponge", sponge.particles[disc & face], self._targets(pos, quat), stiffness=4000.0, damping=20.0
-        )
-
-    def _targets(self, pos, quat) -> np.ndarray:
-        return np.asarray(pos) + self.local @ quat_to_mat(quat).T
-
-    def __call__(self, sim) -> None:
-        if self.pin is None:
-            return
-        if sim.gripper("right").command < 0.5 * self.command:
-            self.bridge.unpin(self.pin)
-            self.pin = None
-            return
-        try:
-            self.bridge.set_pin_targets(self.pin, self._targets(*sim.arm("right").ee_pose(sim.state)))
-        except (KeyError, IndexError):  # a reset took the pins with it
-            self.pin = None
-
-
-# =============================================================================
-# 6. The contact map
-# =============================================================================
-
-EYE, LOOK = (0.02, -0.04, 1.32), (0.58, -0.02, 0.86)
-"""[m, world] Where the page opens looking from, and at: from behind the arms, over their shoulders."""
+EYE, LOOK = (0.02, -0.04, 1.32), (0.55, -0.12, 0.84)
+"""[m, world] Where the page opens looking from, and at: from behind the arms, over the bar and the sponge."""
 MAP_SPAN = (0.135, 0.015)  # [m] the map's half-extent: along the bar, round it
 MAP_SCALE = (1.5, 4.0)  # [px/mm] along, round: the stripe is fifty times longer than it is wide
 MAP_FULL_SCALE = 40000.0  # [Pa] red: the per-sample peaks of a firm wipe, where the foam wraps the tube
