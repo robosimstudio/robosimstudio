@@ -183,7 +183,10 @@ class PanelInspector(Panel):
         with gui.add_folder(f"Interface ({len(parsed.facets)})", expand_by_default=False):
             for facet in parsed.facets:
                 gui.add_markdown(self._facet_text(facet))
-                if facet.drawable:
+                # Only where the overlay that draws it is on the page: a
+                # checkbox nothing services is a control that lies, and its
+                # requests would pile up with no one to take them.
+                if facet.drawable and getattr(self.session, "overlay", None) is not None:
                     show = gui.add_checkbox(f"Draw {facet.name}", initial_value=False)
                     show.on_update(
                         lambda _, f=facet.name, w=show: self.session.overlay_request.append(

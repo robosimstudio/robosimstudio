@@ -28,7 +28,7 @@ import unittest
 TIER = "medium"
 """Compiles scenes and starts a viser server on a spare port."""
 
-DRIVE = ("inspector", "arm", "object", "cloth")
+DRIVE = ("inspector", "overlay", "arm", "object", "cloth")
 """What ``panels="drive"`` keeps: the things you take hold of, and what is behind
 the one you clicked. Not the scene list -- clicking is the way in -- and not
 ``Appearance``, which is built inline and gated the same way."""

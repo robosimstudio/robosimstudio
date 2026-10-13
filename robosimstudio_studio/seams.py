@@ -22,9 +22,7 @@ is not here":
 
 The add-on modules are imported *inside* these functions, never at this
 module's scope, which is what lets ``import robosimstudio_studio`` succeed on a
-tree that does not hold them. Nothing else in the package may import them; a
-test (``tests/test_studio_without_the_benchmark.py``) holds every other module
-to that by importing it with the tier refused.
+tree that does not hold them. Nothing else in the package may import them.
 """
 
 from __future__ import annotations

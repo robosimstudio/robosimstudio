@@ -9,8 +9,7 @@ connected browser is looking at, from its own viewpoint, is viser's own render
 and needs no renderer of ours. Either way the result is an RGB
 ``uint8`` array, and :func:`side_by_side` is the picture an agent actually
 looks at: the render on the left, the photograph on the right, scaled to the
-render's height. ``scripts/look_snapshot.py`` makes the same pair for a
-registered task, and imports it from here so it exists once.
+render's height.
 
 Nothing here is named ``snapshot``: ``robosimstudio/scene/snapshot.py`` is a
 JSON account of a scene's penetrations and materials, and the two should not

@@ -9,7 +9,10 @@ box is one narrow line and truncates, and these are the two readouts the page
 is for -- what is loaded and when, and the traceback when a rebuild did not
 land. Whether a rebuild lands running or paused is the server's ``hold``; the
 Pause checkbox on the page is the human's override either way, and the
-studio's own ``set_paused`` keeps the two truthful.
+studio's own ``set_paused`` keeps the two truthful. While a routine plays the
+page's own stepping is held regardless (:meth:`LiveSession.steps_held`), and
+both Reset buttons -- this folder's and the Simulation folder's -- go through
+the one :meth:`LiveSession.reset_now`.
 """
 
 from __future__ import annotations
@@ -42,6 +45,16 @@ class LiveSession(StudioSession):
         self.paused = self.host.hold
         super().adopt(sim, label=label, episode=episode)
 
+    def steps_held(self) -> bool:
+        """While a routine plays it steps the scene itself; the studio's own step would double it."""
+        return bool(self.host.script)
+
+    def reset_now(self) -> bool:
+        """A reset ends whatever routine is playing and the take filming it, then resets."""
+        # Before the reset: a take's last frame is read off the scene as it stands.
+        self.host.stop_scripts("reset")
+        return super().reset_now()
+
     def build_gui(self) -> None:
         gui = self.server.gui
         self.host_folder = gui.add_folder("Live")
@@ -62,7 +75,7 @@ class LiveSession(StudioSession):
         self.host.refresh_live(force=True)
 
     def _build_buttons(self) -> None:
-        """One button per routine the scene file binds, and Reset beside them. A click is queued for the main thread."""
+        """One button per routine the scene file binds, and Reset beside them; the main thread acts on a click."""
         gui = self.server.gui
         names = list(self.host.routine_names())
         if not names:
@@ -72,7 +85,8 @@ class LiveSession(StudioSession):
             button.on_click(lambda _event, name=name: self.host.clicks.put(("play", name)))
             self.buttons[name] = button
         reset = gui.add_button("Reset")
-        reset.on_click(lambda _event: self.host.clicks.put(("reset", "")))
+        # The same request the Simulation folder's Reset makes.
+        reset.on_click(lambda _event: setattr(self, "reset_requested", True))
         self.buttons["__reset__"] = reset
 
     def show_reference(self, image: np.ndarray, label: str) -> None:

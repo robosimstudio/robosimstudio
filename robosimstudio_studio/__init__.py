@@ -18,10 +18,9 @@ server's dependencies loading.
 
 **Over a task it is the same page with three more panels.** Where the benchmark
 tier is installed, the page also loads a registered
-task, shows its goal clause by clause and runs the policies it ships --
-``scripts/studio.py`` is the command line over that, and the headless half is
-``scripts/bench_run.py``; both go through the same ``Env`` and the same rollout
-shape, which is what makes what you watch here and what a batch measures the
+task, shows its goal clause by clause and runs the policies it ships. The
+headless half is ``scripts/bench_run.py``; both go through the same ``Env`` and
+the same rollout shape, which is what makes what you watch here and what a batch measures the
 same thing.
 
     from robosimstudio_studio import StudioConfig, StudioSession
