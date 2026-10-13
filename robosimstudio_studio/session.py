@@ -1538,6 +1538,21 @@ class StudioSession:
         """
         self._each_step.append(fn)
 
+    def add_routines(self, routines) -> None:
+        """A **Run** button per routine, a Stop, and what is playing: see :mod:`robosimstudio_studio.routine`.
+
+        ``routines`` is one callable or a dict of name to callable. Each takes the
+        scene (and, to drive the arm panels as a person does, the page as
+        ``session``) and returns a generator that yields once per control step.
+        """
+        from .routine import PanelRoutine
+
+        if callable(routines):
+            routines = {"Run": routines}
+        panel = PanelRoutine(self, routines)
+        panel.build(self.server.gui)
+        self.panels.append(panel)
+
     def run(self, *, steps: int = 0, warmup: int = 0) -> None:
         """Serve until the browser goes away or the page says stop.
 
