@@ -198,7 +198,10 @@ def view(
 
     The panels that need a *document* -- the task menu, the goal readout, the
     policy runner -- are skipped when there is no task, because there is nothing
-    for them to say.
+    for them to say. On a task the goal, its regions and the runner's **Run**
+    are kept under ``drive`` too
+    (:data:`~robosimstudio_studio.session.DOCUMENT_PANELS`): they are what a
+    task's page shows. The menu is not, since it swaps the page onto another task.
 
     Args:
         sim: A :class:`~robosimstudio.sim.Sim`, a registered task id, or a

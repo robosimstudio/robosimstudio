@@ -87,13 +87,14 @@ arm = rss.ArmSpec(
     joint_names=tuple(f"robot0_joint{i}" for i in range(1, 8)),
     ee_body_name="robot0_link7",
     gripper="franka_hand_robosuite",  # a registered hand; leave it out for a bare arm
+    home_q=(0.0, 0.196, 0.0, -2.618, 0.0, 2.942, 0.785),  # the tool centre 99 mm up, 457 mm out, pointing down
 )
 
-scene = rss.Scene(cell="void")
+scene = rss.Scene(cell="void", physics=rss.MUJOCO_500HZ)  # arm and cube in one engine, so friction holds
 scene.add(rss.robot(asset="embodiments/panda/panda_standalone.xml", arms=[arm], at=(0, 0, 0, 0, 0, 0, 1)))
-scene.add(rss.box(name="cube", half=(0.025,) * 3, at=(0.5, 0.0, 0.1)))
+scene.add(rss.box(name="cube", half=(0.025,) * 3, at=(0.457, 0.0, 0.025)))  # on the floor, under the hand
 sim = scene.build(control_mode="joint_position")
-rss.view(sim)    # drag the wrist gizmo, close the fingers on the cube
+rss.view(sim)    # drag the wrist gizmo down onto the cube, press Close, drag it up
 ```
 
 - `asset` is a path under the asset roots. `assets/embodiments/<name>/` is
@@ -117,13 +118,13 @@ register_embodiment(
         name="my_panda",
         asset=rss.AssetSpec(path="embodiments/panda/panda_standalone.xml"),
         arms=(arm,),
-        base_offset=(-0.6, 0.0, 0.0, 0.0, 0.0, 0.0, 1.0),  # the mount, in the work-surface frame
+        base_offset=(-0.6, -0.115, 0.132, 0.0, 0.0, 0.0, 1.0),  # the mount, in the work-surface frame
     )
 )
 
-scene = rss.Scene(cell="bench_075")
+scene = rss.Scene(cell="bench_075", physics=rss.MUJOCO_500HZ)
 scene.add(rss.robot("my_panda"))
-scene.add(rss.box(name="cube", half=(0.025,) * 3, at=(0.0, 0.0, 0.1)))
+scene.add(rss.box(name="cube", half=(0.025,) * 3, at=(-0.143, -0.115, 0.025)))  # under the hand
 sim = scene.build(control_mode="joint_position")
 ```
 

@@ -145,6 +145,9 @@ print(sim.time)    # 3.5 (seconds simulated since the build)
 ```
 
 - A control step is 1/60 s by default. See [Physics and engines](../PHYSICS.md) to change it.
+- The two scripts here stage `physics=rss.MUJOCO_500HZ`, which steps at 50 Hz and
+  puts the arm and the cube in one engine, so the hand can close on the cube and
+  lift it. Under the default a hand can push a free body but not pinch one.
 - `sim.run` returns the sim, so `sim.run(60).sync()` chains.
 - `sim.step(action, mode="joint_position")` advances one control step with a
   command for the robot.
