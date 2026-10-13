@@ -123,6 +123,38 @@ class Hand(Target):
 
 
 @dataclass(frozen=True)
+class Highest(Target):
+    """The highest point of a thing: a particle on a deformable's top, or the top link of a heap."""
+
+    name: str = ""
+
+    def resolve(self, film):
+        return film.highest(self.name)
+
+
+@dataclass(frozen=True)
+class Patch(Target):
+    """The middle of the points a thing had within ``radius`` [m] of ``near`` when first asked, followed after.
+
+    What a hand closes on: the strip of a towel's edge under the jaws, the capsule
+    of a cable between them, the link a handle took. Its centroid rises with the
+    hand where the whole thing's barely moves -- a 350 mm towel lifted by one
+    edge, a cable tied to nothing lifted by its middle.
+    """
+
+    name: str = ""
+    near: Any = None
+    radius: float = 0.02
+    skin: float = 0.0
+    """Above 0: only the points within this of the thing's top, and ``radius`` across the bench."""
+    lowest: bool = False
+    """The patch's lowest point rather than its middle: the bottom of a dent."""
+
+    def resolve(self, film):
+        return film.patch(self.name, self.near, self.radius, skin=self.skin, lowest=self.lowest)
+
+
+@dataclass(frozen=True)
 class Nearest(Target):
     """The tool centre of the hand nearest a thing."""
 
@@ -288,9 +320,10 @@ class Drag(Beat):
 
 @dataclass(frozen=True)
 class DragTo(Beat):
-    """Take a gizmo to a point in up to three axis drags: up first going up, down last going down.
+    """Take a gizmo to a point in axis drags: up first going up, down last going down.
 
-    An axis already within ``tolerance`` [m] is not dragged.
+    An axis already within ``tolerance`` [m] is not dragged; a second pass takes up
+    what a leaning arrow put on the others, past 5 mm.
     """
 
     gizmo: str = "right"
@@ -305,14 +338,18 @@ class DragTo(Beat):
         delta = [b - a for a, b in zip(film.where(name), there, strict=True)]
         order = ("z", "x", "y") if delta[2] > 0 else ("x", "y", "z")
         done = []
-        for axis in order:
-            film.settle(self.gizmo)
-            i = "xyz".index(axis)
-            d = there[i] - film.where(name)[i]
-            if abs(d) < self.tolerance:
-                continue
-            seconds = max(0.5, abs(d) * self.seconds_per_m)
-            done.append(film.drag(name, AXES[axis], d, seconds=seconds, approach=0.45))
+        # A second pass for what the first left: an arm's arrows are its tool's axes,
+        # and a Panda's at home lean 7 degrees off vertical, so 206 mm down its z
+        # arrow is also 26 mm along x.
+        for tolerance in (self.tolerance, max(self.tolerance, 0.005)):
+            for axis in order:
+                film.settle(self.gizmo)
+                i = "xyz".index(axis)
+                d = there[i] - film.where(name)[i]
+                if abs(d) < tolerance:
+                    continue
+                seconds = max(0.5, abs(d) * self.seconds_per_m)
+                done.append(film.drag(name, AXES[axis], d, seconds=seconds, approach=0.45))
         return {"drags": done}
 
 
@@ -538,6 +575,34 @@ class Rose(Expectation):
         return (
             rise >= self.by,
             f"{key} rose {rise * 1000:.1f} mm from {self.since} to {self.at} (need {self.by * 1000:.0f})",
+        )
+
+
+@dataclass(frozen=True)
+class Sank(Expectation):
+    """``name`` was at least ``by`` [m] lower at mark ``at`` than at ``since``, and back within ``back`` [m] at the end.
+
+    A press: ``Patch("sponge", Top("sponge"))`` is the foam under the fingertips,
+    which dents where the sponge's overall height grows as it bulges beside them.
+    """
+
+    name: str | Target
+    by: float
+    at: str = "pressed"
+    since: str = "start"
+    back: float = 0.001
+
+    def things(self):
+        return (self.name,)
+
+    def judge(self, film):
+        key = str(self.name)
+        z = {m: film.marks[m]["things"][key][2] for m in (self.since, self.at, "end")}
+        dent, left = z[self.since] - z[self.at], abs(z["end"] - z[self.since])
+        ok = dent >= self.by and left <= self.back
+        return (
+            ok,
+            f"{key} sank {dent * 1000:.1f} mm at {self.at} (need {self.by * 1000:.1f}) and ended {left * 1000:.1f} mm off (need {self.back * 1000:.1f})",
         )
 
 

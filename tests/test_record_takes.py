@@ -43,11 +43,11 @@ def key(path: Path) -> str:
 
 class TestTheTakeTable(unittest.TestCase):
     def test_every_take_names_a_script_that_is_there(self) -> None:
-        """A pending take may name a script another branch has not landed yet, if its whole folder is new."""
+        """A pending take may name a script another branch has not landed yet, if its folder is new too."""
         for take in TAKES:
             with self.subTest(take=take.key):
                 script = REPO / take.example
-                if take.pending and not (REPO / Path(take.example).parts[0]).is_dir():
+                if take.pending and not script.parent.is_dir():
                     continue
                 self.assertTrue(script.is_file(), f"{take.example} is not in this tree")
 

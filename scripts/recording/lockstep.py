@@ -208,6 +208,8 @@ class Film:
         self.error = ""
         self.ended = ""
         """What a routine's ``Playing`` line said when it ended."""
+        self._patches: dict[tuple, Any] = {}
+        """Which points each :class:`~recording.beats.Patch` is, chosen the first time it is asked."""
         self.sliders: dict[tuple[str, str], float] = {}
         """Each slider's value before the take first moved it, for a drag back."""
         self.screenshot: bytes = b""
@@ -393,6 +395,32 @@ class Film:
         if len(points) > 1:
             return float(points[:, 2].max() - points[:, 2].min())
         return 2.0 * self._half_height(name)
+
+    def highest(self, name: str) -> tuple[float, float, float]:
+        points = self._points(name)
+        return tuple(float(v) for v in points[int(points[:, 2].argmax())])
+
+    def patch(self, name: str, near, radius: float, *, skin: float = 0.0, lowest: bool = False):
+        """See :class:`recording.beats.Patch`: which points is decided once, where they are is now."""
+        import numpy as np
+
+        from .beats import resolve
+
+        points = self._points(name)
+        key = (name, str(near), radius, skin)
+        if key not in self._patches:
+            centre = np.asarray(resolve(near, self), dtype=np.float64)
+            if skin > 0.0:
+                across = np.linalg.norm(points[:, :2] - centre[:2], axis=1)
+                distance = np.where(points[:, 2] > points[:, 2].max() - skin, across, np.inf)
+            else:
+                distance = np.linalg.norm(points - centre, axis=1)
+            ids = np.flatnonzero(distance < radius)
+            self._patches[key] = ids if len(ids) else np.array([int(distance.argmin())])
+        chosen = points[self._patches[key]]
+        if lowest:
+            return tuple(float(v) for v in chosen[int(chosen[:, 2].argmin())])
+        return tuple(float(v) for v in chosen.mean(axis=0))
 
     def spread(self, name: str) -> float:
         """How far a thing's points lie from its middle across the bench: the xy radius of gyration [m]."""
