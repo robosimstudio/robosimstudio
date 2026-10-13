@@ -46,21 +46,24 @@ Two things that are easy to get wrong, and were:
   browser attached, the pass now hides 50 scenery nodes, the stage and 45 model
   nodes, and keeps 8 gizmo nodes and 2 cursors.
 
-The page runs with no path tracer at all -- ``[studio]`` carries viser alone --
-so ``auto`` falls back to ``raster`` when ``ovrtx`` will not import, and the
-readout says which mode is live and why.
+The frame comes from whichever renderer
+:func:`~robosimstudio.solvers.render.choose_renderer` picks for the scene's GPU:
+the path tracer where ovrtx is installed and the GPU has RT cores, Newton's tiled
+tracer (colliders only, and no passes to converge) where not, or whatever
+``ROBOSIMSTUDIO_RENDERER`` names. The switch's hint says which and why, and the
+readout says which is live.
 """
 
 from __future__ import annotations
 
 import dataclasses
-import importlib.util
 import time
 from typing import Any
 
 import numpy as np
 
 from robosimstudio.core.render.live import RenderBudget
+from robosimstudio.solvers.render import ENV, FALLBACK, PUBLIC, choose_renderer
 
 from .panels import Panel
 
@@ -97,17 +100,16 @@ it", and measured 49 nodes of floor, walls and slat wall across the whole frame.
 """
 
 
-def _tracer_available() -> bool:
-    """Whether the path tracer would import, without importing it.
+def _choose(env) -> tuple[str, str]:
+    """The renderer for this scene's GPU, and why; ``("", reason)`` if none can be named.
 
-    ``find_spec`` rather than a ``try: import``, because importing ovrtx builds
-    CUDA state this panel may never need: a page opened in raster mode should
-    cost nothing a page without the extra would not.
+    Never imports ovrtx: the rule reads ``find_spec`` and Warp's device table, so
+    a page opened in raster mode costs nothing a page without the extra would not.
     """
     try:
-        return importlib.util.find_spec("ovrtx") is not None
-    except (ImportError, ValueError):
-        return False
+        return choose_renderer(device=getattr(getattr(env, "model", None), "device", None))
+    except (ValueError, ImportError) as exc:  # a bad ROBOSIMSTUDIO_RENDERER
+        return "", str(exc)
 
 
 class PanelRenderView(Panel):
@@ -129,7 +131,8 @@ class PanelRenderView(Panel):
         max_load: float = 0.9,
     ) -> None:
         super().__init__(session)
-        self.mode = RTX if world_model and _tracer_available() else RASTER
+        self.backend, self._why = _choose(self.env)
+        self.mode = RTX if world_model and self.backend else RASTER
         self.scale = float(scale)
         self.passes = (max(1, int(passes[0])), max(1, int(passes[1])))
         # A viewport is allowed almost the whole loop: unlike the camera panel's
@@ -155,6 +158,7 @@ class PanelRenderView(Panel):
         self._locked_request: str | None = None
         self._state: Any = None
         self._readout: Any = None
+        self._passes: tuple[Any, ...] = ()
 
     # ------------------------------------------------------------------ build
     def build(self, gui) -> None:
@@ -169,14 +173,20 @@ class PanelRenderView(Panel):
             # to a question about renderers. Off is plain viser, and plain viser
             # is the fast one -- see the rates in this module's docstring.
             self._state = gui.add_checkbox(
-                "World model", initial_value=self.mode == RTX, disabled=not _tracer_available()
+                "World model",
+                initial_value=self.mode == RTX,
+                disabled=not self.backend,
+                hint=f"Renders with {self.backend}: {self._why}" if self.backend else self._why,
             )
             self._state.on_update(lambda _: setattr(self, "_mode_request", RTX if self._state.value else RASTER))
             slider = gui.add_slider("Scale", min=0.15, max=1.0, step=0.05, initial_value=self.scale)
             slider.on_update(lambda _: setattr(self, "_scale_request", float(slider.value)))
             moving = gui.add_number("Passes moving", initial_value=self.passes[0], min=1, max=24, step=1)
             still = gui.add_number("Passes still", initial_value=self.passes[1], min=1, max=24, step=1)
-            for widget in (moving, still):
+            # Passes are the path tracer's convergence; the tiled tracer has none.
+            self._passes = (moving, still)
+            for widget in self._passes:
+                widget.disabled = self.backend != PUBLIC
                 widget.on_update(lambda _: setattr(self, "_passes_request", (int(moving.value), int(still.value))))
             # Locking to a task camera is the only way to see the picture the
             # *renderer* will produce: a free-flying browser camera is square
@@ -220,7 +230,8 @@ class PanelRenderView(Panel):
         if not self._ensure(clients[0]):
             return
         started = time.time()
-        self._renderer.accumulate = self.passes[0] if now - self._touched < BUSY_SECONDS else self.passes[1]
+        if self.backend == PUBLIC:
+            self._renderer.accumulate = self.passes[0] if now - self._touched < BUSY_SECONDS else self.passes[1]
         for client in clients:
             if not self._push(client):
                 return
@@ -353,13 +364,11 @@ class PanelRenderView(Panel):
         try:
             # rgb alone: the depth channel costs 13 ms a frame to encode and
             # composites nothing. accumulate is set per frame in `drain`.
-            self._renderer = self.env.make_renderer("rtx", cameras=[spec], channels=["rgb"], accumulate=self.passes[0])
+            extra = {"accumulate": self.passes[0]} if self.backend == PUBLIC else {}
+            self._renderer = self.env.make_renderer(self.backend, cameras=[spec], channels=["rgb"], **extra)
             self._renderer.render(self.env.state)
-        except Exception as exc:  # no ovrtx, no GPU, a contended card
-            self.mode = RASTER
-            self._note = f"rtx would not build -- {type(exc).__name__}: {exc}"
-            self._release()
-            self._restore()
+        except Exception as exc:  # no GPU, a contended card, a GPU the rule misjudged
+            self._failed(f"{self.backend} would not build -- {type(exc).__name__}: {exc}")
             return False
         self._built, self._note = key, ""
         self.budget.reset()
@@ -418,10 +427,7 @@ class PanelRenderView(Panel):
         try:
             frames = self._renderer.render(self.env.state)
         except Exception as exc:
-            self.mode = RASTER
-            self._note = f"rtx stopped rendering -- {type(exc).__name__}: {exc}"
-            self._release()
-            self._restore()
+            self._failed(f"{self.backend} stopped rendering -- {type(exc).__name__}: {exc}")
             return False
         name = "viewport" if self._locked_camera() is None else self.locked
         rgb = np.ascontiguousarray(frames[name]["rgb"][..., :3]).astype(np.uint8)
@@ -429,6 +435,27 @@ class PanelRenderView(Panel):
             rgb = self._letterbox(rgb, client)
         client.scene.set_background_image(rgb, format="jpeg", jpeg_quality=80)
         return True
+
+    def _failed(self, note: str) -> None:
+        """A renderer failed: fall back to ``tiled`` if ``rtx`` was the machine's pick, else switch off.
+
+        A name somebody asked for is not swapped for another, the same rule
+        :func:`~robosimstudio.solvers.render.choose_renderer` keeps; the switch
+        is cleared rather than left on over a frame that is not coming.
+        """
+        self._release()
+        self._restore()
+        asked = self._why == "asked for" or self._why.startswith(ENV)
+        if self.backend == PUBLIC and not asked:
+            self.backend, self._why = FALLBACK, note
+            self._note = note
+            for widget in self._passes:
+                widget.disabled = True
+            return
+        self.mode = RASTER
+        self._note = note
+        if self._state is not None:
+            self._state.value = False
 
     @staticmethod
     def _letterbox(rgb: np.ndarray, client) -> np.ndarray:
@@ -508,18 +535,19 @@ class PanelRenderView(Panel):
         if self._readout is None:
             return
         if self.mode != RTX:
-            reason = self._note or ("no ovrtx installed" if not _tracer_available() else "switched off")
+            reason = self._note or (self._why if not self.backend else "switched off")
             self._readout.value = f"off -- plain viser, {reason}"
             return
         if self._built is None:
             waiting = "waiting for a browser" if not self.server.get_clients() else "building"
-            self._readout.value = f"on -- {waiting}"
+            self._readout.value = f"on -- {self.backend}, {waiting}"
             return
         passes = self.passes[0] if time.time() - self._touched < BUSY_SECONDS else self.passes[1]
+        quality = f" {passes}p" if self.backend == PUBLIC else ""
         where = f" on {self.locked}" if self.locked else ""
         clean = ", clean" if self.clean else ""
         self._readout.value = (
-            f"on -- {self._built[0]}x{self._built[1]} {passes}p{where}{clean} -- "
+            f"on -- {self.backend} {self._built[0]}x{self._built[1]}{quality}{where}{clean} -- "
             f"{self._rate:.1f} fps, {self._cost * 1000:.0f} ms/frame"
         )
 

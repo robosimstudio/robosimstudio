@@ -7276,6 +7276,11 @@ usd = [
     { name = "newton", extra = ["importers"] },
 ]
 
+[package.dev-dependencies]
+rtx = [
+    { name = "robosimstudio", extra = ["rtx"] },
+]
+
 [package.metadata]
 requires-dist = [
     { name = "coacd", specifier = "==1.0.11" },
@@ -7306,6 +7311,9 @@ requires-dist = [
     { name = "viser", specifier = ">=1.0.30" },
 ]
 provides-extras = ["curobo", "dev", "gap", "genesis", "lerobot-feetech", "rtx", "superdex", "usd"]
+
+[package.metadata.requires-dev]
+rtx = [{ name = "robosimstudio", extras = ["rtx"] }]
 
 [[package]]
 name = "robosuite"

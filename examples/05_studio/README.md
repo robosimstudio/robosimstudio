@@ -37,10 +37,11 @@ Source: [`00_your_own_panel.py`](00_your_own_panel.py)
 Headless: one path-traced still of a scene, then a short video of it running, with no page open.
 
 `rss.Sim.render` photographs the scene as it stands through a
-camera you declare: the room, the lights and the materials, path traced by the
-`[rtx]` extra (`ovrtx`). Where that is not installed the same call draws the
-colliders alone and says so once. `rss.Sim.record` steps the
-scene and writes what the same camera sees to an mp4.
+camera you declare: the room, the lights and the materials, path traced by
+`ovrtx` on a GPU with RT cores. On one without them, or with `ovrtx` left
+out, the same call draws the colliders alone and says why once;
+`ROBOSIMSTUDIO_RENDERER` picks either by name. `rss.Sim.record`
+steps the scene and writes what the same camera sees to an mp4.
 
 **Key features:**
 
@@ -174,16 +175,27 @@ control step, 900 frames in all, and write 30 frames per second. Set
 
 ## Rendering
 
-Every picture is path traced: the live camera view, the exported video,
-`./ctl snapshot` and `sim.render()`. The renderer is the `[rtx]` extra, from
-NVIDIA's package index:
+Every picture -- the live camera view, the exported video, **World model**,
+`./ctl snapshot`, `sim.render()` and a policy's cameras -- comes from one
+renderer, picked in this order:
+
+1. A name in code wins: `bench.Env(..., renderer="tiled")`. `"auto"` names none.
+2. Else `ROBOSIMSTUDIO_RENDERER`, for a machine or a shell: `rtx`, `tiled` or `auto`.
+3. Else `rtx`, path traced by `ovrtx`, where it is installed and the scene's GPU
+   has RT cores -- T4, A10, A40, L4, L40S, the RTX cards. Else `tiled`, which
+   draws the colliders alone: A100, H100 and B200 have no RT cores. The first
+   picture says which and why, once; World model's switch says it on hover.
+
+A named `rtx` is tried even on a GPU without RT cores, and raises where `ovrtx`
+is not installed rather than drawing something else.
+
+`uv run` and `uv sync` install `ovrtx` from a checkout by default (the `rtx`
+dependency group, 1.8 GB from NVIDIA's index). On a machine that cannot use it,
+leave it out with `UV_NO_GROUP=rtx`. With pip it is the `[rtx]` extra:
 
 ```bash
 pip install "robosimstudio[rtx]" --extra-index-url https://pypi.nvidia.com
 ```
-
-Without it the same calls draw the colliders alone and say so once. With it,
-**World model** in the View folder path-traces the page's own 3D view too.
 
 Headless, with no page open:
 

@@ -328,9 +328,10 @@ class PanelVideo(Panel):
 
     def __init__(self, session, *, backend: str = "", fps: int = 30, every: int = 2, max_frames: int = 900):
         super().__init__(session)
-        from robosimstudio.solvers.render import default_renderer
+        from robosimstudio.solvers.render import choose_renderer
 
-        self.backend = str(backend or default_renderer())
+        device = getattr(getattr(self.env, "model", None), "device", None)
+        self.backend = choose_renderer(backend, device)[0]
         self.fps = int(fps)
         self.every = max(1, int(every))
         self.buffer: deque[dict[str, np.ndarray]] = deque(maxlen=max(30, int(max_frames)))

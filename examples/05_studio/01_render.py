@@ -4,10 +4,11 @@
 Headless: one path-traced still of a scene, then a short video of it running, with no page open.
 
 :meth:`robosimstudio.Sim.render` photographs the scene as it stands through a
-camera you declare: the room, the lights and the materials, path traced by the
-``[rtx]`` extra (``ovrtx``). Where that is not installed the same call draws the
-colliders alone and says so once. :meth:`robosimstudio.Sim.record` steps the
-scene and writes what the same camera sees to an mp4.
+camera you declare: the room, the lights and the materials, path traced by
+``ovrtx`` on a GPU with RT cores. On one without them, or with ``ovrtx`` left
+out, the same call draws the colliders alone and says why once;
+``ROBOSIMSTUDIO_RENDERER`` picks either by name. :meth:`robosimstudio.Sim.record`
+steps the scene and writes what the same camera sees to an mp4.
 
 **Key features:**
 
