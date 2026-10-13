@@ -35,19 +35,21 @@ from .beats import (
     Fold,
     Grasp,
     Held,
+    Highest,
     Layout,
     Mid,
     Nearest,
     Orbit,
+    Patch,
     Policy,
     Press,
     Rose,
     Run,
+    Sank,
     Scroll,
     Segment,
     Select,
     Slider,
-    Squashed,
     Toggle,
     Top,
     Wait,
@@ -369,14 +371,12 @@ FINAL = (
 
 
 # =============================================================================
-# Drafts: the gesture planned, on physics other work is still changing
+# The rest: the grasps on cloth, rope and foam, and the pages a hand cannot show
 # =============================================================================
 
-PENDING = "physics being changed on another branch; tune after merge"
 
-
-def grasp(example: str, thing: str, *, at: Any = None, lift: float = 0.12, pending: str = PENDING, **kw) -> Take:
-    """The planned gesture as a draft: the nearest hand over the thing, down, Close, up."""
+def grasp(example: str, thing: str, *, at: Any = None, lift: float = 0.12, **kw) -> Take:
+    """The gesture as one beat: the nearest hand over the thing, down, Close, up."""
     return Take(
         example,
         camera=kw.pop("camera", Orbit(Mid(At(thing), Nearest(thing)), distance=0.85, azimuth=-15.0, elevation=25.0)),
@@ -387,7 +387,36 @@ def grasp(example: str, thing: str, *, at: Any = None, lift: float = 0.12, pendi
             Wait(seconds=1.0),
         ),
         expect=kw.pop("expect", (Rose(thing, lift * 0.6, at="lifted"),)),
-        pending=pending,
+        **kw,
+    )
+
+
+def handle(example: str, thing: str, at: Any, *, camera: Any, lift: float = 0.10, across=("y", -0.06), **kw) -> Take:
+    """A click on the thing and a drag of the handle it puts there, then Release all.
+
+    For the engines a robot's grasp cannot honestly be shown on -- a cloth on
+    another solver, a tet mesh, a kind of your own, a SuperDex rod -- the
+    handle is the studio's own way in: a pin on the patch clicked, or a PD
+    wrench on the body, and the thing dynamic under it.
+    """
+    radius = kw.pop("radius", 0.02)
+    return Take(
+        example,
+        camera=camera,
+        warmup=kw.pop("warmup", 1.0),
+        layout=Layout(collapse=("Simulation", "Arm: left", "Arm: right")),
+        beats=(
+            Wait(seconds=0.5, label=f"the {thing}"),
+            Click(at, label=f"click the {thing}: a handle"),
+            Wait(seconds=0.3),
+            Drag("handle", "z", lift, seconds=1.2, label="drag the handle up"),
+            Drag("handle", across[0], across[1], seconds=1.0, label="and across"),
+            Wait(seconds=0.8, mark="lifted", label="it hangs from the handle"),
+            Press(text="Release all", label="Release all"),
+            Wait(seconds=1.4, label="and it falls"),
+        ),
+        # What the handle took comes up with it; the rest of a sheet, a ring or a heap need not.
+        expect=kw.pop("expect", (Rose(Patch(thing, near=at, radius=radius), lift * 0.5, at="lifted"),)),
         **kw,
     )
 
@@ -416,48 +445,96 @@ def routine(example: str, *, speed: float, success: str, done: Any = None) -> Ta
     )
 
 
-ROPE_VIEW = Orbit(Mid(Segment("cable", 0.5), Nearest("cable")), distance=1.0, azimuth=-20.0, elevation=30.0)
+TOWEL = "examples/02_cloth/00_towel.py"
+TOWEL_VIEW = Orbit(At("towel"), distance=0.8, azimuth=-50.0, elevation=35.0)
+"""The towel from its corner: both its x and its y arrows have length on screen."""
+TELEOP_VIEW = Camera(eye=(1.55, -0.35, 1.30), look_at=(0.55, 0.0, 0.98))
+"""Both YAM hands: they work at about z 1.15, y -0.5 to +0.5, well over the bench."""
 
 DRAFTS = (
-    grasp("examples/02_cloth/00_towel.py", "towel", at=Corner("towel", -1, -1, 0.03), lift=0.10),
     Take(
-        "examples/02_cloth/00_towel.py",
+        TOWEL,
+        camera=Camera(eye=(1.05, -0.40, 0.95), look_at=(0.60, -0.17, 0.77)),
+        warmup=1.0,  # the towel lands from 20 mm
+        layout=Layout(collapse=("Simulation", "Arm: left")),
+        beats=(
+            Wait(seconds=0.5, label="the right hand, open, over the towel's near edge"),
+            Drag("right", "z", to=(0.600, -0.200, 0.776), seconds=1.2, label="drag the gizmo down to the towel"),
+            # It stops about 0.748, the fingertips on the bench at the edge.
+            Drag("right", "z", to=(0.600, -0.200, 0.746), seconds=0.8, label="and down onto the bench"),
+            Wait(seconds=0.3),
+            Press(text="Close", within=RIGHT, label="Close: the pads take the edge"),
+            Wait(seconds=1.0, mark="closed"),
+            Drag("right", "z", to=(0.600, -0.200, 0.848), seconds=1.4, label="drag it up 100 mm"),
+            Wait(seconds=2.0, mark="lifted", label="held by friction"),
+        ),
+        # The edge under the jaws, not the towel: its centroid barely moves. Measured 96 mm.
+        expect=(Rose(Patch("towel", near=(0.600, -0.200, 0.730)), 0.06, at="lifted"),),
+    ),
+    Take(
+        TOWEL,
         name="pinch_towel",
-        camera=Orbit(At("towel"), distance=0.7, azimuth=-15.0, elevation=35.0),
+        camera=TOWEL_VIEW,
         warmup=1.0,
         beats=(
             Wait(seconds=0.5),
             Click(Corner("towel", -1, -1, 0.03), label="click a corner: a handle"),
             Drag("handle", "z", 0.12, seconds=1.2, label="lift it"),
-            Drag("handle", "x", 0.08, seconds=1.0, label="carry it"),
+            Drag("handle", "x", -0.08, seconds=1.0, label="carry it"),
             Wait(seconds=0.6, mark="lifted"),
             Press(text="Release all", label="let go"),
             Wait(seconds=1.2),
         ),
-        expect=(Rose("towel", 0.02, at="lifted"),),
-        pending=PENDING,
+        expect=(Rose(Patch("towel", near=Corner("towel", -1, -1, 0.03)), 0.06, at="lifted"),),
     ),
     Take(
-        "examples/02_cloth/00_towel.py",
+        TOWEL,
         name="move_together",
-        camera=Orbit(At("towel"), distance=0.7, azimuth=-15.0, elevation=35.0),
+        camera=TOWEL_VIEW,
         warmup=1.0,
         beats=(
             Wait(seconds=0.5),
-            Click(Corner("towel", -1, -1, 0.03), label="one corner"),
-            Click(Corner("towel", -1, 1, 0.03), label="and the next"),
+            # The edge nearest the camera: the far corner of the other edge is behind the
+            # right arm from here, and a click there took the arm.
+            Click(Corner("towel", 1, -1, 0.03), label="one corner"),
+            Click(Corner("towel", 1, 1, 0.03), label="and the next"),
             Toggle(text="Move together", label="Move together"),
             Drag("handle", "z", 0.10, seconds=1.2, label="one drag lifts both"),
-            Drag("handle", "x", 0.10, seconds=1.0, label="and carries the sheet flat"),
+            Drag("handle", "x", -0.10, seconds=1.0, label="and carries the sheet flat"),
             Wait(seconds=0.6, mark="lifted"),
             Press(text="Release all"),
             Wait(seconds=1.2),
         ),
-        expect=(Rose("towel", 0.02, at="lifted"),),
-        pending=PENDING,
+        expect=(
+            Rose(Patch("towel", near=Corner("towel", 1, -1, 0.03)), 0.05, at="lifted"),
+            Rose(Patch("towel", near=Corner("towel", 1, 1, 0.03)), 0.05, at="lifted"),
+        ),
     ),
-    grasp("examples/02_cloth/02_engines.py", "towel", at=Corner("towel", -1, -1, 0.03), lift=0.10),
-    grasp("examples/02_cloth/04_your_own_cloth.py", "sheet", at=Corner("sheet", -1, -1, 0.03), lift=0.10),
+    handle(
+        "examples/02_cloth/02_engines.py",
+        "towel",
+        Corner("towel", 1, -1, 0.03),
+        camera=Orbit(At("towel"), distance=0.75, azimuth=-30.0, elevation=35.0),
+    ),
+    Take(
+        "examples/02_cloth/04_your_own_cloth.py",
+        camera=Camera(eye=(1.05, -0.38, 0.95), look_at=(0.60, -0.08, 0.83)),
+        warmup=3.0,  # the page puts the sheet back flat over the ball, and it drapes for 1 to 3 s
+        beats=(
+            Wait(seconds=0.5, label="the Panda's hand over the sheet's hem"),
+            Drag("right", "z", to=(0.600, -0.095, 0.860), seconds=1.0, label="drag the gizmo down"),
+            Drag("right", "z", to=(0.600, -0.095, 0.800), seconds=0.8, label="and onto the hem"),
+            Wait(seconds=0.3),
+            # Not Close: shut, the pads squeezed the hem out and it slid 37 mm down the hand.
+            # 0.95 of the slider leaves 5 mm, the sheet's contact thickness.
+            Slider(text="Grip amount", value=0.95, seconds=1.0, within=RIGHT, label="Grip amount to 0.95"),
+            Wait(seconds=1.0, mark="closed"),
+            Drag("right", "z", to=(0.600, -0.095, 0.900), seconds=1.2, label="drag it up 100 mm"),
+            Wait(seconds=2.0, mark="lifted", label="held by friction"),
+        ),
+        # Measured 94.6 mm.
+        expect=(Rose(Patch("sheet", near=(0.600, -0.095, 0.800)), 0.06, at="lifted"),),
+    ),
     Take(
         "examples/03_soft/00_sponge.py",
         # The sponge under the Panda's tool-down hand, from the bench's open side.
@@ -481,58 +558,90 @@ DRAFTS = (
     Take(
         "examples/03_soft/00_sponge.py",
         name="press_sponge",
-        camera=Orbit(Mid(At("sponge"), Nearest("sponge")), distance=0.75, azimuth=-15.0, elevation=22.0),
+        camera=Camera(eye=(0.80, -0.50, 1.02), look_at=(0.457, -0.115, 0.80)),
         warmup=1.0,
         beats=(
-            Wait(seconds=0.5),
-            # The Panda's hand starts at bench (-0.143, -0.115), off the sponge: over it first.
-            DragTo("right", Top("sponge", dz=0.08), label="over the sponge"),
-            Drag("right", "z", to=Top("sponge", dz=-0.012), seconds=1.4, label="down into it"),
-            Wait(seconds=0.8, mark="pressed", label="it squashes under the jaw"),
-            Drag("right", "z", 0.08, seconds=1.0, label="up"),
-            Wait(seconds=1.0, label="and it recovers"),
+            Wait(seconds=0.5, label="the hand over the sponge"),
+            # Open, the pads are 80 mm apart and pass either side of the 50 mm foam:
+            # measured, the tool centre went 5 mm under its top and touched nothing.
+            Slider(text="Grip amount", value=0.6, seconds=0.8, within=RIGHT, label="jaws in to 33 mm, inside its 50"),
+            # The fingertips touch with the tool centre 40 mm over the bench; 12 mm on.
+            Drag("right", "z", to=Bench(-0.143, -0.115, 0.028), seconds=1.6, label="down into the foam"),
+            Wait(seconds=1.0, mark="pressed", label="it dents under the fingertips"),
+            Drag("right", "z", 0.10, seconds=1.2, label="up"),
+            Wait(seconds=1.2, label="and it springs back"),
         ),
-        expect=(Squashed("sponge", 0.005, at="pressed"),),
-        pending=PENDING,
+        # The deepest point of the foam's top under the hand: its middle, between the two
+        # fingertips, bulges up 2.3 mm, and the sponge's height grows with it. Measured
+        # headless, the top layer within 20 mm sank 3.0 mm on average, all of it back.
+        expect=(Sank(Patch("sponge", near=Top("sponge"), radius=0.025, skin=0.004, lowest=True), 0.002),),
     ),
-    grasp("examples/03_soft/01_tet_mesh.py", "gasket"),
-    grasp("examples/03_soft/02_your_own_soft.py", "block"),
-    Take(
+    handle(
+        "examples/03_soft/01_tet_mesh.py",
+        "gasket",
+        Highest("gasket"),
+        camera=Orbit(At("gasket"), distance=0.5, azimuth=-20.0, elevation=35.0),
+        radius=0.015,
+        # Gently: lifted 100 mm by one patch and carried 60, the ring came down a crumpled
+        # blob and stayed one.
+        lift=0.05,
+        across=("y", -0.03),
+        pending="the O-ring folds over itself under a handle and stays folded, at 50 mm as at 100: "
+        "a question for the soft body, not the take",
+    ),
+    handle(
+        "examples/03_soft/02_your_own_soft.py",
+        "block",
+        Top("block"),
+        camera=Orbit(At("block", dz=0.05), distance=0.6, azimuth=-20.0, elevation=30.0),
+    ),
+    handle(
         "examples/04_extending/01_new_kind.py",
+        "chain",
+        Highest("chain"),
         camera=Orbit(At("chain"), distance=0.7, azimuth=-15.0, elevation=30.0),
         warmup=3.0,  # the stack of loose links is still falling over at 1 s
-        beats=(
-            Wait(seconds=0.5),
-            Click(At("chain"), label="click a link: a handle"),
-            Drag("handle", "z", 0.15, seconds=1.4, label="lift the chain by it"),
-            Wait(seconds=0.8, mark="lifted"),
-            Press(text="Release all"),
-            Wait(seconds=1.2),
-        ),
-        # TODO(after merge): the chain is loose links, and a handle lifts the one it
-        # holds: measure that link, not the heap's middle (which rose 3.9 mm).
-        expect=(Rose("chain", 0.03, at="lifted"),),
-        pending=PENDING,
+        lift=0.12,
+        radius=0.012,  # the one link the handle took: the links are loose, and the rest stay in the heap
     ),
     Take(
         "examples/06_teleop/01_force_feedback.py",
         argv=("--simulate",),
-        cursor=False,
+        cursor=False,  # a scripted leader arm drives the hands; no one is at the mouse
+        camera=TELEOP_VIEW,
         warmup=1.0,
-        beats=(Wait(seconds=10.0, label="a simulated leader feels the panel and the crate"),),
-        pending=PENDING,
+        beats=(Wait(seconds=9.0, label="a simulated leader meets the panel and the crate"),),
     ),
-    grasp("examples/07_tasks/01_goals_and_rewards.py", "cube"),
-    grasp("examples/07_tasks/02_episodes.py", "cube"),
-    # Back to a metre: the cable runs the bench's width, and the nearer hand starts at its far end.
-    grasp("examples/10_rope/00_cable.py", "cable", at=Segment("cable", 0.5), lift=0.10, camera=ROPE_VIEW),
-    grasp(
+    grasp("examples/07_tasks/01_goals_and_rewards.py", "cube", camera=TASK_VIEW),
+    grasp("examples/07_tasks/02_episodes.py", "cube", camera=TASK_VIEW),
+    Take(
+        "examples/10_rope/00_cable.py",
+        camera=Camera(eye=(0.95, 0.20, 1.02), look_at=(0.55, 0.00, 0.80)),
+        warmup=1.0,
+        layout=Layout(collapse=("Simulation", "Arm: left")),
+        beats=(
+            Wait(seconds=0.5, label="the right hand over the cable's middle"),
+            # It settles about 3 mm over this, on the capsule.
+            Drag("right", "z", to=(0.550, -0.011, 0.771), seconds=1.2, label="drag the gizmo down onto it"),
+            Wait(seconds=0.3),
+            Press(text="Close", within=RIGHT, label="Close"),
+            Wait(seconds=1.0, mark="closed"),
+            # Slowly: past 0.2 m/s a flick drops it. 120 mm over 1.8 s, eased, peaks at 0.1 m/s.
+            Drag("right", "z", to=(0.550, -0.011, 0.891), seconds=1.8, label="drag it up, slowly"),
+            # The loaded hand sits about 25 mm under its gizmo.
+            Wait(seconds=2.0, mark="lifted", label="held by friction"),
+        ),
+        # The capsule in the jaws. Measured 92 mm.
+        expect=(Rose(Patch("cable", near=(0.550, -0.011, 0.771)), 0.06, at="lifted"),),
+    ),
+    handle(
         "examples/10_rope/02_superdex.py",
         "cable",
-        at=Segment("cable", 0.5),
-        lift=0.10,
+        Segment("cable", 0.5),
+        camera=Orbit(At("cable", dz=0.03), distance=0.75, azimuth=-25.0, elevation=25.0),
+        lift=0.08,
+        across=("x", 0.05),
         needs=("superdex",),
-        camera=ROPE_VIEW,
     ),
     routine("demo/wipe_the_bar/wipe_the_bar.py", speed=2.0, success="the bar is wiped:"),
     routine("demo/route_the_cable/route_the_cable.py", speed=2.0, success="the cable is routed:", done=_routed),
@@ -546,8 +655,6 @@ KEPT: dict[str, str] = {
     "08_policies/03_many_worlds": "opens no page: a fleet run of every world at once, filmed as a grid of tiles",
     "02_cloth/03_genesis": "needs the Genesis venv, which the recorder's environment deliberately does not carry",
     "live/live_page": "the live page rebuilding on a save of scene.py: a file being edited, not a scene being driven",
-    "06_teleop/leader_sim": "the --simulate page 06_teleop/00_leader_arm films; kept until the README shows one of the two",
-    "06_teleop/force_feedback_sim": "the --simulate page 06_teleop/01_force_feedback films; kept until the README shows one",
     "09_demos/00_wipe_the_bar": "moving to demo/wipe_the_bar/, whose take films it there",
 }
 """Clips no take films, each with why its existing file stands. Keyed like :attr:`Take.key`."""

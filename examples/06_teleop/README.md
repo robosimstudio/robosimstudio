@@ -176,11 +176,8 @@ rss.view(sim, panels="all", config=StudioConfig(
 ```
 
 Without hardware, `--simulate` runs a scripted hand over a table of registers:
-both arms sweep and the jaws open and close. It exercises the loop and shows
-nothing about feel.
-
-![The leader-arm example with --simulate: a scripted hand sweeps both arms and works the jaws.](media/leader_sim.webp)
-*The leader-arm example with `--simulate`: a scripted hand sweeps both arms and works the jaws. Played at 2x.*
+both arms sweep and the jaws open and close, as in the [leader-arm clip](#leader-arm)
+above. It exercises the loop and shows nothing about feel.
 
 ## Force feedback
 
@@ -193,8 +190,8 @@ uv run examples/06_teleop/01_force_feedback.py --leader right:/dev/ch340-<serial
 uv run examples/06_teleop/01_force_feedback.py --leader right:/dev/ch340-<serial>
 ```
 
-![The force-feedback example with --simulate: the status line names the motor that pushes back.](media/force_feedback_sim.webp)
-*The force-feedback example with `--simulate`: the status line names the motor that pushes back. Played at 2x.*
+The [force-feedback clip](#force-feedback) above is the `--simulate` run: the
+Force feedback folder names the motor that pushes back.
 
 Take `--no-feedback` first. It drives the scene from the leader and never
 energizes a motor, which is how a calibration is checked with nothing able to
