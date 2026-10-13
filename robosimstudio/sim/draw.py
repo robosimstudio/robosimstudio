@@ -173,6 +173,7 @@ def view(
     *,
     panels: Any = "drive",
     page: Any = None,
+    routines: Any = None,
     render_every: int = 1,
     port: int = _UNSET,
     share: bool = True,
@@ -222,6 +223,19 @@ def view(
 
             ``studio.gui`` and ``studio.scene`` are viser's own, so a component
             written against a bare ``ViserServer`` works here unchanged.
+        routines: A **Run** button for each: one callable, or a dict of name to
+            callable. ``routine(sim, session)`` returns a generator that yields
+            once per control step and drives the arms through their panels --
+            :func:`robosimstudio_studio.routine.reach` glides a gizmo,
+            :func:`~robosimstudio_studio.routine.grip` presses Grip -- so the job
+            plays on the page the way a person would do it, and holds only what
+            the fingers hold::
+
+                def routine(sim, session):
+                    yield from reach(session, "right", above)
+                    yield from grip(session, "right", 1.0)
+
+                rss.view(sim, routines={"Pick it up": routine})
         render_every: Draw one frame per this many control steps. **1 here**, and
             4 on :class:`~robosimstudio_studio.StudioConfig` -- the third of the
             three defaults that differ between the two doors, and the one with a
@@ -288,6 +302,8 @@ def view(
     settings = dataclasses.replace(config or StudioConfig(), **changes)
 
     session = StudioSession(sim, config=settings, **kwargs)
+    if routines:
+        session.add_routines(routines)
     if page is not None:
         page(session)
     session.run()
