@@ -40,6 +40,7 @@ from typing import Any
 import numpy as np
 
 from robosimstudio.specs import Episode, TaskSpec, replace
+from robosimstudio_bench.goals.context import diverged_result, finite_reward
 from robosimstudio_bench.taskbuild.episodes import make_episode, model_key_for
 
 from .summary import RunSummary
@@ -369,6 +370,9 @@ class WorldSlot:
             "reward": float(self.reward),
             "episode_length": int(self.steps),
             "close_kind": self.close_kind or "unknown",
+            # The serial row's key (``run/runner.py::rollout``): why a policy
+            # asked out, not only that it did.
+            "termination_reason": str(self.info.get("termination_reason", "")),
             "metrics": self.metrics,
             "wall_s": self.wall_s,
             "world": int(self.world),
@@ -479,11 +483,21 @@ def score_world(
     policy may say it is finished, and the world is still scored on what the
     evaluator saw.
     """
-    info: dict[str, Any] = {"success": False, "reward": 0.0}
-    result = fleet.evaluate(slot.world, slot.evaluator, snapshot, settled_body_q=slot.settled_body_q)
-    info["success"] = bool(result.success)
-    info["reward"] = float(result.reward)
-    info["metrics"] = dict(result.metrics)
+    diverged = bool(snapshot.diverged[slot.world])
+    # A diverged world is scored as the serial ``Env.evaluate`` scores one:
+    # the evaluator is not consulted on NaN state, and the verdict is the shared
+    # ``diverged_result`` -- no success, no reward -- rather than whatever the
+    # evaluator made of garbage numbers.
+    result = (
+        diverged_result()
+        if diverged
+        else fleet.evaluate(slot.world, slot.evaluator, snapshot, settled_body_q=slot.settled_body_q)
+    )
+    info: dict[str, Any] = {
+        "success": bool(result.success),
+        "reward": finite_reward(result.reward),
+        "metrics": dict(result.metrics),
+    }
     # Recorded on the slot here, on every pass, rather than only by `finish`.
     # A graph reads the evaluator's verdict through `sim.check_success` and
     # `sim.next_goal`, and a fleet hands it whatever is on the slot
@@ -498,7 +512,7 @@ def score_world(
     # same dict, so the slot sees the pass's final content.
     slot.info = info
 
-    if bool(snapshot.diverged[slot.world]):
+    if diverged:
         info["close_kind"] = "diverged"
         return True, info
     if request:
@@ -567,17 +581,16 @@ class RunnerFleet:
     # ------------------------------------------------------------------ the run
     def run(self) -> list[dict[str, Any]]:
         import time
-        from datetime import datetime, timezone
+        from datetime import UTC, datetime
 
-        from robosimstudio_bench.taskbuild.registry import get_task
-
+        from .jobs import job_task
         from .runner import _suite_provenance
 
         job = self.job
-        started = datetime.now(timezone.utc).isoformat()
+        started = datetime.now(UTC).isoformat()
         wall0 = time.perf_counter()
 
-        task = get_task(job.task) if isinstance(job.task, str) else job.task
+        task = job_task(job)
         work = self.job_work(job, task)
         # The first wave, so the model can be built for it. Planning is pure --
         # it materialises episodes and groups them -- so asking twice costs a
@@ -694,13 +707,16 @@ class RunnerFleet:
         :func:`plan_mixed_waves` packs into three waves of twelve rather than
         thirty processes of one.
         """
-        from robosimstudio_bench.taskbuild.registry import get_task
+        from .jobs import job_task
 
         names = tuple(getattr(job, "documents", ()) or ())
         if not names:
             return [(task, int(i)) for i in job.episode_ids]
         ids = [int(i) for i in job.episode_ids]
-        return [(get_task(name), i) for name in names for i in ids]
+        # Resolved once per name, so every episode of one document shares one
+        # spec (identity is what a wave compares) with the job's seed applied.
+        documents = {name: job_task(job, name) for name in names}
+        return [(documents[name], i) for name in names for i in ids]
 
     def _rebuild_for(self, fleet, policy, episodes: list[Episode], task=None):
         """Close this fleet and open one built for ``episodes``.
@@ -734,9 +750,23 @@ class RunnerFleet:
         """
         from robosimstudio_bench.envs.fleet import FleetEnv
 
+        from .jobs import job_task
+
         job = job or self.job
+        # A fleet has no per-job action space or observation renderer to switch:
+        # ``FleetEnv`` takes neither, and a job that set one would otherwise run
+        # with the task's own while its rows claimed the job's.
+        unsupported = {
+            name: value for name in ("control_mode", "obs_renderer") if (value := getattr(job, name, "") or "")
+        }
+        if unsupported:
+            raise ValueError(
+                f"job {job.name!r} sets {unsupported}, which a batched run (num_worlds > 1) cannot honour: "
+                "FleetEnv has no per-job control mode or observation renderer. Run it with num_worlds=1, "
+                "or leave these empty to use the task's own"
+            )
         fleet = FleetEnv(
-            task if task is not None else job.task,
+            task if task is not None else job_task(job),
             num_worlds=self.num_worlds,
             scene=job.scene,
             embodiment=job.embodiment,
@@ -812,6 +842,7 @@ class RunnerFleet:
         # the longest; each world is truncated at its own.
         limits = [int(self.job.max_steps or getattr(slot.task, "max_steps", 0) or 10_000) for slot in slots]
         limit = max(limits)
+        own_limits = frozenset(limits)
         cadence = fleet.eval_every
         world_steps = 0
         step = 0
@@ -822,7 +853,11 @@ class RunnerFleet:
             fleet.step()
             step += 1
             world_steps += int(live.sum())
-            due = step % cadence == 0 or step >= limit
+            # Each world's own limit is a scoring step too, not just the cadence
+            # and the wave's longest: a world whose budget falls between two
+            # cadence steps would otherwise run past it and report the overrun
+            # as its episode length.
+            due = step % cadence == 0 or step >= limit or step in own_limits
             snapshot = fleet.snapshot() if due else None
             policy.on_step(snapshot)
             if snapshot is None:
@@ -1019,7 +1054,7 @@ class RunnerFleet:
 
     def _write_meta(self, fleet, policy, started: str, wall0: float, step_mix: dict, suite_provenance) -> None:
         import time
-        from datetime import datetime, timezone
+        from datetime import UTC, datetime
 
         from robosimstudio.record import RunMeta
 
@@ -1036,7 +1071,7 @@ class RunnerFleet:
                 renderer=job.renderer,
                 device=job.device,
                 started=started,
-                finished=datetime.now(timezone.utc).isoformat(),
+                finished=datetime.now(UTC).isoformat(),
                 episodes=len(self.rows),
                 successes=sum(1 for row in self.rows if row.get("success")),
                 # Every key a serial run writes, so one run directory reads the

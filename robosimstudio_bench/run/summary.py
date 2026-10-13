@@ -153,11 +153,20 @@ class RunSummary:
         return dict(sorted(counts.items(), key=lambda kv: -kv[1]))
 
     @property
-    def unrun(self) -> tuple[int, ...]:
+    def unrun(self) -> tuple[int | tuple[str, int], ...]:
         """Episode ids no row reported.
 
         A worker that died takes its in-flight episode with it, and a rate is
         wrong if that is silent.
+
+        A job naming ``documents`` runs every id once *per document*, so there
+        the unit is ``(document, episode_id)`` -- matched against each row's
+        ``task`` -- and that pair is what is reported. Matching on the id alone
+        called an id run as soon as any one document had reported it.
         """
-        ran = {int(row.get("episode_id", -1)) for row in self.rows}
-        return tuple(e for e in self.job.episode_ids if e not in ran)
+        documents = tuple(getattr(self.job, "documents", ()) or ())
+        if not documents:
+            ran = {int(row.get("episode_id", -1)) for row in self.rows}
+            return tuple(e for e in self.job.episode_ids if e not in ran)
+        done = {(str(row.get("task", "")), int(row.get("episode_id", -1))) for row in self.rows}
+        return tuple((name, int(e)) for name in documents for e in self.job.episode_ids if (name, int(e)) not in done)

@@ -127,10 +127,9 @@ def build_goal(condition: Condition, make_leaf: LeafMaker, *, path: str = "goal"
             # and the metrics are keyed by what the atom reports: `contact-force`
             # is written with a dash and reported under one with an underscore,
             # `insertion` reports `depth`, and `insertion:lat` reports `lat`.
-            # None of those three lookups would have raised -- `Peak` falls back
-            # to the leaf's own reward when the key misses, so the episode's
-            # largest *verdict* would have stood in for its largest reading and
-            # the run would have reported a plausible number for the wrong thing.
+            # A key that misses raises at the first step (`combinators._reading`),
+            # as the reward clause does; reading the head verbatim would have
+            # missed on all three.
             of=build_goal(inner, make_leaf, path=f"{path}.0"),
             key=reading_key(inner.head),
             op=condition.op,
@@ -214,8 +213,7 @@ def outline(condition: Condition, *, path: str = "goal") -> Clause:
     grammar drift the moment a form is added to one of them, and the failure is
     quiet: a mislabelled node reads its sibling's verdict and the page shows a
     confident wrong tick. Keeping them adjacent makes the divergence visible in
-    review, and ``tests/assetlib/test_goal.py`` asserts the label sets agree over
-    every corpus document, which makes it visible in CI.
+    review.
 
     Args:
         condition: A checked goal condition.

@@ -12,7 +12,7 @@ has to be told *where* to be able to fix it -- "unexpected )" with no position i
 a message that turns a one-token error into a re-read of the whole file. Every
 raise below names a position.
 
-Two BDDL-specific things the reader must get right:
+The BDDL-specific things the reader must get right:
 
 * ``;`` runs to end of line, and the vendored files use comments heavily -- the
   provenance in a reconstructed file is all comments.
@@ -21,6 +21,9 @@ Two BDDL-specific things the reader must get right:
   the comment character. Numbers are converted; everything else stays a string,
   because deciding what a symbol *means* is the parser's job and not the
   reader's.
+* ``object.feature(NUMBER)`` -- ``cable.point(0.63)``, the paren hard against a
+  dotted name -- is one atom, a parameterised reference, not a name followed
+  by a form.
 * ``"..."`` is one string atom. Quotes stripped, ``;`` and parens literal
   inside, and it may span lines -- whitespace runs collapse to one space, since
   the only strings in the dialect are prose and references. A quoted ``"5"``
@@ -29,6 +32,7 @@ Two BDDL-specific things the reader must get right:
 
 from __future__ import annotations
 
+import re
 from pathlib import Path
 
 __all__ = ["ParseError", "Sexp", "parse_sexp", "read_sexp"]
@@ -56,6 +60,15 @@ class ParseError(ValueError):
         self.line = line
         self.column = column
         self.where = where
+
+
+_REF_ARGUMENT = re.compile(r"\(\s*([-+]?(?:\d+\.?\d*|\.\d+)(?:[eE][-+]?\d+)?)\s*\)")
+"""``(0.63)`` written hard against a reference: the argument of ``cable.point(0.63)``."""
+
+
+def _is_dotted_name(token: str) -> bool:
+    """Whether ``token`` is ``object.feature`` -- dotted, and not a number such as ``0.5``."""
+    return "." in token and isinstance(_atom(token), str) and token.rsplit(".", 1)[1][:1].isalpha()
 
 
 def _atom(token: str) -> Sexp:
@@ -176,6 +189,15 @@ def parse_sexp(text: str, *, where: str = "") -> list[Sexp]:
             index += 1
             column += 1
         token = text[token_start:index]
+        argument = _REF_ARGUMENT.match(text, index) if _is_dotted_name(token) else None
+        if argument is not None:
+            # `cable.point(0.63)`: a parameterised reference, one atom. The
+            # paren hard against a dotted name is not a form -- a form is
+            # separated from what precedes it -- and splitting it left
+            # `parse_ref` a reference with no argument and a stray `(0.63)`.
+            token = f"{token}({argument.group(1)})"
+            column += argument.end() - index
+            index = argument.end()
 
         if not stack:
             raise ParseError(

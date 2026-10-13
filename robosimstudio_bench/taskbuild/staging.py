@@ -109,7 +109,9 @@ class Staging:
     gripper: str = ""
     work_arm: str = ""
     support_arm: str = ""
-    scene_resident: bool = False
+    scene_resident: bool | None = None
+    """``None`` is unstated (read as false), so a document's explicit
+    ``(:scene-resident false)`` survives :meth:`merged_over` a profile that says true."""
     physics: str = ""
     cameras: str = ""
     episodes: tuple[tuple[str, Any], ...] = ()
@@ -322,9 +324,9 @@ def parse_staging(section: dict[str, Any]) -> Staging:
         elif key in _FLAGS:
             out[key] = _flag(value)
         elif key in _GAINS:
-            out[key] = _pairs(value if isinstance(value, list) else [value], what=raw, keys=("ke", "kd", "armature"))
+            out[key] = _pairs(_clauses(value), what=raw, keys=("ke", "kd", "armature"))
         elif key == "episodes":
-            out["episodes"] = _episodes(value if isinstance(value, list) else [value])
+            out["episodes"] = _episodes(_clauses(value))
         else:
             raise ValueError(
                 f":staging names {raw!r}, which is not one of "
@@ -377,6 +379,21 @@ def _arms(clauses: list[Any]) -> dict[str, Any]:
         field = _ARM_KEYS[key]
         out[field] = _flag(clause[1]) if field == "arms_solid" else str(clause[1])
     return out
+
+
+def _clauses(value: Any) -> list[Any]:
+    """A sub-section's value as a list of clauses, however many it holds.
+
+    ``_plain`` unwraps a single value, so ``(:episodes (:count 50))`` arrives as
+    the one clause ``[":count", 50]`` while ``(:episodes (:count 50) (:seed 0))``
+    arrives as a list of two. A list whose first element is not itself a list
+    is that one clause, not a list of clauses.
+    """
+    if not isinstance(value, list):
+        return [value]
+    if value and not isinstance(value[0], list):
+        return [value]
+    return value
 
 
 def _pairs(clauses: list[Any], *, what: str, keys: tuple[str, ...]) -> tuple[tuple[str, Any], ...]:

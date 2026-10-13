@@ -1,7 +1,7 @@
 # SPDX-License-Identifier: Apache-2.0
 """What the fleet answers together, because at the barrier the group is complete.
 
-The other half of :mod:`tests.test_fleet_barrier`. Once every live world is
+The other half of the barrier (whose park rule is :mod:`tests.test_fleet_threads`). Once every live world is
 parked there is nobody left who could still ask, so a request that wants company
 does not need a quorum, a deadline or a guess -- it waits for the barrier and is
 answered with everyone else's in one call.

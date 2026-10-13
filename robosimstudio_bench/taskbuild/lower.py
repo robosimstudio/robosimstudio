@@ -364,7 +364,7 @@ def _host_bindings(hosts: tuple[dict[str, Any], ...], staging: Staging) -> tuple
                 gripper=own.gripper,
                 work_arm=own.work_arm,
                 support_arm=own.support_arm,
-                scene_resident=own.scene_resident,
+                scene_resident=bool(own.scene_resident),
                 cross_arm_collisions=own.arms_solid,
                 static_overrides=tuple((str(name), _under_export(str(path), staging)) for name, path in rows),
                 graphs=()
@@ -434,7 +434,7 @@ def _native_binding(staging: Staging, graphs: tuple[tuple[str, str], ...]) -> tu
             gripper=staging.gripper,
             work_arm=staging.work_arm,
             support_arm=staging.support_arm,
-            scene_resident=staging.scene_resident,
+            scene_resident=bool(staging.scene_resident),
             cross_arm_collisions=staging.arms_solid,
             graphs=tuple(name for name, _ in graphs),
         ),

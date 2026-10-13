@@ -193,6 +193,7 @@ class TestWorldSlot(unittest.TestCase):
             "reward",
             "episode_length",
             "close_kind",
+            "termination_reason",
             "metrics",
             "wall_s",
         }
@@ -202,6 +203,14 @@ class TestWorldSlot(unittest.TestCase):
         self.assertEqual(row["episode_length"], 42)
         self.assertEqual(row["metrics"], {"depth": 2.0})
         self.assertEqual(row["wall_s"], 3.142)
+        self.assertEqual(row["termination_reason"], "")
+
+    def test_row_says_why_the_policy_asked_out(self):
+        """``termination_reason``, as the serial row carries it."""
+        slot = self._slot()
+        info = {"close_kind": "policy_request", "termination_reason": "graph finished"}
+        slot.finish(success=False, reward=0.0, close_kind="policy_request", steps=3, wall_s=1.0, info=info)
+        self.assertEqual(slot.row("suite/variant")["termination_reason"], "graph finished")
 
     def test_finishing_clears_live(self):
         slot = self._slot()
@@ -265,12 +274,20 @@ class TestFleetSummary(unittest.TestCase):
 class TestScoreWorld(unittest.TestCase):
     """Per-world termination, in the precedence the single-world path uses."""
 
-    def _fixture(self, *, success=False, diverged=False):
+    def _fixture(self, *, success=False, diverged=False, reward=None):
 
         slot = WorldSlot(world=1, episode=plan_waves(_task(), [0], 2)[0][0])
         slot.settled_body_q = np.zeros((1, 7))
-        result = EvalResult(success=success, reward=2.0 if success else 0.0, metrics={"depth": 1.0})
-        fleet = SimpleNamespace(evaluate=lambda *a, **k: result)
+        if reward is None:
+            reward = 2.0 if success else 0.0
+        result = EvalResult(success=success, reward=reward, metrics={"depth": 1.0})
+        self.evaluated = 0
+
+        def evaluate(*a, **k):
+            self.evaluated += 1
+            return result
+
+        fleet = SimpleNamespace(evaluate=evaluate)
         snapshot = SimpleNamespace(diverged=np.array([False, diverged]))
         return slot, fleet, snapshot
 
@@ -290,6 +307,23 @@ class TestScoreWorld(unittest.TestCase):
         done, info = score_world(slot, fleet, snapshot, step=5, limit=100, request="graph finished")
         self.assertTrue(done)
         self.assertEqual(info["close_kind"], "diverged")
+
+    def test_a_diverged_world_scores_as_the_serial_env_does(self):
+        """No success, no reward, and the evaluator never consulted on NaN state --
+        ``Env.evaluate``'s verdict, not whatever the evaluator made of garbage."""
+
+        slot, fleet, snapshot = self._fixture(success=True, diverged=True)
+        _, info = score_world(slot, fleet, snapshot, step=5, limit=100)
+        self.assertFalse(info["success"])
+        self.assertEqual(info["reward"], 0.0)
+        self.assertEqual(info["metrics"], {"diverged": True})
+        self.assertEqual(self.evaluated, 0)
+        self.assertIs(slot.info, info)
+
+    def test_a_nan_reward_reaches_the_row_as_zero(self):
+        slot, fleet, snapshot = self._fixture(reward=float("nan"))
+        _, info = score_world(slot, fleet, snapshot, step=5, limit=100)
+        self.assertEqual(info["reward"], 0.0)
 
     def test_a_policy_request_ends_the_world_but_does_not_win_it(self):
 

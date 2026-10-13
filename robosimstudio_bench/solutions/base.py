@@ -36,10 +36,10 @@ class SolutionCommon:
 
     The single-world and batched policies are two shapes on purpose -- driving
     one environment and driving N behind a live mask is different work, and
-    `docs/architecture.md` keeps them as twins so "the batched form of X" is a
-    name you can guess. What is *not* different is the part below: both hold the
-    thing they drive, both release what they opened, and both report a name the
-    results row is keyed by.
+    they are kept as twins so "the batched form of X" is a name you can guess.
+    What is *not* different is the part below: both hold the thing they drive,
+    both release what they opened, and both report a name the results row is
+    keyed by.
 
     ``name`` was one of only three method bodies identical across the whole
     fleet/single split, so it is the part that merges, and the driving methods

@@ -12,9 +12,29 @@ from __future__ import annotations
 import importlib.util
 from pathlib import Path
 
-from robosimstudio.specs import JobSpec
+from robosimstudio.specs import JobSpec, TaskSpec
 
-__all__ = ["load_jobs"]
+__all__ = ["job_task", "load_jobs"]
+
+
+def job_task(job: JobSpec, name: str | TaskSpec = "") -> TaskSpec:
+    """The document a job runs, resolved and with ``job.seed`` applied.
+
+    Every runner -- serial, pooled, batched -- resolves its documents here, so
+    the seed override is applied in one place and an episode's ``seed`` (which
+    its row records) is the one the job asked for.
+
+    Args:
+        job: The job.
+        name: A document to resolve instead of ``job.task`` -- one of
+            ``job.documents`` for a mixed job -- or an already-resolved spec.
+    """
+    from robosimstudio_bench.taskbuild.episodes import with_base_seed
+    from robosimstudio_bench.taskbuild.registry import get_task
+
+    target = name or job.task
+    task = get_task(target) if isinstance(target, str) else target
+    return with_base_seed(task, job.seed)
 
 
 def load_jobs(path: str | Path) -> list[JobSpec]:
