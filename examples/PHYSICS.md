@@ -11,7 +11,7 @@ A scene uses `rss.GENERIC` unless you pass
 | Kind | Made by | Engine | Solver |
 | --- | --- | --- | --- |
 | Robot | `rss.robot` | Newton | `mujoco` (MuJoCo Warp) |
-| Rigid body | `rss.box`, `sphere`, `capsule`, `cylinder`, `body` | Newton | `vbd` |
+| Rigid body | `rss.box`, `sphere`, `capsule`, `cylinder`, `body` | Newton | `vbd` (a hand pushes it but cannot pick it up: see [below](#letting-a-gripper-hold-a-rigid-body)) |
 | Cloth | `rss.sheet` | Newton | `vbd` |
 | Soft body | `rss.sponge` | SuperDex | `superdex` (FEM) |
 | Rope | `rss.rod` | Newton | `vbd` (a chain of capsules; `superdex` makes it a Cosserat rod, see [`10_rope/`](10_rope/README.md)) |
@@ -96,6 +96,40 @@ takes one of these names:
 
 `substeps=2` steps SuperDex or Genesis twice per control step. The shipped
 examples use that value.
+
+## Letting a gripper hold a rigid body
+
+With the defaults a hand pushes a box but cannot hold it: the box is on VBD and
+the fingers on MuJoCo, and the proxy coupler between them passes pushes, not a
+pinch. Closed on a 50 mm cube, a Panda lets it slide out or flings it.
+`rss.MUJOCO_500HZ` puts the arm and every free rigid body in one MuJoCo
+island, so the fingers stall on the faces and friction carries what they
+closed on:
+
+```python
+scene = rss.Scene(cell="bench_0728", physics=rss.MUJOCO_500HZ)
+scene.add(rss.robot("yam_bimanual"))
+scene.add(rss.box(name="cube", half=(0.025,) * 3, at=(0.0, -0.20, 0.025)))
+sim = scene.build(control_mode="joint_position")
+rss.view(sim)    # a hand closed on the cube lifts it
+```
+
+Nothing holds the cube to the hand but the fingers. In
+[`01_rigid/00_drag_things.py`](01_rigid/00_drag_things.py), dragged down onto the
+cube, closed and lifted 150 mm through the page, the cube rose 145 mm and moved
+0.1 mm against the hand over a 2 s hold; **Open** drops it.
+
+| Field | Value |
+| --- | --- |
+| `control_hz` | 50 |
+| `substeps` | 10 (500 Hz) |
+| `backends` | `"*"` on `mujoco` (`nconmax=512`, `njmax=512`, `enable_multiccd=True`) |
+| `collision` | `contact_ke=6e4`, `contact_kd=500`, `rigid_gap=2 mm` |
+
+It is the tool-sorting benchmark's arrangement, which tasks name
+`mujoco_500hz@v1`. It is for rigid bodies: a sheet or a capsule-chain rope has
+no MuJoCo solver and stays on `GENERIC`. A sponge keeps its own engine:
+`rss.MUJOCO_500HZ.with_backend("soft", rss.backend("superdex", substeps=2))`.
 
 ## Letting a gripper pinch cloth
 
