@@ -42,13 +42,27 @@ def tick(session, steps: int) -> None:
             done += 1
 
 
-def go(session, arm: str, target, *, steps: int = 600, tolerance: float = 0.004) -> float:
+def go(session, arm: str, target, *, steps: int = 600, tolerance: float = 0.004, speed: float | None = None) -> float:
     """Put the arm's cursor at ``target`` (world [m]) and step until the tool centre is there.
+
+    Args:
+        speed: Walk the cursor there at this speed [m/s], held as a drag until it
+            arrives, the way a mouse moves the gizmo. ``None`` puts it there in one
+            jump. The difference matters on a scene whose arm has no device IK
+            (a coupled rope): there the page commands each cursor update directly,
+            with no setpoint law to limit the rate, so a jump is a flick.
 
     Returns the distance left [m] -- under ``tolerance`` when the hand arrived.
     """
     panel = session.arms[arm]
     target = np.asarray(target, dtype=np.float64)
+    if speed:
+        start = np.array(panel.cursor_pos, dtype=np.float64)
+        stride = float(speed) / float(session.env.request.physics.control_hz)
+        legs = max(1, int(np.ceil(np.linalg.norm(target - start) / stride)))
+        for k in range(1, legs + 1):
+            panel.cursor_pos, panel.dragging = start + (target - start) * (k / legs), k < legs
+            tick(session, 1)
     panel.cursor_pos, panel.dragging = target, False
     for _ in range(steps):
         tick(session, 1)
@@ -86,6 +100,7 @@ def drag_to_grasp(
     lift: float = 0.10,
     close: float = 1.0,
     hold: float = 2.0,
+    speed: float | None = None,
 ) -> Grasp:
     """Down onto it, **Close**, up, and hold: the gesture the examples ask for.
 
@@ -98,6 +113,7 @@ def drag_to_grasp(
         lift: How far the hand rises after the close [m].
         close: Seconds of stepping with the grip asked for, before the lift.
         hold: Seconds held at the top, over which ``drift`` is measured.
+        speed: Drag the cursor at this speed [m/s] rather than jumping it (see :func:`go`).
     """
     hz = float(session.env.request.physics.control_hz)
 
@@ -110,13 +126,13 @@ def drag_to_grasp(
     before = centroid()
     target = before if at is None else np.asarray(at, dtype=np.float64)
     if hover:
-        go(session, arm, target + np.array([0.0, 0.0, hover]))
-    go(session, arm, target)
+        go(session, arm, target + np.array([0.0, 0.0, hover]), speed=speed)
+    go(session, arm, target, speed=speed)
     session.arms[arm].grip_request = 1.0
     tick(session, round(close * hz))
     offset = centroid() - hand()
     top = hand() + np.array([0.0, 0.0, lift])
-    go(session, arm, top)
+    go(session, arm, top, speed=speed)
     drift = 0.0
     for _ in range(round(hold * hz)):
         tick(session, 1)
