@@ -79,6 +79,7 @@ from robosimstudio.core.render.finish import DEFAULT as DEFAULT_FINISH
 from robosimstudio.core.render.uv import box_projected_uvs
 from robosimstudio.core.render.visual import TUBE_SIDES, tube_points, tube_triangles
 from robosimstudio.core.shell import shell_faces
+from robosimstudio.sim.draw import PAGE_TITLE, title_page
 
 from .finish_gltf import clear_cache as clear_glb_cache
 from .finish_gltf import glb_for, group_by_material, unweld, wants_pbr
@@ -1258,4 +1259,6 @@ class ViewerStudio(newton.viewer.ViewerViser):
 
 def viewer_studio(port: int, share: bool) -> ViewerStudio:
     """The studio's viewer: viser, with the deformables drawn as garments, titled as the page it is."""
-    return ViewerStudio(port=port, share=share, label="RoboSimStudio")
+    viewer = ViewerStudio(port=port, share=share, label=PAGE_TITLE)
+    title_page(viewer._server)
+    return viewer

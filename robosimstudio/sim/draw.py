@@ -17,9 +17,28 @@ brought.
 
 from __future__ import annotations
 
+import json
 from typing import Any
 
-__all__ = ["Viewer", "draw", "view", "viewer"]
+__all__ = ["PAGE_TITLE", "Viewer", "draw", "title_page", "view", "viewer"]
+
+PAGE_TITLE = "RoboSimStudio"
+"""What the browser tab says, on every page this package serves."""
+
+
+def title_page(server: Any, title: str = PAGE_TITLE) -> None:
+    """Name the browser tab ``title`` instead of viser's own ``Viser``.
+
+    Viser's client ships ``<title>Viser</title>`` in a static ``index.html`` and
+    never sets ``document.title``, so the name is set from the server instead.
+    The script is queued as a persistent message, the way viser sends Plotly, so a
+    browser that connects later runs it too.
+    """
+    from viser import _messages
+
+    server._websock_server.queue_message(
+        _messages.RunJavascriptMessage(source=f"document.title = {json.dumps(title)};")
+    )
 
 
 class Viewer:
@@ -61,7 +80,8 @@ class Viewer:
             raise ImportError("a viewer needs viser, which this install does not have: pip install viser") from exc
 
         self.sim = sim
-        self._viewer = ViewerViser(port=port, label=label or getattr(sim, "name", "") or "robosimstudio", share=share)
+        self._viewer = ViewerViser(port=port, label=label or getattr(sim, "name", "") or PAGE_TITLE, share=share)
+        title_page(self._viewer._server)
         self._viewer.set_model(sim.model)
 
     @property
