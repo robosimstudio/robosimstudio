@@ -44,10 +44,13 @@ from collections.abc import Callable
 from dataclasses import dataclass, field
 from typing import Any
 
+from robosimstudio_bench.taskdoc.parse import COMPARISONS
+from robosimstudio_bench.taskdoc.typecheck import _GATE_WORDS, _MASK_WORDS
+
 from .combinators import Node
 from .context import EvalResult, WorldState, finite_reward
 
-__all__ = ["Fraction", "Gated", "Progress", "RewardClause", "Scored", "build_reward", "reading_key"]
+__all__ = ["Fraction", "Gated", "Progress", "RewardClause", "Scored", "build_reward", "measured_atom", "reading_key"]
 
 
 def _clip(value: float) -> float:
@@ -147,7 +150,12 @@ RewardClause = Fraction | Progress | Gated
 """The four shapes, closed. ``Progress`` covers two of them via ``invert``."""
 
 
-def build_reward(section: dict[str, Any], make_node: Callable[[Any], Node]) -> RewardClause:
+def build_reward(
+    section: dict[str, Any],
+    make_node: Callable[[Any], Node | None],
+    *,
+    make_mask: Callable[[Any], Node | None] | None = None,
+) -> RewardClause:
     """Build the clause a document's ``:reward`` section names.
 
     Reads the parsed section, which is the ``_plain`` shape -- ``(progress
@@ -158,7 +166,13 @@ def build_reward(section: dict[str, Any], make_node: Callable[[Any], Node]) -> R
         section: The parsed ``:reward``. Empty means :class:`Fraction`, because a
             document that says nothing about reward gets BDDL's own.
         make_node: Builds the node for a measure form -- the same maker the goal
-            tree uses, so a measure means the same thing in both places.
+            tree uses, so a measure means the same thing in both places. It
+            answers ``None`` for a form the episode masked away (every clause
+            of it about a parked object), and a measure masked away is refused.
+        make_mask: Builds the node for a ``(:gated-by CLAUSE)``; ``make_node``
+            when not given. Separate so the mask's per-node verdicts can be
+            labelled apart from the measure's. A mask masked away to ``None``
+            drops the gate, as a goal clause about a parked object is dropped.
 
     Raises:
         ValueError: On any shape outside the four. Refused rather than
@@ -174,7 +188,7 @@ def build_reward(section: dict[str, Any], make_node: Callable[[Any], Node]) -> R
 
     for word, invert in (("progress", False), ("shrinking", True)):
         if word in section:
-            return _progress(section[word], make_node, invert=invert, word=word)
+            return _progress(section[word], make_node, make_mask or make_node, invert=invert, word=word)
 
     raise ValueError(
         f"reward names {sorted(section)}, and the clause set is closed: "
@@ -183,11 +197,14 @@ def build_reward(section: dict[str, Any], make_node: Callable[[Any], Node]) -> R
     )
 
 
-_GATE_WORDS = ("gate", "gate-at")
-_MASK_WORDS = ("gated-by", "gated_by")
-
-
-def _progress(body: Any, make_node: Callable[[Any], Node], *, invert: bool, word: str) -> RewardClause:
+def _progress(
+    body: Any,
+    make_node: Callable[[Any], Node | None],
+    make_mask: Callable[[Any], Node | None],
+    *,
+    invert: bool,
+    word: str,
+) -> RewardClause:
     """One progress clause: a measure form, a gate, and optionally a mask.
 
     The mask reads as a modifier of the progress rather than as a wrapper around
@@ -228,9 +245,36 @@ def _progress(body: Any, make_node: Callable[[Any], Node], *, invert: bool, word
         # the first step of the run.
         raise ValueError(f"({word} ...) has no (:gate V), and progress toward an unstated gate is not a quantity")
 
-    head = measure[0] if isinstance(measure, list) and measure else measure
-    clause = Progress(of=make_node(measure), key=reading_key(str(head)), gate=gate, invert=invert)
-    return Gated(of=clause, by=make_node(mask)) if mask is not None else clause
+    atom = measured_atom(measure)
+    head = atom[0] if isinstance(atom, list) and atom else atom
+    of = make_node(measure)
+    if of is None:
+        raise ValueError(
+            f"({word} ...) measures {measure!r}, which is about objects outside this episode's active set, "
+            "so there is nothing to be making progress on"
+        )
+    clause = Progress(of=of, key=reading_key(str(head)), gate=gate, invert=invert)
+    by = make_mask(mask) if mask is not None else None
+    return Gated(of=clause, by=by) if by is not None else clause
+
+
+def measured_atom(measure: Any) -> Any:
+    """The atom call a progress measure reads, under any comparison around it.
+
+    A binding with an op rewrites ``(In hammer bin)`` to ``(>= (containment
+    hammer bin) 1.0)``; the parsed leaf is still the ``containment`` atom, so the
+    quantity is its reading, and taking the head verbatim keyed the reward on
+    ``>=``, which no atom reports.
+    """
+    if (
+        isinstance(measure, list)
+        and len(measure) == 3
+        and str(measure[0]) in COMPARISONS
+        and isinstance(measure[1], list)
+        and measure[1]
+    ):
+        return measure[1]
+    return measure
 
 
 def reading_key(head: str) -> str:

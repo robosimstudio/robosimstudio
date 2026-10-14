@@ -121,7 +121,9 @@ def reaches_out(here: tuple[str, ...], level: int, module: str | None) -> bool:
     (``("cable_route", "assets")``), ``level`` the import's dot count and
     ``module`` what follows the dots. ``_shared`` is the one escape hatch.
     """
-    landing = here[: len(here) - (level - 1)]
+    # Climbing past the root is outside whatever the depth: a negative bound
+    # would wrap and keep a prefix, reading an over-deep import as inside.
+    landing = here[: max(0, len(here) - (level - 1))]
     if landing:
         return False
     return (module or "").partition(".")[0] != SHARED

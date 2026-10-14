@@ -329,7 +329,8 @@ def mint_gate(
         reason as a note so the debt is visible in the same output.
     """
     excused = UNCALIBRATED if exempt is None else exempt
-    names = atoms or tuple(list_atoms())
+    catalog = tuple(list_atoms())
+    names = atoms or catalog
     reports: list[MintReport] = []
     for name in names:
         spec = get_atom(name)
@@ -337,7 +338,7 @@ def mint_gate(
         findings = mint_problems(
             spec,
             instances=instances,
-            among=tuple(list_atoms()),
+            among=catalog,
             require_calibration=excuse is None,
         )
         if excuse is not None:

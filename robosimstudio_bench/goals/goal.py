@@ -87,6 +87,12 @@ def build_goal(condition: Condition, make_leaf: LeafMaker, *, path: str = "goal"
             raise ValueError(f"{path}: (not ...) negates exactly one clause, got {len(condition.children)}")
         return Not(of=build_goal(condition.children[0], make_leaf, path=f"{path}.0"), label=path)
 
+    if head in ("once", "hold-for", "after") and condition.op:
+        raise ValueError(
+            f"{path}: ({head} ...) is a verdict and takes no comparison around it; "
+            f"put the comparison inside, as ({head} ... ({condition.op} MEASURE {condition.value}))"
+        )
+
     if head == "once":
         return Once(of=build_goal(condition.children[0], make_leaf, path=f"{path}.0"), label=path)
 
@@ -376,9 +382,8 @@ def reading(metrics: dict, leaf: Leaf) -> str:
     * a handler writes :func:`about_key` -- the atom and every operand;
     * a node prefixes its own readings with its label, so a clause at ``goal.2``
       reports ``goal.2.plug_speed``;
-    * a clause over a *published* state reports under the state's own name,
-      underscored by the binder while the document -- and so ``leaf.about`` --
-      keeps the hyphen.
+    * a clause over a *published* state reports its value under the state's
+      own name, underscored, and its verdict under :func:`about_key`.
 
     Tried in that order, ending at the label's own boolean, which every node
     writes and which is therefore the one thing always there. Chasing any single

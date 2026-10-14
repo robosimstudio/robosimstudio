@@ -49,7 +49,7 @@ import os
 import queue
 import time
 from collections.abc import Sequence
-from dataclasses import dataclass, replace
+from dataclasses import dataclass, field, replace
 from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any
@@ -77,9 +77,27 @@ class PoolResult(RunSummary):
     Attributes:
         pool_wall_s: Wall time of the whole pool, builds and stagger included --
             what the run actually cost, whatever it was spent on.
+        wave_wall_s: For a batched job, every wave's wall time, from every
+            worker that ran one. Empty for a serial job.
     """
 
     pool_wall_s: float = 0.0
+    wave_wall_s: list[float] = field(default_factory=list)
+
+    @property
+    def steps_per_s_stepping(self) -> float:
+        """As :attr:`RunSummary.steps_per_s_stepping`, over waves for a batched job.
+
+        A wave's rows share its seconds -- each row's ``wall_s`` runs from the
+        wave's start to that world finishing -- so summing them counts one wave
+        up to ``num_worlds`` times over. A batched job divides by the waves' own
+        wall time instead, as :class:`~robosimstudio_bench.run.fleet.FleetSummary`
+        does, times the workers that ran them side by side.
+        """
+        if not self.wave_wall_s:
+            return super().steps_per_s_stepping
+        wall = sum(self.wave_wall_s)
+        return self.steps * self.workers / wall if wall > 0 else 0.0
 
 
 # --------------------------------------------------------------------- parent
@@ -123,6 +141,16 @@ def run_pooled(
     job_list = [jobs] if isinstance(jobs, JobSpec) else list(jobs)
     if not job_list:
         return {}
+    # The serial worker builds ``job.task`` and nothing else, so a job naming
+    # documents there would run ``job.task`` once per document under its name
+    # -- refused here as ``bench_run.check_document_waves`` refuses it, so the
+    # library and the CLI agree.
+    serial = [job.name for job in job_list if getattr(job, "documents", ()) and int(job.num_worlds) <= 1]
+    if serial:
+        raise ValueError(
+            "documents share a WAVE, so they need num_worlds above 1; the serial worker builds one "
+            f"model from job.task and would ignore the rest. Job(s) asking for both: {', '.join(serial)}"
+        )
     workers = max(1, int(workers))
     root = Path(root)
 
@@ -131,14 +159,6 @@ def run_pooled(
         return {job.name: PoolResult(job=job, root=root / job.name, workers=workers) for job in job_list}
     workers = min(workers, len(units))
     worker_devices = [devices[i % len(devices)] if devices else "" for i in range(workers)]
-
-    # Set on the parent's environ so the spawned children inherit it at
-    # interpreter start, which is the only point early enough to matter: a
-    # thread pool sized at import time cannot be resized afterwards.
-    _limit_threads(
-        threads_per_worker or max(1, (os.cpu_count() or workers) // workers),
-        override=bool(threads_per_worker),
-    )
 
     if verbose:
         tasks = ", ".join(sorted({job.task for job in job_list}))
@@ -160,24 +180,38 @@ def run_pooled(
 
     started = datetime.now(UTC).isoformat()
     wall0 = time.perf_counter()
-    procs = [
-        ctx.Process(
-            target=_worker,
-            args=(index, job_list, str(root), work, results),
-            kwargs={
-                "device": worker_devices[index],
-                "stagger": stagger * index,
-                "preload": preload,
-            },
-            name=f"pool-{index}",
-        )
-        for index in range(workers)
-    ]
-    for proc in procs:
-        proc.start()
+    # Set on the parent's environ so the spawned children inherit it at
+    # interpreter start, which is the only point early enough to matter: a
+    # thread pool sized at import time cannot be resized afterwards. Put back
+    # once they have started, so a later pool sizes itself afresh and nothing
+    # else this process starts inherits a cap meant for these workers.
+    saved_threads = _limit_threads(
+        threads_per_worker or max(1, (os.cpu_count() or workers) // workers),
+        override=bool(threads_per_worker),
+    )
+    try:
+        procs = [
+            ctx.Process(
+                target=_worker,
+                args=(index, job_list, str(root), work, results),
+                kwargs={
+                    "device": worker_devices[index],
+                    "stagger": stagger * index,
+                    "preload": preload,
+                },
+                name=f"pool-{index}",
+            )
+            for index in range(workers)
+        ]
+        for proc in procs:
+            proc.start()
+    finally:
+        # A spawned child copies the environment at ``start``, so it is safe
+        # to restore now.
+        _restore_env(saved_threads)
 
     episode_total = sum(_job_work_total(job) for job in job_list)
-    rows, builds, spans = _collect(procs, results, total=episode_total, wall0=wall0, verbose=verbose)
+    rows, builds, spans, waves = _collect(procs, results, total=episode_total, wall0=wall0, verbose=verbose)
     wall = time.perf_counter() - wall0
     for proc in procs:
         proc.join(timeout=30.0)
@@ -196,6 +230,7 @@ def run_pooled(
             pool_wall_s=wall,
             workers=workers,
             builds=[build for job_index, build in builds if job_index == index],
+            wave_wall_s=list(waves.get(index, [])),
         )
         _write_pooled(result, started=started)
         out[job.name] = result
@@ -210,13 +245,15 @@ def _collect(procs, results, *, total: int, wall0: float, verbose: bool):
     one hangs a run that has already produced most of its data.
 
     Returns:
-        ``(rows, builds, spans)`` -- rows and builds each paired with the job
-        index they belong to, and ``spans`` mapping a job index to the
-        ``(start, finish)`` of its episodes, relative to the pool's start.
+        ``(rows, builds, spans, waves)`` -- rows and builds each paired with the
+        job index they belong to, ``spans`` mapping a job index to the
+        ``(start, finish)`` of its episodes, relative to the pool's start, and
+        ``waves`` mapping a batched job's index to its waves' wall times.
     """
     rows: list[tuple[int, dict[str, Any]]] = []
     builds: list[tuple[int, dict[str, Any]]] = []
     spans: dict[int, tuple[float, float]] = {}
+    waves: dict[int, list[float]] = {}
     live = len(procs)
     while live > 0:
         try:
@@ -248,11 +285,14 @@ def _collect(procs, results, *, total: int, wall0: float, verbose: bool):
                     f"{build['device']}, {'cuda graph captured' if build['captured'] else 'EAGER (no capture)'}, "
                     f"{build['control_hz']:.0f} Hz x {build['substeps']} substeps"
                 )
+        elif kind == "waves":
+            _, _worker_index, job_index, walls = message
+            waves.setdefault(job_index, []).extend(float(wall) for wall in walls)
         elif kind == "done":
             live -= 1
         elif kind == "error":
             print(f"[pool] worker {message[1]} stopped: {message[2]}")
-    return rows, builds, spans
+    return rows, builds, spans, waves
 
 
 def _print_row(worker: int, row: dict[str, Any], *, done: int, total: int, wall0: float) -> None:
@@ -327,16 +367,22 @@ def _link_episodes(result: PoolResult) -> None:
     shards = result.root / "shards"
     if not shards.is_dir():
         return
+    # Every episode is tried, so one failed link does not drop the rest from
+    # the run directory; the failures are reported once, at the end.
+    failed: list[str] = []
+    total = 0
     for shard in sorted(p for p in shards.iterdir() if p.is_dir()):
         for episode in sorted(p for p in shard.iterdir() if (p / "meta.json").exists()):
             link = result.root / episode.name
             if os.path.lexists(link):
                 continue
+            total += 1
             try:
                 link.symlink_to(Path("shards") / shard.name / episode.name, target_is_directory=True)
             except OSError as exc:
-                print(f"[pool] could not link {episode}: {exc}")
-                return
+                failed.append(f"{episode}: {exc}")
+    if failed:
+        print(f"[pool] could not link {len(failed)} of {total} episodes; first: {failed[0]}")
 
 
 # --------------------------------------------------------------------- worker
@@ -470,7 +516,19 @@ def _worker(
             if device:
                 job = replace(job, device=device)
             if job.num_worlds > 1:
-                episodes += fleet_worker.run(job, assigned, Path(root), index, results, job_index)
+                try:
+                    episodes += fleet_worker.run(job, assigned, Path(root), index, results, job_index)
+                except Exception as exc:
+                    # As the serial path below: a wave that raised is rebuilt
+                    # rather than trusted, and every episode of the unit that
+                    # scored no row gets an error row instead of reading as a gap.
+                    errors = fleet_worker.error_rows(job, assigned, exc, worker=index)
+                    shard = EpisodeStore(_shard_root(Path(root), job, index))
+                    for error in errors:
+                        shard.append_result(error)
+                        results.put(("row", index, job_index, error))
+                    episodes += len(fleet_worker.sent) + len(errors)
+                    fleet_worker.close()
                 continue
             ((_document, episode_id),) = assigned
             if key != _env_key(job):
@@ -546,23 +604,40 @@ class _FleetWorker:
         self.task: Any = None
         self.job: Any = None
         self._docs: dict[str, Any] = {}
+        # The rows the last ``run`` put on the results queue, including when it
+        # raised part way: what ``error_rows`` leaves out.
+        self.sent: list[dict[str, Any]] = []
 
     def run(
         self, job: JobSpec, work: tuple[tuple[str, int], ...], root: Path, index: int, results, job_index: int
     ) -> int:
-        from .fleet import RunnerFleet
+        from .fleet import RunnerFleet, plan_mixed_waves
 
+        self.sent = []
         key = _env_key(job)
         if key != self.key:
             build0 = time.perf_counter()
             self.close()
             self.runner = RunnerFleet(job, verbose=False, run_dir=_shard_root(root, job, index))
-            self.fleet, self.policy = self.runner.open(job)
             self.task = job_task(job)
             self.job = job
             # Documents resolve with the job's seed applied, so a cache filled
             # under the previous job's key does not carry over.
             self._docs = {}
+            # Built for this unit's first wave, as ``RunnerFleet.run`` builds:
+            # a scene that places per world at build time would otherwise be
+            # built for episode 0, then thrown away by ``run_work``'s
+            # ``built_for`` and built again before the first wave ran.
+            planned = plan_mixed_waves(
+                [(self._document(name), episode_id) for name, episode_id in work], self.runner.num_worlds
+            )
+            first = planned[0] if planned else None
+            self.fleet, self.policy = self.runner.open(
+                job,
+                episodes=[episode for _document, episode in first] if first else None,
+                task=first[0][0] if first else None,
+            )
+            self.runner._fleet, self.runner._policy = self.fleet, self.policy
             self.key = key
             # The same keys a serial worker reports, so the parent's progress
             # line and the run's ``builds`` provenance read one way whichever
@@ -589,10 +664,62 @@ class _FleetWorker:
         # names a different document per world and the same handful of names
         # over and over across a job's units.
         pairs = [(self._document(name), episode_id) for name, episode_id in work]
-        rows = self.runner.run_work(self.fleet, self.policy, pairs)
-        for row in rows:
-            results.put(("row", index, job_index, {**row, "worker": index, "device": job.device}))
-        return len(rows)
+        first = len(self.runner.rows)
+        waves0 = len(self.runner.summary.waves)
+        try:
+            self.runner.run_work(self.fleet, self.policy, pairs)
+        finally:
+            # ``run_work`` may have rebuilt for a wave's benches, closing what
+            # it was handed; what this worker holds and later closes is what
+            # the runner ended with.
+            self.fleet = getattr(self.runner, "_fleet", None) or self.fleet
+            self.policy = getattr(self.runner, "_policy", None) or self.policy
+            # Whether or not a wave raised: a row is in the shard's store the
+            # moment its world is scored, so one an earlier wave (or an earlier
+            # world of the failing one) produced is a result and is sent.
+            self.sent = self.runner.rows[first:]
+            for row in self.sent:
+                results.put(("row", index, job_index, {**row, "worker": index, "device": job.device}))
+            # The waves' own wall time, for ``PoolResult.steps_per_s_stepping``:
+            # the rows' ``wall_s`` overlap within a wave and cannot be summed.
+            walls = [float(wave.get("wall_s", 0.0)) for wave in self.runner.summary.waves[waves0:]]
+            if walls:
+                results.put(("waves", index, job_index, walls))
+        return len(self.sent)
+
+    def error_rows(
+        self, job: JobSpec, work: tuple[tuple[str, int], ...], exc: Exception, *, worker: int
+    ) -> list[dict[str, Any]]:
+        """An error row for each ``(document, id)`` of ``work`` that :attr:`sent` has no row for.
+
+        Matched on the row's ``task`` and ``episode_id``, as
+        :attr:`RunSummary.unrun` matches them.
+        """
+        ran = {(str(row.get("task", "")), int(row.get("episode_id", -1))) for row in self.sent}
+        rows: list[dict[str, Any]] = []
+        for name, episode_id in work:
+            try:
+                label = getattr(job_task(job, name), "full_name", "") or name or job.task
+            except Exception:
+                label = name or job.task
+            if (label, int(episode_id)) in ran:
+                continue
+            rows.append(
+                {
+                    "task": label,
+                    "episode_id": int(episode_id),
+                    "success": False,
+                    "reward": 0.0,
+                    "episode_length": 0,
+                    "close_kind": "error",
+                    "error": f"{type(exc).__name__}: {exc}",
+                    "solution": job.solution,
+                    "renderer": job.renderer,
+                    "worker": worker,
+                    "device": job.device,
+                }
+            )
+        return rows
 
     def _document(self, name: str):
         """The document a unit names, or the job's own task when it names none."""
@@ -605,10 +732,10 @@ class _FleetWorker:
         return cached
 
     def close(self) -> None:
-        if self.policy is not None:
-            self.policy.close()
-        if self.fleet is not None:
-            self.fleet.close()
+        # Through ``_teardown``, which reports a close that raises rather than
+        # raising it: this runs after a failed wave and in the worker's
+        # ``finally``, and either way the worker must still forget the fleet.
+        _teardown(self.fleet, self.policy, None)
         self.key = self.runner = self.fleet = self.policy = None
 
 
@@ -682,15 +809,31 @@ def _teardown(env, policy, recorder) -> None:
                 print(f"[pool] close failed on {type(closeable).__name__}: {exc}")
 
 
-def _limit_threads(threads: int, *, override: bool) -> None:
+def _limit_threads(threads: int, *, override: bool) -> dict[str, str | None]:
     """Cap the BLAS/OpenMP pools the children will inherit.
 
     An asked-for count wins over the environment; the count this derives from the
     core count does not, so a machine whose profile already sets these keeps its
     own answer.
+
+    Returns:
+        Each variable's value before this, ``None`` where it was unset -- what
+        :func:`_restore_env` puts back.
     """
-    for name in ("OMP_NUM_THREADS", "MKL_NUM_THREADS", "OPENBLAS_NUM_THREADS", "NUMEXPR_NUM_THREADS"):
+    names = ("OMP_NUM_THREADS", "MKL_NUM_THREADS", "OPENBLAS_NUM_THREADS", "NUMEXPR_NUM_THREADS")
+    saved = {name: os.environ.get(name) for name in names}
+    for name in names:
         if override:
             os.environ[name] = str(max(1, threads))
         else:
             os.environ.setdefault(name, str(max(1, threads)))
+    return saved
+
+
+def _restore_env(saved: dict[str, str | None]) -> None:
+    """Put environment variables back as :func:`_limit_threads` found them."""
+    for name, value in saved.items():
+        if value is None:
+            os.environ.pop(name, None)
+        else:
+            os.environ[name] = value

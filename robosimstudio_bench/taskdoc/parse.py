@@ -178,8 +178,17 @@ def parse_condition(form: Sexp) -> Condition:
         # comparison written around it carries the operator and the value, and
         # that is exactly the shape `build_goal` destructures -- it reads `op`
         # and `value` off the modal's own condition.
-        if str(measure[0]).lower() in MODALS:
+        modal = str(measure[0]).lower()
+        if modal in ("peak", "integral"):
             return replace(parse_condition(measure), op=head, value=float(form[2]))
+        if modal in MODALS:
+            # `once`, `hold-for` and `after` are verdicts, and nothing reads a
+            # threshold written around one -- the number would be dropped and
+            # the clause would pass on any nonzero reading.
+            raise ValueError(
+                f"({head} ({modal} ...) ...) compares a verdict; put the comparison inside it, "
+                f"as ({modal} ... ({head} MEASURE {form[2]}))"
+            )
         return Condition(
             head=str(measure[0]),
             args=tuple(parse_ref(a) for a in measure[1:]),
@@ -392,7 +401,9 @@ def parse_suite(forms: list[Sexp], *, where: str = "") -> SuiteDoc:
     head = form[1] if len(form) > 1 else None
     if str(form[0]).lower() != "define" or not isinstance(head, list) or str(head[0]).lower() != "suite":
         raise ValueError(f"{where or 'suite'}: expected (define (suite NAME) ...), got {str(form[:2])[:80]}")
-    name = str(head[1]).lower()
+    # As written, the same as a problem's name: a variant's ``(:suite NAME)`` and
+    # the directory the suite sits in are compared to it exactly.
+    name = str(head[1])
     sections = _sections(form[2:])
     allowed = {
         ":language",
@@ -421,6 +432,47 @@ def parse_suite(forms: list[Sexp], *, where: str = "") -> SuiteDoc:
     )
 
 
+def _clause_block(value: Any) -> list[Any] | None:
+    """A staging value as its ``(:key ...)`` sub-clauses, or ``None`` if it is not only those.
+
+    ``_plain`` unwraps one sub-clause, so ``(:episodes (:count 5))`` is the one
+    clause ``[":count", 5]`` and two are a list of two. A value with a head of
+    its own -- ``(:embodiment yam_bimanual (:work-arm left))`` -- is not a block:
+    its clauses belong to that head, and a variant naming another head replaces
+    them with it.
+    """
+    if not isinstance(value, list) or not value:
+        return None
+    clauses = value if isinstance(value[0], list) else [value]
+    if all(isinstance(c, list) and c and str(c[0]).startswith(":") for c in clauses):
+        return clauses
+    return None
+
+
+def _sub_key(clause: list[Any]) -> str:
+    """A sub-clause's key, spelled once: ``:model-key-fields`` and ``:model_key_fields`` are one key."""
+    return str(clause[0]).lstrip(":").replace("-", "_")
+
+
+def _merge_staging(suite: dict[str, Any], doc: dict[str, Any]) -> dict[str, Any]:
+    """The variant's staging over its suite's, a clause block merged sub-key by sub-key.
+
+    A variant stating ``(:episodes (:count 5))`` over a suite's ``(:episodes
+    (:count 50) (:sampler layout) (:model-key-fields layout))`` changes the count
+    and keeps the sampler: replacing the whole block would drop the sampler and
+    the model-key-fields without a word, and the second is what makes the
+    environment rebuild the model between episodes.
+    """
+    out = {**suite, **doc}
+    for key in suite.keys() & doc.keys():
+        base, mine = _clause_block(suite[key]), _clause_block(doc[key])
+        if base is None or mine is None:
+            continue
+        stated = {_sub_key(c) for c in mine}
+        out[key] = [*(c for c in base if _sub_key(c) not in stated), *mine]
+    return out
+
+
 def merge_suite(doc: TaskDoc, suite: SuiteDoc | None) -> TaskDoc:
     """A variant over its suite: the variant's clause wins key by key, the rest inherits.
 
@@ -442,7 +494,7 @@ def merge_suite(doc: TaskDoc, suite: SuiteDoc | None) -> TaskDoc:
         language=doc.language or suite.language,
         objects=(*fixtures, *doc.objects),
         regions=(*(r for r in suite.regions if r.name not in {x.name for x in doc.regions}), *doc.regions),
-        staging={**suite.staging, **doc.staging},
+        staging=_merge_staging(suite.staging, doc.staging),
         artifacts={**suite.artifacts, **doc.artifacts},
         provenance={**suite.provenance, **doc.provenance},
         hosts=(*suite.hosts, *doc.hosts),

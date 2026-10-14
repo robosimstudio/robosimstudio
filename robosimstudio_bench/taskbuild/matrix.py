@@ -31,6 +31,7 @@ __all__ = [
     "admits",
     "candidate_pairings",
     "candidate_triples",
+    "declared_key",
     "list_pairs",
     "pairing_key",
 ]
@@ -52,6 +53,34 @@ def pairing_key(task, binding: Binding) -> tuple[str, str, str]:
     return (scene, embodiment, own[0] if len(own) == 1 else "")
 
 
+def declared_key(task, scene: str = "", embodiment: str = "", gripper: str = "") -> tuple[str, str, str] | None:
+    """The declared binding's own ``(scene, embodiment, gripper)`` for a request, or ``None``.
+
+    The raw :meth:`Binding.key` of the binding whose :func:`pairing_key` equals
+    the request's, so naming the hand the robot already wears finds the binding
+    that left it unstated -- the one :func:`admits` calls the native pairing.
+    Callers swap the request for this key before :meth:`TaskSpec.binding_for`,
+    which compares raw keys; otherwise the declared binding's graphs and mount
+    are lost to a bare one synthesised for the other spelling, or the run paths
+    refuse what :func:`admits` admitted. Empty arguments mean the task's own, as
+    they do for ``binding_for``.
+    """
+    declared = task.bindings or (task.native_binding,)
+    want = (scene or task.scene, embodiment or task.embodiment, gripper or task.gripper)
+    for binding in declared:
+        if binding.key(task) == want:
+            return want
+    try:
+        asked = pairing_key(task, Binding(scene=want[0], embodiment=want[1], gripper=want[2]))
+    except LookupError:
+        # A robot the registry does not know; ``binding_for`` names it better.
+        return None
+    for binding in declared:
+        if pairing_key(task, binding) == asked:
+            return binding.key(task)
+    return None
+
+
 def list_pairs() -> list[tuple[str, str, str, str, bool, tuple[str, ...]]]:
     """Every declared ``(task, scene, embodiment, gripper, is_native, graphs)``.
 
@@ -64,10 +93,10 @@ def list_pairs() -> list[tuple[str, str, str, str, bool, tuple[str, ...]]]:
     out: list[tuple[str, str, str, str, bool, tuple[str, ...]]] = []
     for _, suite in SUITES:
         for task in suite.variants:
-            native = task.native_binding.key(task)
+            native = pairing_key(task, task.native_binding)
             for binding in task.bindings or (task.native_binding,):
                 scene, embodiment, gripper = binding.key(task)
-                key = (scene, embodiment, gripper)
+                key = pairing_key(task, binding)
                 out.append((task.full_name, scene, embodiment, gripper, key == native, binding.graphs))
     return sorted(out)
 
@@ -101,6 +130,13 @@ def admits(task, scene: str, embodiment: str, gripper: str = "") -> tuple[bool, 
     """
     if (scene, embodiment, gripper) in task.binding_keys:
         return True, ""
+    if embodiment:
+        # The same pairing spelled the other way -- ``""`` against the hand the
+        # robot already wears. Compared through :func:`pairing_key` so naming the
+        # robot's own hand is not refused by a rule a declared pairing outranks.
+        asked = pairing_key(task, Binding(scene=scene, embodiment=embodiment, gripper=gripper))
+        if asked in {pairing_key(task, b) for b in task.bindings or (task.native_binding,)}:
+            return True, ""
     need = task.requires
     if need.monolithic:
         # Both axes: the robot is inside the arena this task imports, so another
@@ -172,12 +208,12 @@ def candidate_pairings() -> list[tuple[str, str, str, str, bool, str]]:
     grippers = ["", *attachable_grippers()]
     for _, suite in SUITES:
         for task in suite.variants:
-            native = task.native_binding.key(task)
+            native = pairing_key(task, task.native_binding)
             for scene in scenes:
                 for embodiment in embodiments:
                     for gripper in grippers:
                         ok, why = admits(task, scene, embodiment, gripper)
-                        key = (scene, embodiment, gripper)
+                        key = pairing_key(task, Binding(scene=scene, embodiment=embodiment, gripper=gripper))
                         out.append((task.full_name, scene, embodiment, gripper, key == native, "" if ok else why))
     return sorted(out)
 

@@ -213,8 +213,10 @@ def _check_condition(
     # because splitting it above made the whole construct resolvable: `insertion`
     # reports depth, lat and mate_gap, and `insertion:lateral` would otherwise
     # bind clean and read a metric nobody emits.
+    # An atom that declares no returns refuses every selector, as bind does; a
+    # catalog object with no ``returns`` attribute at all is not checked.
     returns = tuple(getattr(atom, "returns", ()) or ())
-    if selector and returns and selector not in returns:
+    if selector and hasattr(atom, "returns") and selector not in returns:
         out.append(
             CheckProblem(
                 UNRESOLVED,
@@ -304,7 +306,9 @@ goal tree it is scored beside -- so there is nothing here to resolve."""
 
 _MASK_WORDS = ("gated-by", "gated_by")
 _GATE_WORDS = ("gate", "gate-at")
-"""``goals/reward.py``'s spellings of the gate, checked here for being > 0."""
+"""The spellings of a progress clause's gate and mask, written once here and
+imported by ``goals/reward.py`` (which builds them) and ``goals/gauntlet.py``
+(which reads past them to the measure), so a new spelling reaches all three."""
 
 
 def _check_reward(doc: TaskDoc, catalog: Catalog) -> list[CheckProblem]:
@@ -345,7 +349,7 @@ def _check_reward(doc: TaskDoc, catalog: Catalog) -> list[CheckProblem]:
                 )
             elif keyword in _MASK_WORDS and len(part) == 2 and isinstance(part[1], list):
                 out += _visit_reward_form(part[1], doc, catalog, f"reward.{word}.gated-by", "check", parse_condition)
-            elif not keyword.startswith(("gate", "gated")) and not seen_measure and isinstance(part, list):
+            elif keyword not in _GATE_WORDS + _MASK_WORDS and not seen_measure and isinstance(part, list):
                 seen_measure = True
                 out += _visit_reward_form(part, doc, catalog, f"reward.{word}", "observe", parse_condition)
     return out

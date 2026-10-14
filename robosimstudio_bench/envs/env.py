@@ -56,6 +56,7 @@ from robosimstudio.sim import Sim
 from robosimstudio.specs import Episode, TaskSpec, replace
 from robosimstudio_bench.goals.context import EvalResult, diverged_result, evaluator_for, finite_reward
 from robosimstudio_bench.taskbuild.episodes import make_episode
+from robosimstudio_bench.taskbuild.matrix import declared_key
 from robosimstudio_bench.taskbuild.registry import get_task
 
 if TYPE_CHECKING:
@@ -143,6 +144,13 @@ class Env(Sim):
     ) -> None:
         self.task: TaskSpec = get_task(task) if isinstance(task, str) else task
         if scene or embodiment or gripper:
+            # The declared spelling of the pairing, so naming the robot's own
+            # hand finds the binding that left it unstated, as admits() does.
+            scene, embodiment, gripper = declared_key(self.task, scene, embodiment, gripper) or (
+                scene,
+                embodiment,
+                gripper,
+            )
             # Validate before rewriting: binding_for raises with the admissible
             # list, which is the message a caller who guessed a pairing needs.
             self.task.binding_for(scene, embodiment, gripper)

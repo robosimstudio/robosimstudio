@@ -67,11 +67,10 @@ class _ArraySlice:
     def numpy(self) -> np.ndarray:
         # Serialized: this runs on a script thread, one per world, and a device
         # read moves the device's process-global current stream. See
-        # :mod:`robosimstudio.core.streams`.
+        # :mod:`robosimstudio.core.streams`. Copies this world's slice only,
+        # not the whole fleet's array.
         with reading():
-            values = self._array.numpy()
-        start = self._world * self._per_world
-        return values[start : start + self._per_world]
+            return self.warp.numpy()
 
     def __getattr__(self, name: str) -> Any:
         return getattr(self._array, name)

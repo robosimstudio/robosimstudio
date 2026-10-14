@@ -32,8 +32,11 @@ something a task author writes.
 from __future__ import annotations
 
 from dataclasses import dataclass, field, replace
+from typing import Any
 
 from .ast import Condition, TaskDoc
+from .parse import COMPARISONS, CONNECTIVES, MODALS
+from .typecheck import _GATE_WORDS, _MASK_WORDS, _REWARD_CLAUSES
 
 __all__ = ["VAB_INDUSTRIAL_V1", "BindingTable", "PredicateBinding", "apply_bindings"]
 
@@ -139,6 +142,69 @@ def _bind_condition(condition: Condition, table: BindingTable) -> Condition:
     return replace(condition, head=binding.atom)
 
 
+def _bind_form(form: Any, table: BindingTable) -> Any:
+    """:func:`_bind_condition` on the plain list shape a ``:reward`` arrives in.
+
+    The reward section is ``_plain``, not conditions, so its forms are rewritten
+    as written: the same leaves bound the same way, into a form
+    :func:`~.parse.parse_condition` reads back as what :func:`_bind_condition`
+    would have produced.
+    """
+    if not isinstance(form, list) or not form:
+        return form
+    head = str(form[0])
+    folded = head.lower()
+    if folded.replace("-", "_") in CONNECTIVES:
+        return [form[0], *(_bind_form(child, table) for child in form[1:])]
+    if folded in MODALS:
+        # `hold-for` takes a duration before its body, and that is not a clause.
+        keep = 2 if folded == "hold-for" else 1
+        return [*form[:keep], *(_bind_form(child, table) for child in form[keep:])]
+    if head in COMPARISONS and len(form) == 3 and isinstance(form[1], list) and form[1]:
+        measure = form[1]
+        if str(measure[0]).lower() in MODALS:
+            return [head, _bind_form(measure, table), form[2]]
+        binding = table.get(str(measure[0]))
+        if binding is None:
+            return form
+        if binding.op:
+            # The binding's comparison replaces the author's, as it does on a
+            # parsed leaf that already carried one.
+            return [binding.op, [binding.atom, *measure[1:]], binding.value]
+        return [head, [binding.atom, *measure[1:]], form[2]]
+    binding = table.get(head)
+    if binding is None:
+        return form
+    if binding.op:
+        return [binding.op, [binding.atom, *form[1:]], binding.value]
+    return [binding.atom, *form[1:]]
+
+
+def _bind_reward(reward: dict[str, Any], table: BindingTable) -> dict[str, Any]:
+    """The measure and the ``(:gated-by CLAUSE)`` of each progress clause, bound.
+
+    The gate is a number and ``fraction`` names no measure, so both pass through.
+    """
+    out = dict(reward)
+    for word in _REWARD_CLAUSES:
+        body = out.get(word)
+        if not isinstance(body, list):
+            continue
+        parts = []
+        seen_measure = False
+        for part in body:
+            keyword = str(part[0]).lstrip(":") if isinstance(part, list) and part else ""
+            if keyword in _MASK_WORDS and len(part) == 2:
+                parts.append([part[0], _bind_form(part[1], table)])
+            elif keyword not in _GATE_WORDS + _MASK_WORDS and not seen_measure and isinstance(part, list):
+                seen_measure = True
+                parts.append(_bind_form(part, table))
+            else:
+                parts.append(part)
+        out[word] = parts
+    return out
+
+
 def apply_bindings(doc: TaskDoc, table: BindingTable) -> TaskDoc:
     """Rewrite a parsed document's predicates through a binding table.
 
@@ -158,5 +224,6 @@ def apply_bindings(doc: TaskDoc, table: BindingTable) -> TaskDoc:
         init=tuple(_bind_condition(c, table) for c in doc.init),
         goal=_bind_condition(doc.goal, table) if doc.goal is not None else None,
         observe=tuple(_bind_condition(c, table) for c in doc.observe),
+        reward=_bind_reward(doc.reward, table),
         provenance=provenance,
     )

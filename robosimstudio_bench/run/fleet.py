@@ -140,15 +140,23 @@ def fleet_build_task(task: TaskSpec) -> TaskSpec:
     name = str(getattr(task, "fleet_base", "") or "")
     if not name:
         return task
+    from robosimstudio_bench.taskbuild.matrix import declared_key
     from robosimstudio_bench.taskbuild.registry import get_task
 
     base = get_task(name)
-    base.binding_for(task.scene, task.embodiment, task.gripper)
+    # The base's own spelling of the pairing, so the robot's own hand named on
+    # one side and left unstated on the other is the same binding.
+    scene, embodiment, gripper = declared_key(base, task.scene, task.embodiment, task.gripper) or (
+        task.scene,
+        task.embodiment,
+        task.gripper,
+    )
+    base.binding_for(scene, embodiment, gripper)
     return replace(
         base,
-        scene=task.scene or base.scene,
-        embodiment=task.embodiment or base.embodiment,
-        gripper=task.gripper or base.gripper,
+        scene=scene or base.scene,
+        embodiment=embodiment or base.embodiment,
+        gripper=gripper or base.gripper,
     )
 
 
@@ -691,6 +699,9 @@ class RunnerFleet:
             # that places nothing answers ``built_for`` True and never rebuilds.
             if not fleet.built_for(episodes):
                 fleet, policy = self._rebuild_for(fleet, policy, episodes, task=members[0][0])
+                # At once rather than after the loop: a later wave that raises
+                # must still leave the caller what is open, not what was closed.
+                self._fleet, self._policy = fleet, policy
             self._run_wave(fleet, policy, index, members)
         self._fleet, self._policy = fleet, policy
         return self.rows[first:]
@@ -824,9 +835,9 @@ class RunnerFleet:
 
         snapshot = fleet.snapshot()
         for slot in slots:
-            # This world's own start pose, copied because the next snapshot
-            # overwrites the buffer these views point into.
-            slot.settled_body_q = snapshot.body(slot.world).copy()
+            # This world's own start pose, the one the fleet captured at reset,
+            # so the evaluator and the policy's tools measure from one baseline.
+            slot.settled_body_q = fleet.settled_body_q(slot.world)
             if slot.evaluator is not None:
                 slot.evaluator.reset(fleet.context(slot.world, snapshot, settled_body_q=slot.settled_body_q))
         policy.reset_wave(slots)
@@ -841,6 +852,11 @@ class RunnerFleet:
         # reports would be the wave's and not the document's. The loop runs to
         # the longest; each world is truncated at its own.
         limits = [int(self.job.max_steps or getattr(slot.task, "max_steps", 0) or 10_000) for slot in slots]
+        # A negative budget would skip the loop entirely and close nothing. A
+        # positive one ends every live world inside the loop, on the step equal
+        # to its own limit, so nothing is left live once the loop exits.
+        if min(limits) <= 0:
+            raise ValueError(f"max_steps must be positive, got {min(limits)}")
         limit = max(limits)
         own_limits = frozenset(limits)
         cadence = fleet.eval_every
@@ -910,23 +926,6 @@ class RunnerFleet:
                 except Exception as exc:
                     print(f"[fleet] live view failed ({type(exc).__name__}: {exc}); continuing without it")
                     self.on_wave_tick = None
-
-        # Anything still live when the budget ran out was truncated.
-        if live.any():
-            snapshot = fleet.snapshot()
-            for world in np.flatnonzero(live):
-                slot = slots[world]
-                _, info = score_world(slot, fleet, snapshot, step=step, limit=step, request="")
-                slot.extras = dict(policy.row_extras(int(world)))
-                slot.finish(
-                    success=info["success"],
-                    reward=info["reward"],
-                    close_kind=info.get("close_kind", "truncated"),
-                    steps=step,
-                    wall_s=time.perf_counter() - wave0,
-                    info=info,
-                )
-                self._close_slot(slot, fleet, policy, index)
 
         self.summary.waves.append(
             wave_record(

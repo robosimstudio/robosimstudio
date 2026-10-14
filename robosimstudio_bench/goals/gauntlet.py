@@ -55,15 +55,18 @@ from pathlib import Path
 from typing import Any
 
 from robosimstudio.assetlib.semantics.snapshot import Snapshot
-from robosimstudio_bench.taskdoc import apply_bindings, check, read_problem
+from robosimstudio.roots import SUITE_SUFFIX
+from robosimstudio_bench.taskdoc import apply_bindings, check, merge_suite, read_problem, read_suite
 from robosimstudio_bench.taskdoc.ast import Condition, TaskDoc
+from robosimstudio_bench.taskdoc.typecheck import _GATE_WORDS, _MASK_WORDS
 
 from .bind import bind
 from .combinators import Leaf, Node
 from .evaluate import catalog as asset_of
 from .evaluate import make_evaluator
-from .goal import about_key
+from .goal import about_key, leaves
 from .initial import check_init
+from .reward import measured_atom
 
 __all__ = [
     "FLOOR_STEPS",
@@ -230,9 +233,15 @@ def _summarise(stage: StageResult) -> str:
 
 # --------------------------------------------------------------------- stages
 def _read(path: str | Path) -> tuple[StageResult, TaskDoc | None]:
-    """Stage 1. The file is well-formed BDDL."""
+    """Stage 1. The file is well-formed BDDL.
+
+    Merged over a sibling ``.suite`` when there is one, as the loader merges it:
+    a variant's fixtures and ``(:profile ...)`` live there, and checking the
+    variant alone reports every one of them missing.
+    """
     try:
-        doc = read_problem(path)
+        suites = sorted(Path(path).parent.glob(f"*{SUITE_SUFFIX}"))
+        doc = merge_suite(read_problem(path), read_suite(suites[0]) if suites else None)
     except Exception as exc:
         return StageResult("read", "fail", (Finding("parse", f"{type(exc).__name__}: {exc}", str(path)),)), None
     return StageResult(
@@ -255,6 +264,8 @@ def _bind(doc: TaskDoc, profile: str) -> tuple[StageResult, TaskDoc]:
     """
     from robosimstudio_bench.taskbuild.staging import get_profile
 
+    # The document's own profile when none was named, as the loader binds it.
+    profile = profile or str(dict(doc.staging).get("profile", ""))
     if not profile:
         return StageResult("bind", "pass", data={"table": "none"}), doc
     try:
@@ -406,7 +417,10 @@ def _start(doc: TaskDoc, env: Any, task: str) -> StageResult:
     try:
         env.reset()
         snapshot = Snapshot(ctx=env.make_context())
-        report = check_init(doc, lambda c: bind(c, doc, asset_of, task=task or doc.name), snapshot)
+        # The episode's active set, as the env's own evaluator reads it: an
+        # init clause about a parked object is not this episode's start.
+        active = getattr(getattr(env, "episode", None), "active", None)
+        report = check_init(doc, lambda c: bind(c, doc, asset_of, task=task or doc.name), snapshot, active=active)
     except Exception as exc:
         return StageResult("start", "fail", (Finding("start", f"{type(exc).__name__}: {exc}", "init"),))
 
@@ -531,8 +545,9 @@ def run(
             overrides are resolved against. Defaults to the document's own.
         profile: The import profile the document reads under, for one written
             in an upstream dialect -- its predicate bindings are the profile's.
-            Empty means the document already speaks this stack's measures,
-            which is true of everything authored here.
+            Empty means the document's own ``(:profile ...)`` (merged over its
+            suite's), and with none there, that it already speaks this stack's
+            measures, which is true of everything authored here.
         catalog: What the typechecker asks about the world. ``None`` builds the
             live :class:`~robosimstudio_bench.goals.catalog.AssetCatalog`, which is
             what an agent wants; a test hands in a five-line fake.
@@ -692,7 +707,10 @@ def _vacuous(leaves: list[Condition]) -> list[Finding]:
     out: list[Finding] = []
     for index, leaf in enumerate(leaves):
         where = f"goal[{index}] ({leaf.head})"
-        if leaf.op in (">=", ">") and leaf.value is not None and float(leaf.value) <= 0.0:
+        # `(> m 0)` is not vacuous: it fails at exactly zero, and says "strictly positive".
+        if leaf.value is not None and (
+            (leaf.op == ">=" and float(leaf.value) <= 0.0) or (leaf.op == ">" and float(leaf.value) < 0.0)
+        ):
             out.append(
                 Finding(
                     "vacuous-threshold",
@@ -886,11 +904,7 @@ def _arity(condition: Condition) -> int:
 
 
 def _leaves(node: Node | None) -> tuple[Leaf, ...]:
-    if node is None:
-        return ()
-    if isinstance(node, Leaf):
-        return (node,)
-    return tuple(leaf for child in node.children() for leaf in _leaves(child))
+    return leaves(node) if node is not None else ()
 
 
 def _depth(node: Node) -> int:
@@ -913,7 +927,8 @@ def _reward_measure(section: dict[str, Any]) -> tuple[str, tuple[str, ...]] | No
         for part in parts:
             if not isinstance(part, list) or not part:
                 continue
-            if str(part[0]).lstrip(":") in ("gate", "gate-at", "gated-by", "gated_by"):
+            if str(part[0]).lstrip(":") in _GATE_WORDS + _MASK_WORDS:
                 continue
-            return str(part[0]).replace("-", "_"), tuple(str(a) for a in part[1:])
+            atom = measured_atom(part)
+            return str(atom[0]).replace("-", "_"), tuple(str(a) for a in atom[1:])
     return None

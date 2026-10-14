@@ -34,7 +34,7 @@ every spatial relation that admits the pair and returns what each says.
 
 from __future__ import annotations
 
-from collections.abc import Callable, Sequence
+from collections.abc import Callable, Mapping, Sequence
 from typing import Any
 
 from robosimstudio.assetlib.record import AssetRecord
@@ -98,6 +98,7 @@ def query(
     *references: str,
     doc: TaskDoc | None = None,
     catalog: Callable[[str], AssetRecord | None] | None = None,
+    task: str = "",
 ) -> dict[str, Any]:
     """Ask one atom -- or one family -- about these references, right now.
 
@@ -106,11 +107,15 @@ def query(
             one. Read-only, so asking cannot perturb what is being asked about.
         atom: A registered atom name, or a family name such as
             ``"SpatialRelation"`` to ask every relation that admits the operands.
+            Spelled as a document spells it: ``contact-force`` is accepted, and
+            ``insertion:depth`` narrows the answer to that one return.
         *references: ``"hammer"``, ``"port.bore"``, ``"cable.point(0.63)"`` --
             the same reference grammar a document is written in.
         doc: The task document, when there is one. Without it, references
             resolve untyped, which is enough for whole-object readers.
         catalog: How to look up an asset record. Defaults to the registry.
+        task: The task scope to dispatch under; the document's name when not
+            given, as :func:`~.evaluate.make_evaluator` binds the goal.
 
     Returns:
         For an atom, the handler's own structured returns. For a family,
@@ -123,14 +128,19 @@ def query(
     """
     frozen = snapshot if isinstance(snapshot, Snapshot) else Snapshot(ctx=snapshot)
     lookup = catalog or _default_catalog
+    # The document's own spelling, normalised the way :func:`bind` does it:
+    # `contact-force` is the registered `contact_force`, and `insertion:depth`
+    # selects one of the measure's returns. Refusing either would make an agent
+    # ask in a different vocabulary from the one its goal is written in.
+    measure, _, selector = atom.replace("-", "_").partition(":")
 
-    if leaves_of(atom):
+    if not selector and leaves_of(measure):
         readings: dict[str, Any] = {}
-        for leaf in leaves_of(atom):
+        for leaf in leaves_of(measure):
             if len(leaf.args) != len(references):
                 continue
             try:
-                readings[leaf.name] = query(frozen, leaf.name, *references, doc=doc, catalog=lookup)
+                readings[leaf.name] = query(frozen, leaf.name, *references, doc=doc, catalog=lookup, task=task)
             except (LookupError, BindError, ValueError):  # QueryRefused and KeyError are LookupErrors
                 # An atom this pair does not afford is not an error at family
                 # level -- it is the answer to "what can I ask", arrived at by
@@ -142,16 +152,24 @@ def query(
         return {"family": atom, "readings": readings}
 
     try:
-        spec = get_atom(atom)
+        spec = get_atom(measure)
     except LookupError as exc:
         raise QueryRefused(str(exc)) from None
+    if selector and selector not in spec.returns:
+        raise QueryRefused(
+            f"atom {atom!r}: {measure!r} reports {list(spec.returns)}, and {selector!r} is not among them"
+        )
 
     operands = [_operand(reference, doc, lookup) for reference in references]
     forms = [arg.reads or "position" for arg in spec.args] + ["position"] * len(operands)
     kinds = tuple(o.kind for o in operands)
     substrates = tuple(o.substrate for o in operands)
+    # The task and asset scopes as :func:`bind` passes them, so a task- or
+    # asset-scoped override answers a query the same way it scores the goal.
+    owner = next((o.asset for o in operands if o.asset), "")
+    scope = task or (doc.name if doc is not None else "")
     try:
-        handler = dispatch(atom, kinds, substrates, layouts=_layouts(frozen, operands))
+        handler = dispatch(measure, kinds, substrates, layouts=_layouts(frozen, operands), asset=owner, task=scope)
     except LookupError as exc:
         # ``LookupError``, not ``KeyError``: dispatch refuses an unimplemented
         # pairing with a plain ``LookupError`` (``semantics/handlers.py``), which
@@ -162,7 +180,13 @@ def query(
 
     values = [read(frozen, operand, form) for operand, form in zip(operands, forms, strict=False)]
     reported = handler.fn(frozen, *values) if spec.reads_scene else handler.fn(*values)
-    return dict(reported)
+    # A scalar return is keyed by the primary, as :func:`bind` reports it.
+    returns = dict(reported) if isinstance(reported, Mapping) else {spec.primary or measure: reported}
+    if not selector:
+        return returns
+    if selector not in returns:
+        raise QueryRefused(f"atom {atom!r}: the handler reported {sorted(returns)}, not {selector!r}")
+    return {selector: returns[selector]}
 
 
 def applicable(family: str, *operands: Operand) -> list[str]:

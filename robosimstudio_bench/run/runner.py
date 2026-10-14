@@ -165,6 +165,13 @@ class RunnerEval:
     """
 
     def __init__(self, job: JobSpec, *, root: str | Path = "outputs", verbose: bool = True) -> None:
+        # One environment from one document: a second document could only be
+        # ignored, and its episodes would read as unrun rather than as refused.
+        if getattr(job, "documents", ()):
+            raise ValueError(
+                f"job {job.name!r} names documents, which share a WAVE; the serial runner builds one model "
+                "from job.task. Use RunnerFleet (num_worlds above 1), or one job per document."
+            )
         self.job = job
         self.root = Path(root) / job.name
         self.verbose = bool(verbose)

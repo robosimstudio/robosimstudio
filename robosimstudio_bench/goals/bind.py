@@ -220,9 +220,12 @@ def _body_velocity(snapshot: Snapshot, operand: Operand) -> np.ndarray:
     the spin.
     """
     handle = snapshot.handles.entity(operand.name)
-    if handle.body < 0 or handle.body >= len(snapshot.body_qd):
-        raise BindError(f"{operand.ref} names {operand.name!r}, which has no body to read a velocity from")
-    return np.asarray(snapshot.body_qd[handle.body], dtype=np.float64)
+    if 0 <= handle.body < len(snapshot.body_qd):
+        return np.asarray(snapshot.body_qd[handle.body], dtype=np.float64)
+    if handle.static:
+        # A welded static does not move; see :func:`_static_or_body_pose`.
+        return np.zeros(6, dtype=np.float64)
+    raise BindError(f"{operand.ref} names {operand.name!r}, which has no body to read a velocity from")
 
 
 @reader(substrate="rod", form="velocity")
@@ -268,10 +271,23 @@ def _body_pose(snapshot: Snapshot, operand: Operand) -> np.ndarray:
     its centre plus an offset along the world axis, and on a 13 mm bore that
     difference is 8% of the gate.
     """
+    return _static_or_body_pose(snapshot, operand, "a pose")
+
+
+def _static_or_body_pose(snapshot: Snapshot, operand: Operand, what: str) -> np.ndarray:
+    """An entity's pose, ``[7]``, from its ``body_q`` row or, for a welded static, where it was put.
+
+    A single-world build welds a fixture to the world as shapes on body -1, so
+    it has no row to read; its pose is the compiler's ``xform``, as
+    :func:`_feature` already reads it. Refusing that here crashed the first
+    scored step of any goal pointing a position, pose or velocity at a fixture.
+    """
     handle = snapshot.handles.entity(operand.name)
-    if handle.body < 0 or handle.body >= len(snapshot.body_q):
-        raise BindError(f"{operand.ref} names {operand.name!r}, which has no body to read a pose from")
-    return np.asarray(snapshot.body_q[handle.body], dtype=np.float64)
+    if 0 <= handle.body < len(snapshot.body_q):
+        return np.asarray(snapshot.body_q[handle.body], dtype=np.float64)
+    if handle.static:
+        return np.asarray(handle.xform, dtype=np.float64)[:7]
+    raise BindError(f"{operand.ref} names {operand.name!r}, which has no body to read {what} from")
 
 
 @reader(substrate="cloth", form="feature")
@@ -570,10 +586,7 @@ def _rod_bodies(snapshot: Snapshot, operand: Operand) -> np.ndarray:
 
 
 def _body_position(snapshot: Snapshot, operand: Operand) -> np.ndarray:
-    handle = snapshot.handles.entity(operand.name)
-    if handle.body < 0:
-        raise BindError(f"{operand.ref} names {operand.name!r}, which has no body to read a position from")
-    return np.asarray(snapshot.body_q[handle.body][:3], dtype=np.float64)
+    return _static_or_body_pose(snapshot, operand, "a position")[:3]
 
 
 # ------------------------------------------------------------------ resolving
@@ -792,6 +805,11 @@ def _published_reader(
     name = operands[0].name
     op, threshold = condition.op, condition.value
     declared = states.get(wanted)
+    # Keyed per clause as the atom path keys it, so `about_key(*leaf.about)`
+    # finds this leaf's verdict and `(bond-fraction tape_a)` beside
+    # `(bond-fraction tape_b)` are two readings rather than one overwritten.
+    about = (wanted, tuple(str(o.ref) for o in operands))
+    named = about_key(*about)
 
     # A semantic state names the quantity it thresholds, and an entity may
     # publish that quantity rather than the word. `(adhered tape)` over
@@ -822,12 +840,15 @@ def _published_reader(
         # says when the tape counts as adhered, and a task may want a stricter
         # line for its own purposes without redefining the word.
         if op:
-            return _threshold(float(value), op, threshold, key=wanted)
-        if declared is not None and declared.op:
-            return _threshold(float(value), declared.op, declared.value, key=wanted)
-        return (bool(value), float(bool(value)), {wanted: value})
+            held, score, metrics = _threshold(float(value), op, threshold, key=wanted)
+        elif declared is not None and declared.op:
+            held, score, metrics = _threshold(float(value), declared.op, declared.value, key=wanted)
+        else:
+            held, score, metrics = (bool(value), float(bool(value)), {wanted: value})
+        metrics[named] = held
+        return (held, score, metrics)
 
-    return Leaf(fn=measure, label="", about=(condition.head, tuple(str(o.ref) for o in operands)))
+    return Leaf(fn=measure, label="", about=about)
 
 
 def _published(snapshot: Snapshot, name: str) -> dict[str, Any]:

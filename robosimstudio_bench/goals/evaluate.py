@@ -51,7 +51,7 @@ def make_evaluator(doc: TaskDoc, *, task: str = "", active: Iterable[str] | None
         doc: A document that has typechecked.
         task: The task's name, for task-scoped handler overrides.
         active: The objects this episode runs, or ``None`` for every one. When
-            given, every goal and observe clause about an object outside it is
+            given, every goal, observe and reward clause about an object outside it is
             dropped before the tree is built
             (:func:`~robosimstudio_bench.goals.goal.mask_condition`), so an
             instance of a superset is scored on its own objects and the
@@ -82,16 +82,25 @@ def make_evaluator(doc: TaskDoc, *, task: str = "", active: Iterable[str] | None
     def leaf(condition: Condition):
         return bind(condition, doc, catalog, task=task or doc.name)
 
-    def node(form: Any):
+    def node(form: Any, path: str):
         # A reward clause and an observe entry arrive as raw parsed forms rather
         # than conditions, because `_plain` reads those sections. They are parsed
         # here with the goal's own parser, so a quantity cannot mean one thing in
-        # a goal and something else in a reward.
-        return build_goal(form if isinstance(form, Condition) else parse_condition(form), leaf)
+        # a goal and something else in a reward. Masked like the goal, so a
+        # reward about a parked object is not measured at its park pose; and
+        # labelled under its own path, so its verdicts do not land on the goal's.
+        condition = form if isinstance(form, Condition) else parse_condition(form)
+        if names is not None:
+            condition = mask_condition(condition, names, objects)
+        return None if condition is None else build_goal(condition, leaf, path=path)
 
     return Scored(
         goal=build_goal(goal, leaf),
-        reward=build_reward(doc.reward, node),
+        reward=build_reward(
+            doc.reward,
+            lambda form: node(form, "reward"),
+            make_mask=lambda form: node(form, "reward.gated_by"),
+        ),
         observe=tuple(build_goal(c, leaf, path=f"observe.{i}") for i, c in enumerate(observe)),
         doc=doc,
         # The binder this goal was built with, so verifying `:init` measures a

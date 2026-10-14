@@ -249,7 +249,13 @@ class FleetEnv:
         spec = get_task(task) if isinstance(task, str) else task
         if scene or embodiment or gripper:
             from robosimstudio.specs import replace
+            from robosimstudio_bench.taskbuild.matrix import declared_key
 
+            # The declared spelling of the pairing, as Env takes it.
+            scene, embodiment, gripper = declared_key(spec, scene, embodiment, gripper) or (scene, embodiment, gripper)
+            # Validate before rewriting, as Env does: after the rewrite a task
+            # without bindings would admit whatever pairing it was handed.
+            spec.binding_for(scene, embodiment, gripper)
             spec = replace(
                 spec,
                 scene=scene or spec.scene,
@@ -751,6 +757,12 @@ class FleetEnv:
             for arm in self.ik.arms.values():
                 arm.set_enabled(np.zeros(self.num_worlds, dtype=np.int32))
             self.ik.flush()
+        # Every world's start pose, taken now from the post-reset state rather
+        # than whenever a world first asks: a policy whose first query comes
+        # after its first motion would otherwise measure "has it moved" from
+        # wherever the motion left things, not from where the evaluator does.
+        snapshot = self.snapshot()
+        self._settled = [snapshot.body(world).copy() for world in range(self.num_worlds)]
 
     def _home_fraction(self, bank) -> float:
         """Where the home posture puts this hand, as the bank's 0 (open) .. 1 (closed) command."""
@@ -1235,11 +1247,12 @@ class FleetEnv:
             return None
 
     def settled_body_q(self, world: int) -> np.ndarray:
-        """This world's start pose, captured the first time it is asked for.
+        """This world's start pose, as :meth:`reset_wave` captured it.
 
-        What "has it moved" is measured against. Captured lazily rather than at
-        reset because most worlds never need it, and copied rather than viewed
-        because the next snapshot overwrites the buffer underneath.
+        What "has it moved" is measured against, by the policy's tools and the
+        evaluator alike. Copied rather than viewed because the next snapshot
+        overwrites the buffer underneath; captured here only when asked for
+        before any wave was reset.
         """
         index = int(world)
         if self._settled[index] is None:
