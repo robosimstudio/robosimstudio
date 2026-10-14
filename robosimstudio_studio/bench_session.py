@@ -44,7 +44,7 @@ from robosimstudio.specs import TaskSpec
 from robosimstudio_bench.envs.env import Env
 from robosimstudio_bench.goals.bind import Operand, read
 from robosimstudio_bench.goals.goal import leaves
-from robosimstudio_bench.taskbuild.matrix import admits
+from robosimstudio_bench.taskbuild.matrix import admits, declared_key
 from robosimstudio_bench.taskbuild.registry import get_task, list_tasks
 from robosimstudio_bench.taskdoc.ast import Ref
 
@@ -139,6 +139,9 @@ def load_task(
     t0 = time.perf_counter()
     config = session.config
     label = task if isinstance(task, str) else task.full_name
+    # Put back on every ``False``: the count is the page's, and a load that
+    # did not happen must not leave the next rebuild asking for its width.
+    worlds = session.num_worlds
     if num_worlds is not None:
         session.num_worlds = max(1, int(num_worlds))
     # Ahead of the world count, because a robot that cannot be compiled
@@ -146,10 +149,14 @@ def load_task(
     # and would otherwise answer the same click with the same traceback.
     why = unbuildable(task, embodiment)
     if why:
+        session.num_worlds = worlds
         return refuse(session, label, why, scene, embodiment, gripper)
     if session.num_worlds > 1:
         try:
-            return load_fleet(session, task, episode, label, t0, scene, embodiment, gripper)
+            if load_fleet(session, task, episode, label, t0, scene, embodiment, gripper):
+                return True
+            session.num_worlds = worlds
+            return False
         except CannotReplicate as exc:
             # The selection is a task; the world count is a throughput
             # preference on it. Most scenes cannot be replicated yet, so
@@ -165,17 +172,8 @@ def load_task(
             # width it does not have, and the reason is on the status line.
             session.num_worlds = 1
             session._narrowed = str(exc)
-    load_scene, load_embodiment, load_gripper = scene, embodiment, gripper
     try:
-        if isinstance(task, str) and (scene or embodiment or gripper):
-            spec = get_task(task)
-            want = (scene or spec.scene, embodiment or spec.embodiment, gripper or spec.gripper)
-            if want not in spec.binding_keys:
-                ok, why = admits(spec, *want)
-                if not ok:
-                    raise Refused(f"inadmissible pairing: {why}")
-                task = spec.with_pairing(scene, embodiment, gripper)
-                load_scene = load_embodiment = load_gripper = ""
+        task, load_scene, load_embodiment, load_gripper = resolve_pairing(task, scene, embodiment, gripper)
         env = Env(
             task,
             scene=load_scene,
@@ -190,8 +188,10 @@ def load_task(
             verbose=True,
         )
     except Refused as exc:
+        session.num_worlds = worlds
         return refuse(session, label, str(exc), scene, embodiment, gripper)
     except Exception as exc:
+        session.num_worlds = worlds
         message = f"{type(exc).__name__}: {exc}"
         session.status = f"{_pairing(label, scene, embodiment, gripper)} did not compile -- {message}"
         print(f"[studio] {label} did not compile:")
@@ -218,6 +218,33 @@ def load_task(
         session.status = loaded
     print(f"[studio] {session.env.task.full_name} episode {episode}: {session.env.episode.instruction}")
     return True
+
+
+def resolve_pairing(
+    task: str | TaskSpec, scene: str = "", embodiment: str = "", gripper: str = ""
+) -> tuple[str | TaskSpec, str, str, str]:
+    """The task and overrides a load hands ``Env`` or ``FleetEnv`` for a pairing.
+
+    A pairing the task declares -- in either spelling of the hand, ``""`` or the
+    one the robot already wears -- comes back as that binding's own key, so the
+    load finds the declared binding (its graphs, its mount) rather than having
+    :meth:`~robosimstudio.specs.TaskSpec.with_pairing` append a bare one beside
+    it. Anything else :func:`admits` allows comes back as a spec pinned to it,
+    with empty overrides; what it refuses raises
+    :class:`~robosimstudio_studio.session.Refused` in its words. No overrides at
+    all is the task as it stands.
+    """
+    if not (scene or embodiment or gripper):
+        return task, scene, embodiment, gripper
+    spec = get_task(task) if isinstance(task, str) else task
+    key = declared_key(spec, scene, embodiment, gripper)
+    if key is not None:
+        return (task, *key)
+    want = (scene or spec.scene, embodiment or spec.embodiment, gripper or spec.gripper)
+    ok, why = admits(spec, *want)
+    if not ok:
+        raise Refused(f"inadmissible pairing: {why}")
+    return spec.with_pairing(*want), "", "", ""
 
 
 def unbuildable(task: str | TaskSpec, embodiment: str) -> str:
@@ -284,14 +311,19 @@ def load_fleet(
     from .fleet_session import FleetSession
 
     config = session.config
-    name = task if isinstance(task, str) else task.full_name
     try:
+        # Resolved as the single-world load resolves it: ``FleetEnv`` refuses an
+        # undeclared pairing like ``Env`` does, so an ``(untried)`` option has to
+        # arrive as a spec that declares it, and a declared one in its own
+        # spelling.
+        task, scene_, embodiment_, gripper_ = resolve_pairing(task, scene, embodiment, gripper)
+        base_declares(task, scene_, embodiment_, gripper_)
         fleet = FleetSession(
-            name,
+            task,
             num_worlds=session.num_worlds,
-            scene=scene,
-            embodiment=embodiment,
-            gripper=gripper,
+            scene=scene_,
+            embodiment=embodiment_,
+            gripper=gripper_,
             policy=config.fleet_solution,
             solution_kwargs=dict(config.fleet_solution_kwargs),
             episode=int(episode),
@@ -300,6 +332,8 @@ def load_fleet(
             loop=bool(config.fleet_loop),
             viewer=session.viewer,
         )
+    except Refused as exc:
+        return refuse(session, label, str(exc), scene, embodiment, gripper)
     except CannotReplicate:
         # Not a failed load -- a width this scene does not have. The caller
         # answers it by narrowing the page, so it must not be reported as a
@@ -327,6 +361,44 @@ def load_fleet(
     return True
 
 
+def base_declares(task: str | TaskSpec, scene: str = "", embodiment: str = "", gripper: str = "") -> None:
+    """Refuse the width, not the pairing, when a fleet base does not declare it.
+
+    A document with ``(:fleet-base X)`` is built at more than one world as
+    ``X``'s model, pinned to the document's pairing, and
+    :func:`~robosimstudio_bench.run.fleet.fleet_build_task` insists the base
+    declares that pairing -- an instance on another robot is an instance of
+    another model. An ``(untried)`` option arrives here as a spec that declares
+    the pairing *itself* (:func:`resolve_pairing`), so it passes ``FleetEnv``'s
+    own check and then dies on the base's ``binding_for`` as a ``KeyError``.
+    The single-world load never consults the base, so this is a width the
+    pairing does not have, and the page narrows to one world rather than
+    reporting a load that failed.
+
+    Raises:
+        CannotReplicate: When the base is unknown or does not declare the pairing.
+    """
+    from robosimstudio.specs import replace
+    from robosimstudio_bench.run.fleet import fleet_build_task
+
+    spec = get_task(task) if isinstance(task, str) else task
+    if not getattr(spec, "fleet_base", ""):
+        return
+    if scene or embodiment or gripper:
+        spec = replace(
+            spec,
+            scene=scene or spec.scene,
+            embodiment=embodiment or spec.embodiment,
+            gripper=gripper or spec.gripper,
+        )
+    try:
+        fleet_build_task(spec)
+    except KeyError as exc:
+        raise CannotReplicate(
+            f"its fleet base {spec.fleet_base!r} does not declare this pairing ({exc.args[0] if exc.args else exc})"
+        ) from exc
+
+
 def build_fleet_gui(session) -> None:
     """The page's controls when it is showing a grid.
 
@@ -346,8 +418,9 @@ def build_fleet_gui(session) -> None:
             "World spacing", min=0.0, max=8.0, step=0.05, initial_value=round(session.fleet.view.spacing, 2)
         )
         # Live, unlike the world count: offsets are applied at draw time and
-        # move nothing in the simulation, so there is nothing to rebuild.
-        spacing.on_update(lambda _: session.fleet.view.set_spacing(float(spacing.value)))
+        # move nothing in the simulation, so there is nothing to rebuild. The
+        # callback only assigns; the next draw applies it on the main thread.
+        spacing.on_update(lambda _: setattr(session.fleet.view, "pending_spacing", float(spacing.value)))
         session.lighting.build(gui)
 
 

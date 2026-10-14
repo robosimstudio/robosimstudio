@@ -720,6 +720,18 @@ class StudioSession:
         # and a 50 Hz one are both refreshed at every-fourth-step's worth.
         self.draw_interval = self.render_every / float(sim.request.physics.control_hz)
         self.run_dir = self.root / label.replace("/", "_") / time.strftime("%Y%m%d-%H%M%S")
+        self._bind(sim)
+        obs, info = self.reset_env()
+        self.obs = obs
+        self.on_reset(obs, info)
+
+    def _bind(self, sim) -> None:
+        """Hand the page a model: the viewer, the look, and the panels built around it.
+
+        The half of :meth:`adopt` that is about the *model*, apart so that a
+        reset which recompiled one (an episode whose model key differs) can
+        redo it without closing the environment that just rebuilt itself.
+        """
         self.picker = ScenePicker(sim.model)
         # Before set_model: the viewer batches shapes by their flags when the
         # model is handed over, and reads visibility off that batch each frame
@@ -745,9 +757,6 @@ class StudioSession:
         self._apply_stage()
         self.build_panels()
         self.build_gui()
-        obs, info = self.reset_env()
-        self.obs = obs
-        self.on_reset(obs, info)
 
     def _bench(self, what: str = "this"):
         """The page's benchmark half, imported on first use.
@@ -813,6 +822,16 @@ class StudioSession:
         """
         if self.env is None and self.fleet is None:
             return
+        self._drop_panels()
+        if self.fleet is not None:
+            self.fleet.close()
+            self.fleet = None
+        if self.env is not None:
+            self.env.close()
+            self.env = None
+
+    def _drop_panels(self) -> None:
+        """Close every panel and clear the page's widgets, leaving the environment be."""
         for panel in self.panels:
             panel.close()
         self.panels, self.arms = [], {}
@@ -825,12 +844,6 @@ class StudioSession:
         # only GUI on this page is the panels' own.
         self.server.gui.reset()
         self.pause_box = None
-        if self.fleet is not None:
-            self.fleet.close()
-            self.fleet = None
-        if self.env is not None:
-            self.env.close()
-            self.env = None
 
     def _push_finishes(self, sim) -> None:
         """Hand the scene's materials to the page, so it shades what RTX shades.
@@ -1269,6 +1282,7 @@ class StudioSession:
         what a reset ends (a script playing, a take being filmed) overrides this
         rather than adding a second button that does something different.
         """
+        model = getattr(self.env, "model", None)
         try:
             # An episode whose model key differs recompiles the scene in here,
             # so this is the second place a menu can ask for something that
@@ -1286,6 +1300,13 @@ class StudioSession:
             print(f"[studio] episode {self.episode_id} did not load; paused:")
             traceback.print_exc()
             return False
+        if getattr(self.env, "model", None) is not model:
+            # The recompile swapped the model, scene and pipeline under the
+            # page: the viewer, the picker, the index and every dragger hooked
+            # onto the old pipeline are about a scene that is gone. Rebuilt
+            # here, the same way a load builds them, minus closing the env.
+            self._drop_panels()
+            self._bind(self.env)
         self.obs = obs
         self.on_reset(obs, info)
         self.status = "reset"
@@ -1568,6 +1589,10 @@ class StudioSession:
         visibility from the flags it captured when the model was handed over.
         """
         self._set_scenery_visible(self.show_scenery)
+        # The picker caches the visible shapes on its first query; the flags
+        # just changed, so what it would hit must follow what is drawn.
+        if self.picker is not None:
+            self.picker.invalidate()
         self.viewer.set_model(self.env.model)
         self.viewer.set_garments(garment_visuals(self.env.scene, getattr(self.env, "doc", None)))
         self.viewer.set_live_colors(scene_repaints_live(self.env.scene))
@@ -1810,10 +1835,24 @@ class StudioSession:
                         # of the same argument: pausing to look at a thing is the
                         # main reason to pause, and an inspector that stopped
                         # following the selection while held would make the pause
-                        # useless. Neither scores anything.
+                        # useless. Neither scores anything. PanelRenderView and
+                        # PanelCamera neither: the path-traced view has to keep
+                        # following the orbit, and Look through / Set from view
+                        # are camera gestures; the camera panel skips its render
+                        # when the step has not changed, so held costs little.
                         if isinstance(
                             panel,
-                            (PanelArm, PanelObject, PanelCloth, PanelRegions, PanelScene, PanelInspector, PanelOverlay),
+                            (
+                                PanelArm,
+                                PanelObject,
+                                PanelCloth,
+                                PanelRegions,
+                                PanelScene,
+                                PanelInspector,
+                                PanelOverlay,
+                                PanelRenderView,
+                                PanelCamera,
+                            ),
                         ):
                             panel.drain()
                 # Set here too: a script stepping a held page renders the rig
@@ -1830,11 +1869,17 @@ class StudioSession:
                 if not driven:
                     with prof.phase("iter.drain.click"):
                         self.drain_click()
-                for panel in self.panels:
+                panels = self.panels
+                for panel in panels:
                     if driven and (isinstance(panel, CONTROL_PANELS) or panel is self.goal_panel):
                         continue
                     with prof.phase(f"iter.drain.{panel.profile_name}"):
                         panel.drain()
+                    if self.panels is not panels:
+                        # A drain rebuilt the page (a Run whose reset
+                        # recompiled the scene): the rest of this list is
+                        # closed panels over a model that is gone.
+                        break
                 # A script's own per-step work, last: it reads what the panels
                 # have just done rather than racing them, and it is drained even
                 # while a policy drives, because a readout of a run is exactly
@@ -1851,25 +1896,7 @@ class StudioSession:
             # on the one after.
             self.env.obs_render_enabled = self.wants_pixels
 
-            with prof.phase("iter.step"):
-                if self.driver is not None and self.driver.running:
-                    action, mode = self.driver.step()
-                else:
-                    with self._device_span():
-                        self.env.step_teleop()
-                    action, mode = None, ""
-            with prof.phase("iter.video"):
-                # ``None`` when the selection left the video panel out, the same
-                # way the recorder below is ``None`` without a document.
-                if self.video is not None:
-                    self.video.capture()
-            # After the step, and with whatever drove it: a take is evidence
-            # about a trajectory, so it records the action that produced the
-            # state it is looking at.
-            with prof.phase("iter.record"):
-                if self.record is not None:
-                    self.record.capture(action, mode)
-            self._captured_step = int(self.env.step_count)
+            self._step_and_capture(prof)
             self._rate_frames += 1
             prof.mark_step()
 
@@ -1897,6 +1924,37 @@ class StudioSession:
                     else:
                         self._next_frame = time.perf_counter()
         return True
+
+    def _step_and_capture(self, prof) -> None:
+        """Take the loop's one step, then film and record it -- if it was taken.
+
+        A policy that raises hands the arm back without stepping anything, and a
+        capture after it would put a step that never happened into the take: the
+        state unchanged, the action read back off the arm as if teleop drove it,
+        in a take whose mode is already the policy's. So the step count, not the
+        call, says whether there is anything to capture.
+        """
+        before = int(self.env.step_count)
+        with prof.phase("iter.step"):
+            if self.driver is not None and self.driver.running:
+                action, mode = self.driver.step()
+            else:
+                with self._device_span():
+                    self.env.step_teleop()
+                action, mode = None, ""
+        if int(self.env.step_count) != before:
+            with prof.phase("iter.video"):
+                # ``None`` when the selection left the video panel out, the same
+                # way the recorder below is ``None`` without a document.
+                if self.video is not None:
+                    self.video.capture()
+            # After the step, and with whatever drove it: a take is evidence
+            # about a trajectory, so it records the action that produced the
+            # state it is looking at.
+            with prof.phase("iter.record"):
+                if self.record is not None:
+                    self.record.capture(action, mode)
+        self._captured_step = int(self.env.step_count)
 
     def _note_scene(self) -> None:
         """Record what is being measured, beside the measurement.

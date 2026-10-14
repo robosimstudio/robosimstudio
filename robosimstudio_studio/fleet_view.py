@@ -43,6 +43,7 @@ from typing import Any
 
 import numpy as np
 
+from robosimstudio.core.math import quat_to_mat
 from robosimstudio.core.streams import reading
 
 __all__ = ["FleetView"]
@@ -57,20 +58,8 @@ def _place(pose: np.ndarray, centre: np.ndarray, half: np.ndarray) -> tuple[np.n
     rather than a bounding-sphere over-estimate, and matters because the shapes
     that decide a workcell's footprint are flat panels standing on edge.
     """
-    rotation = _matrix(np.asarray(pose[3:7], dtype=np.float64))
+    rotation = quat_to_mat(np.asarray(pose[3:7], dtype=np.float64))
     return np.asarray(pose[:3], dtype=np.float64) + rotation @ centre, np.abs(rotation) @ half
-
-
-def _matrix(quat: np.ndarray) -> np.ndarray:
-    """A rotation matrix from an xyzw quaternion."""
-    x, y, z, w = (float(v) for v in quat)
-    return np.array(
-        [
-            [1 - 2 * (y * y + z * z), 2 * (x * y - z * w), 2 * (x * z + y * w)],
-            [2 * (x * y + z * w), 1 - 2 * (x * x + z * z), 2 * (y * z - x * w)],
-            [2 * (x * z - y * w), 2 * (y * z + x * w), 1 - 2 * (x * x + y * y)],
-        ]
-    )
 
 
 class FleetView:
@@ -141,6 +130,8 @@ class FleetView:
         self._last = 0.0
         self._labels: dict[int, Any] = {}
         self._captions: dict[int, str] = {}
+        self.pending_spacing: float | None = None
+        """A pitch the page asked for, applied by the next draw on the main thread."""
         # Only claim a port when this opened one. Borrowing the studio's viewer
         # leaves ``port`` unused, and printing it says the page is somewhere it
         # is not.
@@ -308,7 +299,12 @@ class FleetView:
         return bounds
 
     def set_spacing(self, spacing: float) -> None:
-        """Re-space the grid, live. Draw-time only -- the physics does not move."""
+        """Re-space the grid, live. Draw-time only -- the physics does not move.
+
+        Main thread only: the offsets are a new device array, allocated and
+        copied on the process-global current stream. The page's slider assigns
+        :attr:`pending_spacing` instead and the next draw applies it.
+        """
         grid = [float(spacing)] * 3
         grid[int(self.viewer.model.up_axis)] = 0.0
         self.viewer.set_world_offsets(tuple(grid))
@@ -337,6 +333,9 @@ class FleetView:
         # them -- measured at 3590 per thirty seconds against 640 for the next
         # one. See :mod:`robosimstudio.core.streams`.
         with reading():
+            spacing, self.pending_spacing = self.pending_spacing, None
+            if spacing is not None:
+                self.set_spacing(spacing)
             self.viewer.log_state(fleet.pipeline.state_0)
             self.viewer.end_frame()
             # Inside the guard too: the labels read world_offsets, which is a
@@ -398,10 +397,13 @@ class FleetView:
         because a helper was renamed is worse than one that draws the fleet with
         no captions. The geometry is the point; the text is the annotation.
         """
+        above = (float(position[0]), float(position[1]), float(position[2]) + 1.4)
         handle = self._labels.get(world)
         if handle is not None:
             try:
                 handle.text = caption
+                # The grid can be re-spaced under a label; it follows its world.
+                handle.position = above
                 return
             except Exception:
                 self._labels.pop(world, None)
@@ -410,7 +412,6 @@ class FleetView:
         if scene is None or not hasattr(scene, "add_label"):
             return
         try:
-            above = (float(position[0]), float(position[1]), float(position[2]) + 1.4)
             self._labels[world] = scene.add_label(f"/fleet/w{world}", text=caption, position=above)
         except Exception:
             pass
@@ -420,7 +421,11 @@ class FleetView:
         self.policy = policy
 
     def close(self) -> None:
-        """Retire the labels. A borrowed viewer is left open for its owner."""
+        """Retire the labels, and the viewer if this view opened it.
+
+        A borrowed viewer is left open for its owner. One this view opened is
+        closed, or its server keeps the port bound until the process exits.
+        """
         for handle in self._labels.values():
             try:
                 handle.remove()
@@ -428,3 +433,8 @@ class FleetView:
                 pass
         self._labels.clear()
         self._captions.clear()
+        if self.owns_viewer:
+            try:
+                self.viewer.close()
+            except Exception:
+                pass

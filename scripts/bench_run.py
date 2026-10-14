@@ -583,6 +583,7 @@ def check_graph_claims(jobs: list[JobSpec]) -> None:
     Raises:
         SystemExit: Naming the graph, the pairing and what the binding does claim.
     """
+    from robosimstudio_bench.taskbuild.matrix import declared_key
     from robosimstudio_bench.taskbuild.registry import get_task
 
     for job in jobs:
@@ -597,7 +598,11 @@ def check_graph_claims(jobs: list[JobSpec]) -> None:
         # Raises for an undeclared pairing, which is the right error and a
         # better one than the compile would give -- it arrives before a GPU is
         # touched and it lists what is on offer.
-        binding = task.binding_for(job.scene, job.embodiment, job.gripper)
+        # The declared spelling first, as ``Env`` takes it: naming the hand the
+        # robot already wears is the binding that left it unstated, and
+        # ``binding_for`` compares raw keys.
+        want = declared_key(task, job.scene, job.embodiment, job.gripper) or (job.scene, job.embodiment, job.gripper)
+        binding = task.binding_for(*want)
         if graph in binding.graphs:
             continue
         pairing = f"scene={binding.scene or task.scene!r} embodiment={binding.embodiment or task.embodiment!r}" + (

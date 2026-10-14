@@ -111,9 +111,17 @@ class PanelRecord(Panel):
         self.recorder: EpisodeRecorder | None = None
         self.take = self._next_take()
         self.steps = 0
-        self.kept = 0
+        # Read off the directory rather than started over: a reset that
+        # recompiled the scene rebuilds this panel over the same run, and a
+        # fresh count would say 0 kept beside takes already written, and the
+        # next take's run meta would claim the run began with it.
+        meta = self.store.run_meta if self.root.is_dir() else {}
+        self.kept = len(self.store.results()) if self.root.is_dir() else 0
         self.mode = ""
         self.started = ""
+        """When the current take opened."""
+        self.run_started = str(meta.get("started", "") or "")
+        """When the first take of this run opened; what ``run_meta.json`` says."""
         self.start_requested = False
         self.stop_requested = False
 
@@ -162,6 +170,7 @@ class PanelRecord(Panel):
         self.recorder.begin(replace(self.env.episode, episode_id=self.take), self.env)
         self.steps = 0
         self.started = datetime.now(UTC).isoformat()
+        self.run_started = self.run_started or self.started
         self.mode = ""
         self._state.value = f"take {self.take:04d}: recording"
         self.session.status = f"recording take {self.take:04d}"
@@ -269,7 +278,7 @@ class PanelRecord(Panel):
                 solution="studio",
                 renderer=self.env.renderer_name,
                 device=str(self.env.model.device),
-                started=self.started,
+                started=self.run_started,
                 finished=datetime.now(UTC).isoformat(),
                 episodes=len(rows),
                 successes=sum(1 for row in rows if row.get("success")),
@@ -352,7 +361,11 @@ class PanelVideo(Panel):
         if len(self.buffer) == self.buffer.maxlen:
             self.dropped += 1
         state = self.env.state
-        step: dict[str, np.ndarray] = {"body_q": np.array(state.body_q.numpy(), dtype=np.float64)}
+        # Either channel can be absent: a scene of cloth alone has no bodies,
+        # and Newton leaves ``body_q`` as None rather than an empty array.
+        step: dict[str, np.ndarray] = {}
+        if state.body_q is not None:
+            step["body_q"] = np.array(state.body_q.numpy(), dtype=np.float64)
         if self.env.model.particle_count:
             step["particle_q"] = np.array(state.particle_q.numpy(), dtype=np.float32)
         self.buffer.append(step)

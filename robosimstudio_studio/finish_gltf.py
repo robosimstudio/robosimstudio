@@ -153,6 +153,7 @@ def glb_for(
     uvs: np.ndarray | None = None,
     normals: np.ndarray | None = None,
     smooth: bool = False,
+    cache: bool = True,
 ) -> bytes | None:
     """One prototype mesh, with this colour and finish, as GLB bytes.
 
@@ -175,12 +176,18 @@ def glb_for(
             with its vertices -- a garment's shell has twice the vertices the
             surface it was built from has. Costs about 0.45 ms per 640
             vertices, so it is asked for rather than assumed.
+        cache: Keep the blob for the next caller with the same geometry.
+            ``False`` for a mesh that deforms: its vertices are new every frame,
+            so a kept blob would never be read again and the cache -- cleared
+            only when the model changes -- would grow by one every frame.
 
     Returns:
         The encoded GLB, or ``None`` when trimesh is absent or the export fails
         -- in which case the caller should fall back to a flat batch rather than
         show nothing.
     """
+    if not cache:
+        return _encode(points, faces, color, finish, uvs, normals, smooth)
     key = (_shape_key(points, faces, normals), material_key(color, finish), smooth)
     cached = _CACHE.get(key)
     if cached is not None:

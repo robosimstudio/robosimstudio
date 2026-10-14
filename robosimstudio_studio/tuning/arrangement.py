@@ -25,11 +25,37 @@ from typing import Any
 from robosimstudio.specs.params import REBUILD, RECAPTURE, ParamUI, iter_params
 from robosimstudio.specs.physics import ArrangementSpec, ParamRule, get_backend, get_coupler
 
-from .binder import TIER_MARK, _fmt
+from .binder import _LOG_STEP, _fmt, add_param_widget
 
 __all__ = ["ArrangementBinder"]
 
-_LOG_STEP = 0.01
+
+def _same(value: Any, built: Any, ui: ParamUI | None = None) -> bool:
+    """Whether an edit is back at its built value, as near as its control can say.
+
+    A slider starts at the built value, generally off its own grid, and dragged
+    back it lands on the grid point nearest it -- within half a step, in the
+    slider's own space: log10 for a log field, the field's units for a linear
+    one, and the built value clamped to the range in either, since that is
+    where the slider started. Booleans, strings and number fields compare
+    exactly; nothing rounds what they emit.
+    """
+    if isinstance(value, bool) or isinstance(built, bool) or not isinstance(value, (int, float)):
+        return value == built
+    if not isinstance(built, (int, float)):
+        return False
+    if ui is None or ui.range is None:
+        return value == built
+    low, high = ui.range
+    start = min(max(float(built), low), high)
+    if ui.log:
+        if value <= 0:
+            return False
+        start = start if start > 0 else low
+        return abs(math.log10(float(value)) - math.log10(start)) <= _LOG_STEP / 2 + 1e-9
+    integral = isinstance(built, int)
+    step = ui.step if ui.step is not None else (1.0 if integral else (high - low) / 200.0)
+    return abs(float(value) - start) <= step / 2 + 1e-9
 
 
 class ArrangementBinder:
@@ -52,6 +78,10 @@ class ArrangementBinder:
         self._readouts: dict[str, tuple[Any, ParamUI]] = {}
         self.applied: dict[str, str] = {}
         """Path -> tier, for every edit applied live or left pending rebuild."""
+        self._built_values: dict[str, Any] = {}
+        """Path -> the value its control was built with, i.e. what the scene runs."""
+        self._ui: dict[str, ParamUI] = {}
+        """Path -> how its control was built, for telling a slider set back."""
 
     # ------------------------------------------------------------------ build
     def build(self, gui: Any) -> None:
@@ -91,43 +121,11 @@ class ArrangementBinder:
             self._add(gui, f"collision:{f.name}", f.name, value, ui)
 
     def _add(self, gui: Any, path: str, name: str, value: Any, ui: ParamUI) -> None:
-        label = f"{name}{TIER_MARK.get(ui.tier, '')}"
-        if isinstance(value, bool):
-            widget = gui.add_checkbox(label, initial_value=value)
-            widget.on_update(lambda _, p=path, w=widget: self.pending.__setitem__(p, bool(w.value)))
-        elif isinstance(value, str):
-            if ui.choices:
-                widget = gui.add_dropdown(
-                    label, options=tuple(ui.choices), initial_value=value if value in ui.choices else ui.choices[0]
-                )
-            else:
-                widget = gui.add_text(label, initial_value=value)
-            widget.on_update(lambda _, p=path, w=widget: self.pending.__setitem__(p, str(w.value)))
-        elif ui.log and ui.range is not None:
-            low, high = ui.range
-            start = min(max(float(value), low), high)
-            widget = gui.add_slider(
-                label,
-                min=math.log10(low),
-                max=math.log10(high),
-                step=_LOG_STEP,
-                initial_value=math.log10(start) if start > 0 else math.log10(low),
-            )
-            widget.on_update(lambda _, p=path, w=widget: self.pending.__setitem__(p, 10.0 ** float(w.value)))
-            self._readouts[path] = (gui.add_text(f"  = {name}", initial_value=_fmt(value, ui), disabled=True), ui)
-        elif ui.range is not None:
-            low, high = ui.range
-            integral = isinstance(value, int)
-            step = ui.step if ui.step is not None else (1.0 if integral else (high - low) / 200.0)
-            widget = gui.add_slider(
-                label, min=low, max=high, step=step, initial_value=min(max(float(value), low), high)
-            )
-            cast = int if integral else float
-            widget.on_update(lambda _, p=path, w=widget, c=cast: self.pending.__setitem__(p, c(w.value)))
-        else:
-            widget = gui.add_number(label, initial_value=value)
-            cast = int if isinstance(value, int) else float
-            widget.on_update(lambda _, p=path, w=widget, c=cast: self.pending.__setitem__(p, c(w.value)))
+        self._built_values[path] = value
+        self._ui[path] = ui
+        _, readout = add_param_widget(gui, name, value, ui, lambda v, p=path: self.pending.__setitem__(p, v))
+        if readout is not None:
+            self._readouts[path] = (readout, ui)
 
     # ------------------------------------------------------------------ drain
     def drain(self) -> dict[str, Any]:
@@ -141,7 +139,12 @@ class ArrangementBinder:
         if not self.pending:
             return {}
         taken, self.pending = self.pending, {}
-        for path, value in taken.items():
+        for path, edited in taken.items():
+            built = self._built_values.get(path)
+            back = _same(edited, built, self._ui.get(path))
+            # Set back to where its control started: the scene's own value is
+            # what a rebuild should carry, not the grid point next to it.
+            value = taken[path] = built if back else edited
             self._fold(path, value)
             readout = self._readouts.get(path)
             if readout is not None:
@@ -156,6 +159,9 @@ class ArrangementBinder:
                     self.program._pipeline.invalidate_graph()
             else:
                 self.applied[path] = REBUILD
+            # Set back to what the scene was built with: nothing to rebuild for.
+            if self.applied[path] == REBUILD and back:
+                del self.applied[path]
         return taken
 
     def _fold(self, path: str, value: Any) -> None:

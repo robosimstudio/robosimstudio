@@ -52,7 +52,7 @@ from typing import Any
 
 import numpy as np
 
-from robosimstudio.core.math import quat_to_mat
+from robosimstudio.core.math import quat_to_mat, quat_wxyz_to_xyzw, quat_xyzw_to_wxyz
 from robosimstudio.solvers.ik.solver import POS_TOLERANCE
 
 from .handles import HandleSet
@@ -101,16 +101,6 @@ class _HostPin:
     def release(self) -> None:
         """Let the engine go. Idempotent -- ``unpin`` pops rather than indexes."""
         self.bridge.unpin(self.pin)
-
-
-def _xyzw_to_wxyz(q) -> tuple[float, float, float, float]:
-    x, y, z, w = (float(v) for v in q)
-    return (w, x, y, z)
-
-
-def _wxyz_to_xyzw(q) -> np.ndarray:
-    w, x, y, z = (float(v) for v in q)
-    return np.array([x, y, z, w], dtype=np.float64)
 
 
 def _role_suffix(panel) -> str:
@@ -261,7 +251,7 @@ class PanelArm(Panel):
             line_width=3.0,
             visible=True,
             position=tuple(float(v) for v in self.cursor_pos),
-            wxyz=_xyzw_to_wxyz(self.cursor_quat),
+            wxyz=tuple(quat_xyzw_to_wxyz(self.cursor_quat)),
         )
 
         # The callback is handed a TransformControlsEvent, not the handle -- the
@@ -271,7 +261,7 @@ class PanelArm(Panel):
         @self.gizmo.on_update
         def _(event) -> None:
             self.cursor_pos = np.array(event.target.position, dtype=np.float64)
-            self.cursor_quat = _wxyz_to_xyzw(event.target.wxyz)
+            self.cursor_quat = quat_wxyz_to_xyzw(event.target.wxyz)
             # phase is "start" / "update" / "end". Knowing the drag is over is
             # what lets drain() put the cursor back on the hand without fighting
             # the browser for it mid-gesture.
@@ -423,7 +413,7 @@ class PanelArm(Panel):
         if self.gizmo is None:
             return
         self.gizmo.position = tuple(float(v) for v in position)
-        self.gizmo.wxyz = _xyzw_to_wxyz(quat)
+        self.gizmo.wxyz = tuple(quat_xyzw_to_wxyz(quat))
 
     # ------------------------------------------------------- policy hand-off
     def suspend(self) -> None:
@@ -656,6 +646,10 @@ class PanelObject(Panel):
                 # is the far end rather than anywhere a hand would choose.
                 segments = self.chains[selected].bodies
                 self._attach(int(segments[len(segments) // 2]))
+            elif selected in self.arm_bodies:
+                # The link nearest the tool: an arm is in the dropdown so that
+                # it can be taken by the hand, and is not in `objects` at all.
+                self._attach(int(self.arm_bodies[selected][0]))
             elif chosen is not None:
                 self._attach(int(chosen.body))
         if self.release_requested:
@@ -879,7 +873,7 @@ class PanelCloth(Panel):
             return
         with gui.add_folder("Deformable", expand_by_default=False):
             self._dropdown = gui.add_dropdown("Cloth", options=tuple(self.names), initial_value=self.selected)
-            self._dropdown.on_update(lambda _: setattr(self, "selected", str(self._dropdown.value)))
+            self._dropdown.on_update(lambda _: self._pick(str(self._dropdown.value)))
             grab = gui.add_checkbox("Grab on click", initial_value=self.grab_on_click)
             grab.on_update(lambda _: setattr(self, "grab_on_click", bool(grab.value)))
             # Grabbing a *declared* strip, beside grabbing where you clicked.
@@ -980,6 +974,15 @@ class PanelCloth(Panel):
             # a page offering the towel's three strips while the shirt is
             # selected offers eleven names that are not there.
             self._sync_set_options()
+
+    def _pick(self, name: str) -> None:
+        """The Cloth dropdown changed by hand: the set list follows it.
+
+        Not :meth:`select`, which writes the dropdown's value back and would
+        fire this callback a second time.
+        """
+        self.selected = name
+        self._sync_set_options()
 
     def _sync_set_options(self) -> None:
         """Point the set dropdown at whatever the selected cloth declares."""

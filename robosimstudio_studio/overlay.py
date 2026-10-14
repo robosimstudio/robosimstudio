@@ -52,6 +52,7 @@ from typing import Any
 
 import numpy as np
 
+from robosimstudio.core.math import quat_xyzw_to_wxyz
 from robosimstudio.specs.physics import reads_as
 
 from . import seams
@@ -100,6 +101,12 @@ class PanelOverlay(Panel):
         self._synced = -1
         """Step the drawing was last brought up to date at."""
 
+    def on_reset(self, obs: dict[str, Any], info: dict[str, Any]) -> None:
+        # A reset puts step_count back to 0, under ``_synced``: without this the
+        # gate in drain() holds the features where they were until the new
+        # episode catches up with the old one. -1 makes the next drain redraw.
+        self._synced = -1
+
     # ------------------------------------------------------------------- drain
     def drain(self) -> None:
         """Service the checkboxes, then re-place what is showing. Main thread.
@@ -130,7 +137,8 @@ class PanelOverlay(Panel):
         if not self.showing:
             return
         step = int(getattr(self.env, "step_count", 0))
-        if step - self._synced < max(1, int(getattr(self.session, "render_every", 1))):
+        # ``_synced`` below zero is "never drawn": draw now, whatever the step.
+        if self._synced >= 0 and step - self._synced < max(1, int(getattr(self.session, "render_every", 1))):
             return
         self._synced = step
         self._replace()
@@ -437,5 +445,4 @@ def _basis(normal: np.ndarray) -> tuple[np.ndarray, np.ndarray]:
 
 def _wxyz(quat) -> tuple[float, float, float, float]:
     """xyzw as Newton stores it, to wxyz as viser wants it."""
-    x, y, z, w = (float(v) for v in np.asarray(quat, dtype=np.float64).reshape(-1)[:4])
-    return (w, x, y, z)
+    return tuple(quat_xyzw_to_wxyz(np.asarray(quat, dtype=np.float64).reshape(-1)[:4]))

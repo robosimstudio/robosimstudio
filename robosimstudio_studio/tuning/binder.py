@@ -26,13 +26,13 @@ same contract the existing studio's panels keep.
 from __future__ import annotations
 
 import math
-from collections.abc import Iterable
+from collections.abc import Callable, Iterable
 from dataclasses import fields, replace
 from typing import Any
 
 from robosimstudio.specs.params import TIERS, ParamUI, iter_params
 
-__all__ = ["TIER_MARK", "SpecBinder"]
+__all__ = ["TIER_MARK", "SpecBinder", "add_param_widget"]
 
 TIER_MARK = {"live": "", "recapture": " ~", "rebuild": " *"}
 """Suffix marking what a field costs: nothing live, ``~`` recapture, ``*`` rebuild.
@@ -58,6 +58,59 @@ def _fmt(value: Any, ui: ParamUI) -> str:
     return f"{text} {ui.unit}".strip()
 
 
+def add_param_widget(
+    gui: Any, name: str, value: Any, ui: ParamUI, on_value: Callable[[Any], None]
+) -> tuple[Any, Any | None]:
+    """One control for one described parameter, and its readout if it has one.
+
+    ``on_value`` is called with the edited value in the parameter's own units
+    and type; it should only record (see the module docstring). A log field
+    gets a readout beside it, returned second, ``None`` otherwise.
+    """
+    label = f"{name}{TIER_MARK.get(ui.tier, '')}"
+    readout = None
+    if isinstance(value, bool):
+        widget = gui.add_checkbox(label, initial_value=value)
+        widget.on_update(lambda _, w=widget: on_value(bool(w.value)))
+    elif isinstance(value, str):
+        if ui.choices:
+            initial = value if value in ui.choices else ui.choices[0]
+            widget = gui.add_dropdown(label, options=tuple(ui.choices), initial_value=initial)
+        else:
+            widget = gui.add_text(label, initial_value=value)
+        widget.on_update(lambda _, w=widget: on_value(str(w.value)))
+    elif ui.log and ui.range is not None:
+        low, high = ui.range
+        start = min(max(float(value), low), high)
+        widget = gui.add_slider(
+            label,
+            min=math.log10(low),
+            max=math.log10(high),
+            step=_LOG_STEP,
+            initial_value=math.log10(start) if start > 0 else math.log10(low),
+        )
+        widget.on_update(lambda _, w=widget: on_value(10.0 ** float(w.value)))
+        readout = gui.add_text(f"  = {name}", initial_value=_fmt(value, ui), disabled=True)
+    elif ui.range is not None:
+        low, high = ui.range
+        integral = isinstance(value, int)
+        step = ui.step if ui.step is not None else (1.0 if integral else (high - low) / 200.0)
+        widget = gui.add_slider(
+            label,
+            min=low,
+            max=high,
+            step=step,
+            initial_value=min(max(float(value), low), high),
+        )
+        cast = int if integral else float
+        widget.on_update(lambda _, w=widget, c=cast: on_value(c(w.value)))
+    else:
+        widget = gui.add_number(label, initial_value=value)
+        cast = int if isinstance(value, int) else float
+        widget.on_update(lambda _, w=widget, c=cast: on_value(c(w.value)))
+    return widget, readout
+
+
 class SpecBinder:
     """Widgets for one described dataclass, and the edits they produce.
 
@@ -77,6 +130,7 @@ class SpecBinder:
         self._readouts: dict[str, Any] = {}
         self._ui: dict[str, ParamUI] = {}
         self._unset: tuple[str, ...] = ()
+        self._syncing = False
 
     # ------------------------------------------------------------------ build
     def groups(self) -> list[tuple[str, list[tuple[Any, ParamUI]]]]:
@@ -114,46 +168,17 @@ class SpecBinder:
         self._unset = tuple(unset)
 
     def _add(self, gui: Any, name: str, value: Any, ui: ParamUI) -> None:
-        label = f"{name}{TIER_MARK.get(ui.tier, '')}"
-        if isinstance(value, bool):
-            widget = gui.add_checkbox(label, initial_value=value)
-            widget.on_update(lambda _, n=name, w=widget: self.pending.__setitem__(n, bool(w.value)))
-        elif isinstance(value, str):
-            if ui.choices:
-                widget = gui.add_dropdown(label, options=tuple(ui.choices), initial_value=value)
-            else:
-                widget = gui.add_text(label, initial_value=value)
-            widget.on_update(lambda _, n=name, w=widget: self.pending.__setitem__(n, str(w.value)))
-        elif ui.log and ui.range is not None:
-            low, high = ui.range
-            start = min(max(float(value), low), high)
-            widget = gui.add_slider(
-                label,
-                min=math.log10(low),
-                max=math.log10(high),
-                step=_LOG_STEP,
-                initial_value=math.log10(start) if start > 0 else math.log10(low),
-            )
-            widget.on_update(lambda _, n=name, w=widget: self.pending.__setitem__(n, 10.0 ** float(w.value)))
-            self._readouts[name] = gui.add_text(f"  = {name}", initial_value=_fmt(value, ui), disabled=True)
-        elif ui.range is not None:
-            low, high = ui.range
-            integral = isinstance(value, int)
-            step = ui.step if ui.step is not None else (1.0 if integral else (high - low) / 200.0)
-            widget = gui.add_slider(
-                label,
-                min=low,
-                max=high,
-                step=step,
-                initial_value=min(max(float(value), low), high),
-            )
-            cast = int if integral else float
-            widget.on_update(lambda _, n=name, w=widget, c=cast: self.pending.__setitem__(n, c(w.value)))
-        else:
-            widget = gui.add_number(label, initial_value=value)
-            cast = int if isinstance(value, int) else float
-            widget.on_update(lambda _, n=name, w=widget, c=cast: self.pending.__setitem__(n, c(w.value)))
+        widget, readout = add_param_widget(gui, name, value, ui, lambda v, n=name: self._record(n, v))
+        if readout is not None:
+            self._readouts[name] = readout
         self._widgets[name] = widget
+
+    def _record(self, name: str, value: Any) -> None:
+        # Viser runs on_update synchronously on a ``.value`` assignment, so
+        # set_spec moving a widget would otherwise record its own (clamped,
+        # log-rounded) value as an edit.
+        if not self._syncing:
+            self.pending[name] = value
 
     # ------------------------------------------------------------------ drain
     def drain(self) -> dict[str, Any]:
@@ -181,6 +206,13 @@ class SpecBinder:
         """
         self.spec = spec
         self.pending = {}
+        self._syncing = True
+        try:
+            self._sync_widgets(spec)
+        finally:
+            self._syncing = False
+
+    def _sync_widgets(self, spec: Any) -> None:
         for name, widget in self._widgets.items():
             value = getattr(spec, name, None)
             if value is None:

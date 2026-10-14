@@ -24,6 +24,7 @@ from __future__ import annotations
 
 import importlib.util
 import json
+import traceback
 from pathlib import Path
 from typing import Any
 
@@ -187,7 +188,7 @@ class PanelTask(Panel):
             if self.session.env is not None:
                 count = max(1, int(getattr(self.session.env.task.episodes, "count", 1)))
                 self._episode = gui.add_number(
-                    "Episode", initial_value=int(self.session.episode_id), min=0, max=count - 1, step=1
+                    "Episode", initial_value=min(int(self.session.episode_id), count - 1), min=0, max=count - 1, step=1
                 )
                 self._episode.on_update(lambda _: setattr(self, "episode_changed", True))
             reload_ = gui.add_button("Reload")
@@ -257,7 +258,8 @@ class PanelTask(Panel):
         """
         from robosimstudio.robots.registry import attachable_grippers, list_embodiments
         from robosimstudio.scene.registry import list_cells
-        from robosimstudio_bench.taskbuild.matrix import admits
+        from robosimstudio.specs import Binding
+        from robosimstudio_bench.taskbuild.matrix import admits, pairing_key
 
         slot = ("scene", "embodiment", "gripper").index(axis)
         graphs: dict[str, bool] = {}
@@ -275,11 +277,27 @@ class PanelTask(Panel):
         declared = set(graphs)
         current = (task.scene, task.embodiment, task.gripper)
         catalogue = {"scene": list_cells, "embodiment": list_embodiments, "gripper": attachable_grippers}[axis]
+        # A hand is the same pairing spelled two ways -- ``""`` and the hand the
+        # robot already wears -- so the catalogue's name for a declared
+        # binding's own hand is that binding, not an untried one beside it.
+        same = set()
+        if axis == "gripper":
+            for binding in task.bindings or (task.native_binding,):
+                try:
+                    same.add(pairing_key(task, binding))
+                except LookupError:
+                    pass  # a robot the registry does not know cannot match one
         for value in catalogue():
             if value in declared:
                 continue
             pairing = list(current)
             pairing[slot] = value
+            if same:
+                try:
+                    if pairing_key(task, Binding(scene=pairing[0], embodiment=pairing[1], gripper=value)) in same:
+                        continue
+                except LookupError:
+                    pass
             if admits(task, *pairing)[0]:
                 options[f"{value}  (untried)"] = value
         return options
@@ -353,11 +371,14 @@ class PanelTask(Panel):
         if self.select_requested and not self.reload_requested and unchanged:
             self.select_requested = False
             return  # a dropdown fired without changing anything
+        episode = self.session.episode_id
         if selected != task.full_name:
             # Another task's pairings are its own, and the three dropdowns still
             # show this one's. Load it on its native pairing; its own options
-            # arrive with the panel the load rebuilds.
+            # arrive with the panel the load rebuilds. Its episodes are its own
+            # too, and it may have fewer than the one this task is on.
             scene = embodiment = gripper = ""
+            episode = 0
         self.select_requested = self.reload_requested = False
         pairing = " @ ".join(x for x in (selected, " / ".join(y for y in (scene, embodiment, gripper) if y)) if x)
         self._readout.value = f"loading {pairing} ..."
@@ -366,7 +387,7 @@ class PanelTask(Panel):
         # this line may touch self.
         self.session.load_request = (
             selected,
-            self.session.episode_id,
+            episode,
             scene,
             embodiment,
             gripper,
@@ -529,6 +550,7 @@ class PanelSolution(Panel):
         self.start_requested = False
         self.stop_requested = False
         self.message = ""
+        self.suspended: list[Any] = []
 
     @property
     def choices(self) -> tuple[str, ...]:
@@ -606,16 +628,44 @@ class PanelSolution(Panel):
             self._state.value = f"{type(exc).__name__}: {exc}"[:200]
             return
 
-        obs, info = self.session.reset_env()
-        self.session.obs = obs
+        session = self.session
+        model = getattr(session.env, "model", None)
+        try:
+            # An episode whose model key differs recompiles the scene in here,
+            # as in ``reset_now``, and a failed recompile pauses the page the
+            # same way rather than ending its loop.
+            obs, info = session.reset_env()
+        except Exception as exc:
+            self.stop(f"{type(exc).__name__}: {exc}"[:200])
+            session.set_paused(True)
+            print(f"[studio] episode {session.episode_id} did not reset for the policy; paused:")
+            traceback.print_exc()
+            return
+        if getattr(session.env, "model", None) is not model:
+            # The Run was forwarded in the same drain that asked for a new
+            # episode, and this reset is the one that recompiled: the page is
+            # rebuilt over the new model the way ``reset_now`` rebuilds it --
+            # which retires this panel with the rest -- and the policy, built
+            # against the old one, is not started on it.
+            self.stop("the episode recompiled the scene; press Run again")
+            session._drop_panels()
+            session._bind(session.env)
+            session.obs = obs
+            session.on_reset(obs, info)
+            session.status = self.message
+            return
+        session.obs = obs
         # Panels first, then the policy: on_reset re-syncs the gizmos to the arm
         # the reset just moved, and this panel's own on_reset is a no-op while
         # ``running`` is still False -- which is why it is set last.
         self.session.on_reset(obs, info)
         self.policy.reset(obs, info)
         # The policy owns the arm; a gizmo move or gizmo-tracking IK on top of
-        # it would fight every waypoint it commands.
-        for panel in self.session.arms.values():
+        # it would fight every waypoint it commands. Only the arms still
+        # driven by their gizmos: one a leader holds is the leader's to give
+        # back, as in ``routine.py``.
+        self.suspended = [panel for panel in self.session.arms.values() if not panel.suspended]
+        for panel in self.suspended:
             panel.suspend()
         self.running = True
         self.steps = 0
@@ -659,11 +709,20 @@ class PanelSolution(Panel):
             last step rather than the state a stopped policy left behind.
         """
         env = self.env
-        mode = self.policy.control_mode
-        action = self.policy.get_action(self.session.obs)
-        obs, reward, terminated, truncated, info = env.step(action, mode=mode)
-        self.session.obs = obs
-        self.policy.on_step(obs, reward, info)
+        try:
+            mode = self.policy.control_mode
+            action = self.policy.get_action(self.session.obs)
+            obs, reward, terminated, truncated, info = env.step(action, mode=mode)
+            self.session.obs = obs
+            self.policy.on_step(obs, reward, info)
+        except Exception as exc:
+            # Reported the way a build failure is, and the arm given back:
+            # raised, it would end the page's loop, or on a page that catches
+            # it, fire again every tick with the gizmos still suspended.
+            print("[studio] the policy failed:")
+            traceback.print_exc()
+            self.stop(f"{type(exc).__name__}: {exc}"[:200])
+            return None, env.control_mode
         self.steps += 1
         if terminated or truncated:
             self.finish(info)
@@ -695,8 +754,9 @@ class PanelSolution(Panel):
             self.policy = None
         was_running, self.running = self.running, False
         if was_running:
-            for panel in self.session.arms.values():
+            for panel in self.suspended:
                 panel.resume()
+        self.suspended = []
         if message:
             self.message = message
             self._state.value = message

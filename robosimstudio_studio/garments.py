@@ -627,6 +627,8 @@ class ViewerStudio(newton.viewer.ViewerViser):
         self._live_shapes: frozenset[int] = frozenset()
         self._pbr_handles: dict[str, dict[tuple, Any]] = {}
         self._pbr_groups: dict[str, tuple] = {}
+        self._host_shape_color: np.ndarray | None = None
+        """``model.shape_color`` read back once per repack, for the PBR batches."""
         self._static_guard: tuple | None = None
         self._static_skip_ok = False
         super().__init__(*args, **kwargs)
@@ -688,6 +690,7 @@ class ViewerStudio(newton.viewer.ViewerViser):
         self._retire_garment_nodes()
         self._garments, self._sheets, self._tubes = [], [], []
         self._leftover_faces = None
+        self._host_shape_color = None
         super().clear_model()
 
     def _retire_garment_nodes(self) -> None:
@@ -730,6 +733,7 @@ class ViewerStudio(newton.viewer.ViewerViser):
         else:
             self._static_batches = set()
         self._static_guard = self._layer_pose()
+        self._host_shape_color = None
         # A new model has to re-declare it: inheriting the last scene's answer
         # would leave a page that once showed the polish strip repacking colours
         # for every scene it is asked for afterwards.
@@ -782,11 +786,13 @@ class ViewerStudio(newton.viewer.ViewerViser):
         """
         if self.model_changed or self._live_colors or self._shape_colors_dirty:
             self._shape_colors_dirty = False
+            self._host_shape_color = None
             super()._sync_shape_colors_from_model()
 
     def mark_shape_colors_dirty(self) -> None:
         """Make the next frame repack and re-push shape colours."""
         self._shape_colors_dirty = True
+        self._host_shape_color = None
 
     def set_finishes(self, finishes: Mapping[int, Any], live_shapes: Sequence[int] = ()) -> None:
         """Adopt the scene's per-shape materials, which turns PBR drawing on.
@@ -848,7 +854,8 @@ class ViewerStudio(newton.viewer.ViewerViser):
             and opacities is None
             and self._static_skip_ok
             and name in self._static_batches
-            and self._qualify(name) in self._scene_handles
+            # Either path's nodes: the PBR one pops the flat handle when it draws.
+            and (self._qualify(name) in self._scene_handles or self._pbr_handles.get(self._qualify(name)))
         ):
             return
         if self._finishes and not hidden and self._log_pbr_instances(name, mesh, xforms, scales):
@@ -889,7 +896,11 @@ class ViewerStudio(newton.viewer.ViewerViser):
         xforms_np = self._to_numpy(xforms)
         if xforms_np is None or len(xforms_np) != len(shapes):
             return False
-        colors = self.model.shape_color.numpy() if getattr(self.model, "shape_color", None) is not None else None
+        # Read back once per repack rather than once per batch per frame: the
+        # colours only move when _sync_shape_colors_from_model repacks them.
+        if self._host_shape_color is None and getattr(self.model, "shape_color", None) is not None:
+            self._host_shape_color = self.model.shape_color.numpy()
+        colors = self._host_shape_color
         groups = group_by_material(shapes, colors, self._finishes, DEFAULT_FINISH)
 
         positions = xforms_np[:, :3].astype(np.float32)
@@ -1195,6 +1206,9 @@ class ViewerStudio(newton.viewer.ViewerViser):
             finish,
             uvs=None,
             smooth=True,
+            # Deforming: these vertices are new every frame, and a cached blob
+            # would be one more entry nothing reads until the model changes.
+            cache=False,
         )
         if blob is None:
             return False

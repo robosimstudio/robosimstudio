@@ -141,6 +141,11 @@ class PanelRenderView(Panel):
         self.budget = RenderBudget(target_fps=fps, max_load=max_load)
         self._renderer: Any = None
         self._built: tuple | None = None
+        """The first client's renderer and its key -- what the readout reports."""
+        self._renderers: dict[tuple, Any] = {}
+        """Every live renderer, by ``(width, height, model, locked)``: one per
+        viewport shape, so a second browser of another aspect gets a frame of
+        its own shape rather than the first browser's, stretched."""
         self._hidden: list[Any] = []
         self._frames = 0
         self._rate = 0.0
@@ -234,14 +239,28 @@ class PanelRenderView(Panel):
         clients = list(self.server.get_clients().values())
         if not clients:
             return
-        if not self._ensure(clients[0]):
-            return
         started = time.time()
-        if self.backend == PUBLIC:
-            self._renderer.accumulate = self.passes[0] if now - self._touched < BUSY_SECONDS else self.passes[1]
-        for client in clients:
-            if not self._push(client):
+        used = [self._key(client) for client in clients]
+        if any(key is None for key in used):
+            return
+        # A shape nobody has any more -- a browser resized or closed, a 'Lock
+        # to' changed -- holds a renderer's worth of GPU for nothing. Closed
+        # before anything is built, not after: building the new shape while
+        # the old one is still alive doubles the peak, and on a contended card
+        # that is the difference between a resize and a fallback to tiled.
+        for key in [k for k in self._renderers if k not in used]:
+            self._close(self._renderers.pop(key))
+            if self._built == key:
+                self._renderer = self._built = None
+        for client, key in zip(clients, used, strict=True):
+            if not self._ensure(client, key):
                 return
+            if self.backend == PUBLIC:
+                accumulate = self.passes[0] if now - self._touched < BUSY_SECONDS else self.passes[1]
+                self._renderers[key].accumulate = accumulate
+            if not self._push(client, key):
+                return
+        self._renderer, self._built = self._renderers[used[0]], used[0]
         self._hide_model()
         cost = time.time() - started
         self.budget.record(started=started, cost=cost)
@@ -346,8 +365,14 @@ class PanelRenderView(Panel):
             return None
         return next((c for c in self.env.cameras if c.name == self.locked), None)
 
-    def _ensure(self, client) -> bool:
-        """Build a renderer for this viewport's size, if it needs one."""
+    def _key(self, client) -> tuple | None:
+        """The renderer this viewport needs, as ``(width, height, model, locked)``.
+
+        Keyed per client shape rather than built once from the first browser:
+        one renderer pushed to every client paired the first browser's size
+        with each client's own ``fov_y``, and viser stretched it over a window
+        of another aspect. ``None`` while the browser has not said its size.
+        """
         locked = self._locked_camera()
         try:
             if locked is not None:
@@ -360,11 +385,14 @@ class PanelRenderView(Panel):
                 width = max(64, int(int(client.camera.image_width) * self.scale))
                 height = max(64, int(int(client.camera.image_height) * self.scale))
         except Exception:
-            return False
-        key = (width, height, self.env.model, self.locked)
-        if self._built == key and self._renderer is not None:
+            return None
+        return (width, height, self.env.model, self.locked)
+
+    def _ensure(self, client, key: tuple) -> bool:
+        """Build the renderer of this key, if there is not one yet. False when it would not build."""
+        if key in self._renderers:
             return True
-        self._release()
+        width, height = key[0], key[1]
         spec = self._spec(client, width, height)
         if spec is None:
             return False
@@ -372,12 +400,13 @@ class PanelRenderView(Panel):
             # rgb alone: the depth channel costs 13 ms a frame to encode and
             # composites nothing. accumulate is set per frame in `drain`.
             extra = {"accumulate": self.passes[0]} if self.backend == PUBLIC else {}
-            self._renderer = self.env.make_renderer(self.backend, cameras=[spec], channels=["rgb"], **extra)
-            self._renderer.render(self.env.state)
+            renderer = self.env.make_renderer(self.backend, cameras=[spec], channels=["rgb"], **extra)
+            self._renderers[key] = renderer
+            renderer.render(self.env.state)
         except Exception as exc:  # no GPU, a contended card, a GPU the rule misjudged
             self._failed(f"{self.backend} would not build -- {type(exc).__name__}: {exc}")
             return False
-        self._built, self._note = key, ""
+        self._note = ""
         self.budget.reset()
         self._hide_model()
         return True
@@ -424,15 +453,15 @@ class PanelRenderView(Panel):
             channels=("rgb",),
         )
 
-    def _push(self, client) -> bool:
-        """Render this client's camera and make the frame its viewport."""
-        width, height = self._built[0], self._built[1]
-        spec = self._spec(client, width, height)
+    def _push(self, client, key: tuple) -> bool:
+        """Render this client's camera with the renderer of its shape and make the frame its viewport."""
+        renderer = self._renderers[key]
+        spec = self._spec(client, key[0], key[1])
         if spec is None:
             return False
-        self._renderer.cameras[0] = spec
+        renderer.cameras[0] = spec
         try:
-            frames = self._renderer.render(self.env.state)
+            frames = renderer.render(self.env.state)
         except Exception as exc:
             self._failed(f"{self.backend} stopped rendering -- {type(exc).__name__}: {exc}")
             return False
@@ -560,7 +589,7 @@ class PanelRenderView(Panel):
 
     def on_reset(self, obs: dict[str, Any], info: dict[str, Any]) -> None:
         """A reset may have rebuilt the model, which the renderer's stage is of."""
-        if self._built is not None and self._built[2] is not self.env.model:
+        if any(key[2] is not self.env.model for key in self._renderers):
             self._release()
 
     def _release(self) -> None:
@@ -571,16 +600,21 @@ class PanelRenderView(Panel):
         result outputs when a renderer goes without being closed, and a page
         that swaps tasks builds one per swap.
         """
-        if self._renderer is not None:
-            try:
-                self._renderer.close()
-            except Exception:
-                pass
-            self._renderer = None
+        for renderer in self._renderers.values():
+            self._close(renderer)
+        self._renderers.clear()
+        self._renderer = None
         self._built = None
         self._frames = 0
         self._window = (time.time(), 0)
         self.budget.reset()
+
+    @staticmethod
+    def _close(renderer) -> None:
+        try:
+            renderer.close()
+        except Exception:
+            pass
 
     def close(self) -> None:
         """Release the renderer and give the raster scene back. Main thread."""

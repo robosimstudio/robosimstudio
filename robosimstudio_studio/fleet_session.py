@@ -218,7 +218,9 @@ class FleetSession:
         self.fleet.reset_wave(padded)
         snapshot = self.fleet.snapshot()
         for slot in self.slots:
-            slot.settled_body_q = snapshot.body(slot.world).copy()
+            # The start pose the fleet captured at reset, the one baseline the
+            # evaluator and the policy's tools both measure "has it moved" from.
+            slot.settled_body_q = self.fleet.settled_body_q(slot.world)
             if slot.evaluator is not None:
                 slot.evaluator.reset(self.fleet.context(slot.world, snapshot, settled_body_q=slot.settled_body_q))
         self.policy.reset_wave(self.slots)

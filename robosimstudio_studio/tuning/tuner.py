@@ -118,6 +118,7 @@ class MaterialTuner:
         """Back to what this cloth was actually built with."""
         name = self.selected
         self.working[name] = self.built[name]
+        self.origin[name] = ""
         self.live[name].write(self.working[name])
         self.apply_contact()
 

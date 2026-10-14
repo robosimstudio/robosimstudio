@@ -81,6 +81,7 @@ class PanelTune(Panel):
         self.save_requested = False
         self._cloth: Any = None
         self._preset: Any = None
+        self._presets: tuple[str, ...] = ()
         self._calibration: Any = None
         self._pending: Any = None
         self._save_name: Any = None
@@ -110,8 +111,8 @@ class PanelTune(Panel):
             if len(self.tuner.names) > 1:
                 self._cloth = gui.add_dropdown("Cloth", options=self.tuner.names, initial_value=self.tuner.selected)
                 self._cloth.on_update(lambda _: setattr(self, "cloth_requested", str(self._cloth.value)))
-            presets = ["(as built)", *list_materials()]
-            self._preset = gui.add_dropdown("Preset", options=tuple(presets), initial_value=presets[0])
+            self._presets = ("(as built)", *list_materials())
+            self._preset = gui.add_dropdown("Preset", options=self._presets, initial_value=self._presets[0])
             self._preset.on_update(lambda _: setattr(self, "preset_requested", str(self._preset.value)))
             revert = gui.add_button("Revert to as built")
             revert.on_click(lambda _: setattr(self, "revert_requested", True))
@@ -145,19 +146,25 @@ class PanelTune(Panel):
                 name, self.cloth_requested = self.cloth_requested, ""
                 self.tuner.select(name)
                 self.binder.set_spec(self.tuner.material)
+                self._sync_preset()
                 self.refresh()
                 return
             if self.preset_requested:
                 preset, self.preset_requested = self.preset_requested, ""
-                if preset != "(as built)":
+                # "(as built)" is the built material, so picking it is a revert
+                # rather than nothing.
+                if preset == "(as built)":
+                    self.revert_requested = True
+                else:
                     self.tuner.adopt(preset)
                     self.binder.set_spec(self.tuner.material)
                     self.refresh()
-                return
+                    return
             if self.revert_requested:
                 self.revert_requested = False
                 self.tuner.revert()
                 self.binder.set_spec(self.tuner.material)
+                self._sync_preset()
                 self.refresh()
                 return
             if self.save_requested:
@@ -178,6 +185,20 @@ class PanelTune(Panel):
             self.tuner.set_field(field, value)
         if changed or self.physics.drain():
             self.refresh()
+
+    def _sync_preset(self) -> None:
+        """Show the selected cloth's preset in the dropdown.
+
+        Otherwise it keeps naming one the cloth no longer wears, and since a
+        dropdown only reports a change, picking that preset again does nothing.
+        The assignment fires ``on_update`` like a click does, so the request it
+        leaves behind is dropped here rather than adopted next drain.
+        """
+        if self._preset is None:
+            return
+        preset = self.tuner.preset_name()
+        self._preset.value = preset if preset in self._presets else self._presets[0]
+        self.preset_requested = ""
 
     def _rebuild(self) -> None:
         """Ask the loop to recompile this task with the tuned material.
@@ -264,6 +285,8 @@ class PanelReadings(Panel):
         self._rows: dict[str, Any] = {}
         self._note: Any = None
         self._entity: Any = None
+        self._gui: Any = None
+        self._folder: Any = None
 
     def _cloth(self) -> Any:
         deformables = {n: e for n, e in self.session.env.scene.by_name.items() if e.carries_particles}
@@ -317,7 +340,8 @@ class PanelReadings(Panel):
     def build(self, gui: Any) -> None:
         if self._cloth() is None:
             return
-        with gui.add_folder("Readings", expand_by_default=False):
+        self._gui = gui
+        with gui.add_folder("Readings", expand_by_default=False) as self._folder:
             measure = gui.add_button("Measure (settle first)")
             measure.on_click(lambda _: setattr(self, "measure_requested", True))
             resettle = gui.add_button("Re-settle & re-baseline")
@@ -326,7 +350,29 @@ class PanelReadings(Panel):
             for reading in self._read():
                 self._rows[reading.name] = gui.add_text(reading.name, initial_value=reading.text(), disabled=True)
 
+    def _busy(self) -> str:
+        """Why the pipeline cannot be stepped from here just now, or ``""``.
+
+        Measure and re-settle step the pipeline directly, around ``env.step``:
+        no step count, no evaluator, nothing filmed, and particle velocities
+        zeroed under whatever is holding the cloth.
+        """
+        session = self.session
+        driver = getattr(session, "driver", None)
+        if driver is not None and driver.running:
+            return "a policy is driving; stop it first"
+        record = getattr(session, "record", None)
+        if record is not None and record.recording:
+            return "a take is recording; stop it first"
+        return ""
+
     def drain(self) -> None:
+        if self.measure_requested or self.resettle_requested:
+            busy = self._busy()
+            if busy:
+                self.measure_requested = self.resettle_requested = False
+                self._note.value = busy
+                return
         if self.measure_requested:
             self.measure_requested = False
             settled, steps = relax(self.session.env.pipeline)
@@ -336,8 +382,12 @@ class PanelReadings(Panel):
             self.resettle_requested = False
             entity = self._cloth()
             if entity is not None:
-                entity.settle(self.session.env.pipeline)
-                entity.snapshot_rest(self.session.env.pipeline)
+                pipeline = self.session.env.pipeline
+                entity.settle(pipeline)
+                # The settle stepped the whole particle array, so every thing that
+                # shares it takes its baseline again, not only this cloth.
+                for thing in getattr(pipeline, "particle_settles", {}).get("things", [entity]):
+                    thing.snapshot_rest(pipeline)
                 self._note.value = "re-settled; baseline moved with it"
             self.refresh()
 
@@ -346,6 +396,13 @@ class PanelReadings(Panel):
             row = self._rows.get(reading.name)
             if row is not None:
                 row.value = reading.text()
+            elif self._folder is not None:
+                # A garment's declared states only read once a step has been
+                # scored, which is after ``build`` on every load.
+                with self._folder:
+                    self._rows[reading.name] = self._gui.add_text(
+                        reading.name, initial_value=reading.text(), disabled=True
+                    )
 
     def on_reset(self, obs: Any, info: Any) -> None:
         del obs, info

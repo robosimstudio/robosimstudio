@@ -93,10 +93,16 @@ class PanelRegions(Panel):
             show = gui.add_checkbox("Show", initial_value=self.show)
             show.on_update(lambda _: setattr(self, "show", bool(show.value)))
             labels = gui.add_checkbox("Names", initial_value=self.show_labels)
-            labels.on_update(lambda _: setattr(self, "show_labels", bool(labels.value)))
+            labels.on_update(lambda _: self._set_labels(bool(labels.value)))
             tint = gui.add_checkbox("Tint when satisfied", initial_value=self.tint)
             tint.on_update(lambda _: setattr(self, "tint", bool(tint.value)))
             self._readout = gui.add_text("Regions", initial_value=f"{len(self.regions)}", disabled=True)
+
+    def _set_labels(self, on: bool) -> None:
+        # Forget the last sync so the next drain re-poses even on a paused
+        # page, which is where labels are put up or taken down.
+        self.show_labels = on
+        self._synced = -1
 
     def bounds(self, name: str, body_q) -> tuple[np.ndarray, np.ndarray]:
         """One region's world corners, through the atom's own arithmetic.
@@ -176,12 +182,20 @@ class PanelRegions(Panel):
                     )
                 else:
                     label.position = where
+            else:
+                # Names unticked: take the label down rather than leave it
+                # frozen where the region last was.
+                label = self._nodes.pop(f"{name}/label", None)
+                if label is not None:
+                    label.remove()
         self._retint()
 
     def _retint(self) -> None:
-        """Recolour only what changed, since a colour write is a viser message."""
-        if not self.tint:
-            return
+        """Recolour only what changed, since a colour write is a viser message.
+
+        Runs with tint off too: :meth:`_color` is then ``IDLE_COLOR``, which is
+        what repaints a box left green when the box was unticked.
+        """
         for name in self.regions:
             box = self._nodes.get(f"{name}/box")
             colour = self._color(name)
