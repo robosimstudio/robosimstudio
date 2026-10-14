@@ -80,8 +80,13 @@ class MyCloth(ParticleMixin, rss.Entity):
         return self.probe
 
     def on_scene_ready(self, pipeline) -> None:
-        """The scene can step: record the state a reset returns to."""
-        self.snapshot_rest(pipeline)
+        """The scene can step: record the state a reset returns to.
+
+        ``join_settle`` rather than ``snapshot_rest``: it puts this thing on the
+        scene's one particle-settle record, so a cloth or soft body that settles
+        after it re-baselines this thing too, and a reset here does not undo it.
+        """
+        self.join_settle(pipeline)
 
 
 def main() -> None:

@@ -28,10 +28,14 @@ import robosimstudio as rss
 
 
 @wp.kernel
-def _drag_kernel(body_qd: wp.array(dtype=wp.spatial_vector), damping: float):
-    """Viscous drag on every link, as if the chain were falling through syrup."""
-    i = wp.tid()
-    body_qd[i] = body_qd[i] * damping
+def _drag_kernel(body_qd: wp.array(dtype=wp.spatial_vector), indices: wp.array(dtype=int), damping: float):
+    """Viscous drag on every link, as if the chain were falling through syrup.
+
+    ``body_qd`` is the whole model's, robot included, so the kernel visits only
+    the chain's own bodies.
+    """
+    b = indices[wp.tid()]
+    body_qd[b] = body_qd[b] * damping
 
 
 @dataclass(frozen=True, kw_only=True)
@@ -128,7 +132,17 @@ class MyChain(rss.Entity):
         hooks.add("post_solve", self._drag, name="chain-drag", cadence=1)
 
     def _drag(self, state, dt) -> None:
-        wp.launch(_drag_kernel, dim=state.body_qd.shape[0], inputs=[state.body_qd, float(self.spec.damping)])
+        if not self.bodies:
+            return
+        indices = getattr(self, "_drag_indices", None)
+        if indices is None or indices.device != state.body_qd.device:
+            indices = self._drag_indices = wp.array(self.bodies, dtype=int, device=state.body_qd.device)
+        wp.launch(
+            _drag_kernel,
+            dim=len(self.bodies),
+            inputs=[state.body_qd, indices, float(self.spec.damping)],
+            device=indices.device,
+        )
 
 
 def main():

@@ -41,7 +41,7 @@ def rod(
             **It is an end, not the middle.** The chain runs ``length`` along
             ``along`` from this point, so centring a rod on the bench means
             offsetting by half its length -- ``examples/10_rope/00_cable.py`` writes
-            ``at=(0.0, -length / 2, radius + 0.06)`` for exactly that reason.
+            ``at=(x, -length / 2, radius + 0.01)`` for exactly that reason.
         along: Direction the chain runs in. Normalised for you.
         segments: Capsules. 28 is the shipped cable's; more is smoother and
             slower, and past roughly 40 the per-body contact buffer becomes the

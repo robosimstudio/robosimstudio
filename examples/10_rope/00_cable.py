@@ -24,9 +24,9 @@ from robosimstudio.robots.registry import get_embodiment
 
 
 def main():
-    length = 0.6  # end to end [m]
+    length = 0.62  # end to end [m]
     radius = 0.011  # of each capsule [m]
-    segments = 28  # capsules; their spacing must stay above twice the radius
+    segments = 28  # capsules; their spacing (22.1 mm) must stay above twice the radius
     x = -0.05  # the line the cable lies on, in the bench's frame [m]: 50 mm toward the arms, inside their reach
     # The right arm's joints [rad]: tool centre 100 mm over the bench above capsule 13, by
     # the middle, pointing down, jaws across the cable. Solved with ``sim.arm("right").solve_q_full``.

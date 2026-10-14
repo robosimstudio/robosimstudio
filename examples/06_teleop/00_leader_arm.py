@@ -65,7 +65,7 @@ def main(argv=None) -> None:
 
     check_leaders(sim, leaders)
     connect = simulated.connector(simulated.homes(sim, leaders)) if args.simulate else None
-    controllers = {name: open_leader(leader, connect) for name, leader in leaders.items()}
+    controllers = {}
 
     def page(studio) -> None:
         for name in controllers:
@@ -77,6 +77,9 @@ def main(argv=None) -> None:
         studio.each_step(drive)
 
     try:
+        # Opened inside the ``try``, so a leader that fails to open still closes the ones before it.
+        for name, leader in leaders.items():
+            controllers[name] = open_leader(leader, connect)
         rss.view(sim, page=page, port=args.port, share=args.share)
     except KeyboardInterrupt:
         pass

@@ -15,21 +15,18 @@ Needs the ``[genesis]`` extra (Linux or Windows x86 with an NVIDIA GPU).
 * :func:`robosimstudio.view` to drive the arm from the page
 """
 
-from dataclasses import replace
-
 import robosimstudio as rss
-from robosimstudio.specs.physics import GENERIC, backend
 
 
 def main():
     # ``GENERIC`` routes cloth to VBD, which is the measured default and stays
     # the default; naming Genesis is one entry, and that is the whole edit.
-    physics = replace(
-        GENERIC,
+    physics = rss.replace(
+        rss.GENERIC,
         backends=(
-            ("articulated", backend("mujoco")),
-            ("cloth", backend("genesis", substeps=2)),
-            ("*", backend("vbd")),
+            ("articulated", rss.backend("mujoco")),
+            ("cloth", rss.backend("genesis", substeps=2)),
+            ("*", rss.backend("vbd")),
         ),
     )
     scene = rss.Scene(cell="bench_075", name="genesis_cloth", physics=physics)

@@ -26,8 +26,8 @@ from robosimstudio.robots.registry import get_embodiment
 def main():
     cell = "bench_0728"
     cube = (0.0, -0.20)  # where the cube sits, in the bench's work-surface frame [m]
-    # The right arm's joints [rad] with its tool centre 120 mm over the cube's top,
-    # pointing down, jaws closing across the bench. Solved once with
+    # The right arm's joints [rad] with its tool centre about 95 mm over the cube's top
+    # (145 mm over the bench), pointing down, jaws closing across the bench. Solved once with
     # ``sim.arm("right").solve_q_full``; move the cube, solve again.
     over_cube = (0.274, 2.114, 2.003, -1.459, 0.0, 0.274)
 

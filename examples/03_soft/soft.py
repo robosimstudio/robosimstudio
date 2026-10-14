@@ -17,6 +17,7 @@ Run ``00_sponge.py`` beside it first. Copy this file to write a kind of your own
 
 from __future__ import annotations
 
+from collections.abc import Callable
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import TYPE_CHECKING, Any, ClassVar
@@ -34,16 +35,13 @@ from robosimstudio.domains.capabilities import host_bridge as _locate_bridge
 from robosimstudio.domains.selection import resolve_selector
 from robosimstudio.scene.entity import Entity
 from robosimstudio.scene.registry import register_entity
-from robosimstudio.specs.base import Vec3
+from robosimstudio.specs.asset import AssetSpec
+from robosimstudio.specs.base import Quat, Vec3
 from robosimstudio.specs.params import LIVE, REBUILD, ui
-from robosimstudio.specs.physics import HostActor, register_domain
+from robosimstudio.specs.physics import HostActor, SimRequirements, register_domain
 
 if TYPE_CHECKING:
-    from collections.abc import Callable
-
     from robosimstudio.core.pipeline import ScenePipeline
-    from robosimstudio.specs.base import Quat
-    from robosimstudio.specs.physics import SimRequirements
 
 __all__ = [
     "FIRM_FOAM",
@@ -51,6 +49,7 @@ __all__ = [
     "SOFT_FOAM",
     "SOFT_FOAM_MATERIAL",
     "EntitySoft",
+    "EntitySoftSuperdex",
     "SoftMaterialSpec",
     "SoftSpec",
     "lame_from_young_poisson",
@@ -393,6 +392,11 @@ class EntitySoft(ParticleMixin, Entity):
 
     spec: SoftSpec
     domain = "soft"
+    hosted: ClassVar[bool] = False
+    """Whether a host engine integrates this body, so its particles are built inactive to Newton.
+
+    Decided by which class the compiler picks for the arrangement, the only thing known at build:
+    the solvers copy the flags when they are made, before scene-ready can find a bridge."""
 
     def __init__(self, spec: SoftSpec, *, world: int = 0) -> None:
         super().__init__(spec, world=world)
@@ -405,7 +409,7 @@ class EntitySoft(ParticleMixin, Entity):
         """The settled state a reset restores."""
         self.bridge = None
         """The SuperDex bridge simulating this body, found at scene-ready. Stays ``None`` when the
-        arrangement puts ``soft`` on another solver: the entity builds the same model either way."""
+        arrangement puts ``soft`` on another solver."""
 
     # -------------------------------------------------------------- phase 1
     def build(self, builder: newton.ModelBuilder, episode) -> None:
@@ -445,13 +449,15 @@ class EntitySoft(ParticleMixin, Entity):
             )
         else:
             self._add_grid(builder, spec, material, corner, rot, k_mu, k_lambda)
-        # Inactive to every Newton solver and to soft-contact generation, whose kernels gate on this
-        # flag. VBD's velocity write-back and its self-contact triangle detector do not, and are
-        # handled where the backend ticks. A mesh from a file must be flagged too, or a whole-model
-        # VBD integrates it alongside SuperDex.
-        flags = builder.particle_flags
-        for index in range(start, int(builder.particle_count)):
-            flags[index] = int(flags[index]) & ~int(newton.ParticleFlags.ACTIVE)
+        # Under a host engine, inactive to every Newton solver and to soft-contact generation, whose
+        # kernels gate on this flag. VBD's velocity write-back and its self-contact triangle detector
+        # do not, and are handled where the backend ticks. A mesh from a file must be flagged too, or
+        # a whole-model VBD integrates it alongside SuperDex. On a Newton solver the body stays active:
+        # VBD skips an inactive particle, and the body would never move.
+        if self.hosted:
+            flags = builder.particle_flags
+            for index in range(start, int(builder.particle_count)):
+                flags[index] = int(flags[index]) & ~int(newton.ParticleFlags.ACTIVE)
         self._anchor_nodes = self._resolve_nodes(builder, start, "anchored")
         self._rigid_nodes = self._resolve_nodes(builder, start, "rigid")
         if len(self._anchor_nodes) and len(self._rigid_nodes):
@@ -512,11 +518,15 @@ class EntitySoft(ParticleMixin, Entity):
     # -------------------------------------------------------------- phase 2
     # -------------------------------------------------------------- phase 4
     def on_scene_ready(self, pipeline: ScenePipeline) -> None:
-        """Settle the body, then record what a reset returns to."""
+        """Settle the body, then record what a reset returns to.
+
+        A settle steps the whole scene and a reset restores the last whole-array snapshot, so the
+        particle things in a scene share one record on the pipeline: a settle one of them already
+        ran is not run again, and each that has snapshotted snapshots again after one that is.
+        """
         self.bridge = _locate_bridge(pipeline, self.name)
         self.resolve_sets(pipeline.state_0)
-        self.settle(pipeline)
-        self.snapshot_rest(pipeline)
+        self.join_settle(pipeline, (int(self.spec.settle_frames), int(self.spec.settle_substeps)))
 
     def settle(self, pipeline: ScenePipeline) -> None:
         """Let the body come to rest. Where it lands is the start state.
@@ -626,6 +636,15 @@ DOMAIN = register_domain(
 )
 
 register_entity("soft")(EntitySoft)
+
+
+class EntitySoftSuperdex(EntitySoft):
+    """:class:`EntitySoft` for SuperDex, which integrates the body itself: Newton must leave it alone."""
+
+    hosted = True
+
+
+register_entity("soft", engine="superdex")(EntitySoftSuperdex)
 
 
 # -----------------------------------------------------------------------------

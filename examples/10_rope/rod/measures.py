@@ -140,6 +140,25 @@ register_atom(
 )
 
 
+def _in_plane_normal_to(positions: np.ndarray, origin, direction) -> np.ndarray:
+    """Positions relative to ``origin``, in a 2-D frame of the plane normal to ``direction``, ``[n, 2]``.
+
+    What lets :func:`winding_turns`, which projects onto world XY, measure about
+    an axis that is not vertical -- a doorknob's or a hook's. For a vertical
+    axis the frame is world X and Y, so a peg reads exactly as it always did. A
+    zero direction is taken as vertical.
+    """
+    d = np.asarray(direction, dtype=np.float64)
+    norm = float(np.linalg.norm(d))
+    d = d / norm if norm > 1e-12 else np.array([0.0, 0.0, 1.0])
+    ref = np.array([1.0, 0.0, 0.0]) if abs(d[0]) < 0.9 else np.array([0.0, 1.0, 0.0])
+    u = ref - d * float(np.dot(ref, d))
+    u /= float(np.linalg.norm(u))
+    v = np.cross(d, u)
+    rel = np.asarray(positions, dtype=np.float64) - np.asarray(origin, dtype=np.float64)
+    return np.stack([rel @ u, rel @ v], axis=1)
+
+
 @handler(
     "winding_turns",
     kinds=("", "axis"),
@@ -148,8 +167,8 @@ register_atom(
 )
 def _winding_about_axis(positions: np.ndarray, axis: dict, *, near_radius: float = NEAR_RADIUS) -> dict:
     """Dispatch entry: a chain's positions against an ``axis`` feature in world."""
-    origin = np.asarray(axis["origin"], dtype=np.float64)
-    turns, engaged = winding_turns(positions, origin[:2], near_radius=near_radius)
+    planar = _in_plane_normal_to(positions, axis["origin"], axis.get("direction", (0.0, 0.0, 1.0)))
+    turns, engaged = winding_turns(planar, (0.0, 0.0), near_radius=near_radius)
     return {"turns": turns, "engaged": engaged}
 
 
@@ -162,8 +181,8 @@ def _winding_about_axis(positions: np.ndarray, axis: dict, *, near_radius: float
 def _winding_about_rod(positions: np.ndarray, rod: dict, *, near_radius: float = NEAR_RADIUS) -> dict:
     """A rod *is* an axis for this purpose -- its midline, in world."""
     ends = np.asarray(rod["axis"], dtype=np.float64)
-    centre = ends.mean(axis=0)
-    turns, engaged = winding_turns(positions, centre[:2], near_radius=near_radius)
+    planar = _in_plane_normal_to(positions, ends.mean(axis=0), ends[1] - ends[0])
+    turns, engaged = winding_turns(planar, (0.0, 0.0), near_radius=near_radius)
     return {"turns": turns, "engaged": engaged}
 
 

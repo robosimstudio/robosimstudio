@@ -284,6 +284,7 @@ class RodSpec:
     with contact between the two switched off. Read by the foreign-engine
     implementation, which is the one whose bodies can be joined this way."""
     sim: SimRequirements | None = None
+    """The asset's physics declaration, or ``None`` for the rod default."""
 
     def __post_init__(self) -> None:
         if self.nodes is None:
@@ -309,8 +310,6 @@ class RodSpec:
         axis = np.asarray(self.direction, dtype=np.float64)
         axis = axis / max(float(np.linalg.norm(axis)), 1.0e-12)
         return start + np.outer(np.linspace(0.0, float(self.length), int(self.segments) + 1), axis)
-
-    """The asset's physics declaration, or ``None`` for the rod default."""
 
 
 # ---------------------------------------------------------------------------

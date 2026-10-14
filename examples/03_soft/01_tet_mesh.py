@@ -26,6 +26,8 @@ import robosimstudio as rss
 
 HEX_TETS = np.array([[0, 1, 3, 4], [1, 2, 3, 6], [1, 4, 5, 6], [3, 4, 6, 7], [1, 3, 4, 6]], dtype=np.int64)
 """One hexahedron as five tetrahedra: ring ``k``'s four corners, then ring ``k + 1``'s."""
+HEX_TETS_MIRRORED = np.array([[0, 1, 2, 5], [0, 2, 3, 7], [0, 5, 7, 4], [2, 7, 5, 6], [0, 2, 7, 5]], dtype=np.int64)
+"""The other diagonals: alternated with HEX_TETS, neighbours cut their shared quad alike."""
 
 
 def write_o_ring(path: Path, *, major: float, minor: float, around: int) -> None:
@@ -36,10 +38,10 @@ def write_o_ring(path: Path, *, major: float, minor: float, around: int) -> None
     # Four corners per ring, in the order HEX_TETS expects.
     corners = [(-1, -1), (-1, 1), (1, 1), (1, -1)]
     vertices = np.concatenate([[(major + minor * r) * rad + minor * z * up for r, z in corners] for rad in radial])
-    # Local corners 0-3 are ring k and 4-7 are ring k + 1, which wraps: a loop, not a bar.
-    tets = np.concatenate(
-        [np.where(HEX_TETS < 4, HEX_TETS + 4 * k, (HEX_TETS - 4) + 4 * ((k + 1) % around)) for k in range(around)]
-    )
+    if around % 2:  # Corners 0-3 are ring k, 4-7 ring k + 1 (wrapping); the splits must alternate.
+        raise ValueError(f"around must be even for the alternating split, got {around}")
+    split = [(HEX_TETS, HEX_TETS_MIRRORED)[k % 2] for k in range(around)]
+    tets = np.concatenate([np.where(s < 4, s + 4 * k, s - 4 + 4 * ((k + 1) % around)) for k, s in enumerate(split)])
     np.savez(path, vertices=vertices, tets=tets)
 
 
@@ -55,13 +57,12 @@ def main():
 
     scene = rss.Scene(cell=cell, physics=physics, name="tet_mesh")
     scene.add(rss.robot(embodiment))
-    with tempfile.TemporaryDirectory() as scratch:
-        mesh = Path(scratch) / "o_ring.npz"
-        write_o_ring(mesh, major=major, minor=minor, around=28)
-        # The line this example is about. Yours names a file you already have.
-        scene.add(rss.SoftSpec(name="gasket", asset=rss.AssetSpec(path=str(mesh)), pose=(0.0, 0.0, 0.09)))
-        sim = scene.build(control_mode="joint_position")
-
+    # Somewhere that outlives the build: the scene names this file, and a rebuild reads it again.
+    mesh = Path(tempfile.gettempdir()) / "rss_o_ring.npz"
+    write_o_ring(mesh, major=major, minor=minor, around=28)
+    # The line this example is about. Yours names a file you already have.
+    scene.add(rss.SoftSpec(name="gasket", asset=rss.AssetSpec(path=str(mesh)), pose=(0.0, 0.0, 0.09)))
+    sim = scene.build(control_mode="joint_position")
     rss.view(sim)
 
 

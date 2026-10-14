@@ -56,7 +56,7 @@ from robosimstudio.scene.registry import register_entity
 from robosimstudio.specs.asset import AssetSpec
 from robosimstudio.specs.base import Quat, Vec3
 from robosimstudio.specs.params import LIVE, REBUILD, RECAPTURE, ui
-from robosimstudio.specs.physics import HostActor, register_domain
+from robosimstudio.specs.physics import HostActor, SimRequirements, register_domain
 
 __all__ = [
     "BETA_MAX",
@@ -629,17 +629,16 @@ class EntityCloth(ParticleMixin, Entity):
                 label=spec.name,
             )
         else:
-            import trimesh
-
-            mesh = trimesh.load(str(resolve_asset(spec.asset)), force="mesh")
-            self.surface_count = len(mesh.vertices)
+            # Through ``surface``, so ``simplify_faces`` holds here too. Already scaled.
+            vertices, faces = self.surface()
+            self.surface_count = len(vertices)
             builder.add_cloth_mesh(
                 pos=pos,
                 rot=rot,
-                scale=float(spec.asset.scale),
+                scale=1.0,
                 vel=wp.vec3(0.0, 0.0, 0.0),
-                vertices=[wp.vec3(*[float(c) for c in v]) for v in np.asarray(mesh.vertices)],
-                indices=[int(i) for i in np.asarray(mesh.faces, dtype=np.int64).reshape(-1)],
+                vertices=[wp.vec3(*[float(c) for c in v]) for v in vertices],
+                indices=[int(i) for i in faces.reshape(-1)],
                 density=material.areal_density,
                 tri_ke=material.tri_ke,
                 tri_ka=material.tri_ka,
@@ -712,8 +711,22 @@ class EntityCloth(ParticleMixin, Entity):
     def apply_material(self, model: newton.Model) -> None:
         """Write the contact parameters onto the finalized model, before the solvers are built."""
         material = self.spec.material
-        if material.zero_rest_angle:
-            model.edge_rest_angle.zero_()
+        if material.zero_rest_angle and getattr(model, "edge_indices", None) is not None:
+            # This sheet's edges only: another sheet in the model may keep its creases. The range
+            # is the template's; a replicated model holds a copy of it in every world, at the
+            # particle stride, and every copy is this sheet. Column 2 of an edge row is a vertex
+            # on the edge, so it is always a real particle.
+            lo, hi = self.range.particles
+            count = int(getattr(self.worlds, "num_worlds", 1) or 1)
+            stride = int(getattr(self.worlds, "particles_per_world", 0) or 0)
+            on_edge = model.edge_indices.numpy().reshape(-1, 4)[:, 2]
+            mine = np.zeros(len(on_edge), dtype=bool)
+            for world in range(count):
+                mine |= (on_edge >= lo + world * stride) & (on_edge < hi + world * stride)
+            if mine.any():
+                rest = model.edge_rest_angle.numpy()
+                rest[mine] = 0.0
+                model.edge_rest_angle.assign(rest)
         model.soft_contact_ke = material.contact_ke
         model.soft_contact_kd = material.contact_kd
         model.soft_contact_mu = material.friction
@@ -760,10 +773,14 @@ class EntityCloth(ParticleMixin, Entity):
 
     # -------------------------------------------------------------- phase 4
     def on_scene_ready(self, pipeline: ScenePipeline) -> None:
-        """Settle the sheet, then record the state every reset restores exactly."""
+        """Settle the sheet, then record the state every reset restores exactly.
+
+        A settle steps the whole scene and a reset restores the last whole-array snapshot, so the
+        particle things in a scene share one record on the pipeline: a settle one of them already
+        ran is not run again, and each that has snapshotted snapshots again after one that is.
+        """
         self.resolve_sets(pipeline.state_0)
-        self.settle(pipeline)
-        self.snapshot_rest(pipeline)
+        self.join_settle(pipeline, (int(self.spec.settle_frames), int(self.spec.settle_substeps)))
 
     def settle(self, pipeline: ScenePipeline) -> None:
         """Step the sheet at a fine substep dt, then restore the run's own."""
@@ -1221,12 +1238,13 @@ register_atom(
 def _settle_speed(snapshot, cloth: str) -> dict[str, Any]:
     probe = snapshot.particles[cloth]
     speed = float(probe.settle_speed(cloth, quantile=SETTLE_QUANTILE))
+    # Reported, not gated: it tells "settled" from "one particle is stuck in a contact".
+    max_speed = float(probe.max_speed(cloth))
     return {
         "speed": speed,
-        # Reported, not gated: it tells "settled" from "one particle is stuck in a contact".
-        "max_speed": float(probe.max_speed(cloth)),
+        "max_speed": max_speed,
         f"{cloth}/settle_speed": speed,
-        f"{cloth}/max_speed": float(probe.max_speed(cloth)),
+        f"{cloth}/max_speed": max_speed,
     }
 
 

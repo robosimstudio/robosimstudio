@@ -36,6 +36,7 @@ this reads it: the same escape hatch every other entity here offers.
 
 from __future__ import annotations
 
+import inspect
 import math
 from typing import TYPE_CHECKING, Any
 
@@ -56,11 +57,14 @@ if TYPE_CHECKING:
 
 __all__ = ["EntityRodSuperdex"]
 
-INACTIVE = int(newton.ParticleFlags.ACTIVE) & ~int(newton.ParticleFlags.ACTIVE)
+DEFAULT_FLAGS = int(inspect.signature(newton.ModelBuilder.add_particle).parameters["flags"].default)
+"""The flags ``ModelBuilder.add_particle`` gives a particle when it is not told."""
+
+INACTIVE = DEFAULT_FLAGS & ~int(newton.ParticleFlags.ACTIVE)
 """The default particle flags with ``ACTIVE`` cleared.
 
 Written as the mask rather than as ``0`` because zero is only correct while
-``ACTIVE`` is the only flag there is, and this says what it means: every Newton
+``ACTIVE`` is the only default flag, and this says what it means: every Newton
 solver and the soft-contact pass gate on this bit, so a whole-model VBD in the
 same scene integrates past these nodes without touching them. SuperDex writes
 the same arrays from the eager phase instead. Newton owns the memory; the
@@ -216,24 +220,15 @@ class EntityRodSuperdex(ParticleMixin, Centerline, Entity):
     # -------------------------------------------------------------- phase 2
     # -------------------------------------------------------------- phase 4
     def on_scene_ready(self, pipeline: ScenePipeline) -> None:
-        """Let it settle, then record what a reset returns to."""
+        """Bind the host bridge and record the state a reset returns to (no settling).
+
+        A reset restores the whole particle array, and a sheet or soft body in the same scene
+        settles it at its own scene-ready. So this cable joins the record those share on the
+        pipeline: it snapshots now, and again after any later settle, as they do; its rest is
+        never the array from before a settle that ran after it.
+        """
         self.bridge = host_bridge(pipeline, self.name)
-        state = pipeline.state_0
-        self.rest = {
-            "particle_q": state.particle_q.numpy().copy(),
-            "particle_qd": state.particle_qd.numpy().copy(),
-        }
-        # Every world's probe, not just the first: this class re-implements
-        # `ParticleMixin.snapshot_rest` inline rather than calling it, so it did
-        # not get that method's fix and worlds 1..W-1 would have had no baseline
-        # to measure against. Unreachable today -- the compiler refuses to
-        # replicate a scene with this entity in it, since a foreign engine
-        # builds one scene from the whole model -- and cheap to keep right for
-        # whoever lifts that refusal.
-        for probe in self.probes or ([self.probe] if self.probe is not None else []):
-            if probe is not None:
-                probe.update(state)
-                probe.snapshot_baseline()
+        self.join_settle(pipeline)
 
     # -------------------------------------------------------------- phase 5
     # ---------------------------------------------------------------- runtime
@@ -346,9 +341,18 @@ class EntityRodSuperdex(ParticleMixin, Centerline, Entity):
         return True
 
     def published_states(self, snapshot) -> dict[str, float]:
-        """The same two flags the capsule chain publishes, so a goal reads either."""
-        del snapshot
-        return {"held": float(self.holding(0)), "anchor_held": float(self.holding(1))}
+        """The same four keys the capsule chain publishes, so a goal reads either.
+
+        The two latch flags always; ``n_segments`` and ``length_m`` from a
+        snapshot this cable's nodes can be read off, and left out with none
+        (a bare ``None``) rather than reported as a 0 m rod.
+        """
+        flags = {"held": float(self.holding(0)), "anchor_held": float(self.holding(1))}
+        chain = self.centerline(snapshot) if snapshot is not None else np.zeros((0, 3))
+        if len(chain) < 2:
+            return flags
+        length = float(np.linalg.norm(np.diff(chain, axis=0), axis=1).sum())
+        return {**flags, "n_segments": float(len(chain) - 1), "length_m": length}
 
     def centerline(self, snapshot) -> np.ndarray:
         """This centerline's nodes, in order -- this implementation's :class:`Centerline`.

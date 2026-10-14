@@ -119,9 +119,11 @@ class CableLatchSpec:
 def _bow_cable(points, quats, spec, episode):
     """Bend a straight spawn into a half-cosine bow, per episode. See ``bow_range``.
 
-    Returns the inputs untouched when the range is zero-width, so the straight
-    path stays byte-identical rather than merely equivalent -- a rod that moved
-    by a rounding error would change every recorded episode in the corpus.
+    Returns the inputs untouched when nothing was drawn (no bow, wave, shift or
+    yaw), so the straight path stays byte-identical rather than merely
+    equivalent -- a rod that moved by a rounding error would change every
+    recorded episode in the corpus. The four are independent: a shift or a yaw
+    with no bow still moves the rod.
 
     The quaternions are turned with the curve. ``add_rod`` reads them as each
     segment's frame, and leaving them straight while bending the positions
@@ -130,8 +132,6 @@ def _bow_cable(points, quats, spec, episode):
     physics bug and is a spawn bug.
     """
     lo, hi = (float(v) for v in getattr(spec, "bow_range", (0.0, 0.0)))
-    if abs(hi - lo) <= 0.0 and abs(lo) <= 0.0:
-        return points, quats
     # The EPISODE's unit fraction, scaled by the CABLE's range. Read from the
     # sampled overrides rather than re-derived from the seed: an override is
     # what the model key is built from, so a bow taken straight off the seed
@@ -140,10 +140,27 @@ def _bow_cable(points, quats, spec, episode):
     # rod. Measured before it was: four episodes, four identical bows.
     overrides = dict(getattr(episode, "overrides", ()) or ())
     unit = overrides.get("cable_bow")
-    if unit is None:
-        return points, quats
-    amplitude = 0.5 * (lo + hi) + 0.5 * (hi - lo) * float(unit)
+    amplitude = 0.0
+    if unit is not None and (abs(hi - lo) > 0.0 or abs(lo) > 0.0):
+        amplitude = 0.5 * (lo + hi) + 0.5 * (hi - lo) * float(unit)
     if abs(amplitude) < 1.0e-6:
+        amplitude = 0.0
+    wave_lo, wave_hi = (float(v) for v in getattr(spec, "wave_range", (0.0, 0.0)))
+    u_wave = overrides.get("cable_wave")
+    w_amp = 0.0
+    if u_wave is not None and abs(wave_hi - wave_lo) > 0.0:
+        w_amp = 0.5 * (wave_lo + wave_hi) + 0.5 * (wave_hi - wave_lo) * float(u_wave)
+    shift_lo, shift_hi = (float(v) for v in getattr(spec, "shift_range", (0.0, 0.0)))
+    u_shift = overrides.get("cable_shift")
+    shift = 0.0
+    if u_shift is not None and abs(shift_hi - shift_lo) > 0.0:
+        shift = 0.5 * (shift_lo + shift_hi) + 0.5 * (shift_hi - shift_lo) * float(u_shift)
+    yaw_lo, yaw_hi = (float(v) for v in getattr(spec, "yaw_range", (0.0, 0.0)))
+    u_yaw = overrides.get("cable_yaw")
+    yaw = 0.0
+    if u_yaw is not None and abs(yaw_hi - yaw_lo) > 0.0:
+        yaw = 0.5 * (yaw_lo + yaw_hi) + 0.5 * (yaw_hi - yaw_lo) * float(u_yaw)
+    if amplitude == 0.0 and w_amp == 0.0 and shift == 0.0 and yaw == 0.0:
         return points, quats
 
     axis = np.asarray([float(v) for v in spec.direction], dtype=np.float64)
@@ -171,10 +188,7 @@ def _bow_cable(points, quats, spec, episode):
     # begin about 60 mm off the spawn line, and a rod that reaches one scores
     # before the robot has moved.
     offset = amplitude * np.sin(np.pi * t)  # zero at both tips, max at the middle
-    wave_lo, wave_hi = (float(v) for v in getattr(spec, "wave_range", (0.0, 0.0)))
-    u_wave = overrides.get("cable_wave")
-    if u_wave is not None and abs(wave_hi - wave_lo) > 0.0:
-        w_amp = 0.5 * (wave_lo + wave_hi) + 0.5 * (wave_hi - wave_lo) * float(u_wave)
+    if w_amp != 0.0:
         offset = offset + w_amp * np.sin(2.0 * np.pi * t)
 
     # TWO MORE DEGREES OF FREEDOM, both optional and both zero when unsampled.
@@ -194,17 +208,13 @@ def _bow_cable(points, quats, spec, episode):
     # sampled overrides for the same reason the bow is -- an override is what the
     # model key is built from, and anything re-derived from the seed here would
     # vary in this function and not in the key.
-    shift_lo, shift_hi = (float(v) for v in getattr(spec, "shift_range", (0.0, 0.0)))
-    yaw_lo, yaw_hi = (float(v) for v in getattr(spec, "yaw_range", (0.0, 0.0)))
-    u_shift = overrides.get("cable_shift")
-    u_yaw = overrides.get("cable_yaw")
-    if u_shift is not None and abs(shift_hi - shift_lo) > 0.0:
-        offset = offset + (0.5 * (shift_lo + shift_hi) + 0.5 * (shift_hi - shift_lo) * float(u_shift))
+    if shift != 0.0:
+        offset = offset + shift
 
     bowed = pts + offset[:, None] * lateral[None, :]
 
-    if u_yaw is not None and abs(yaw_hi - yaw_lo) > 0.0:
-        ang = math.radians(0.5 * (yaw_lo + yaw_hi) + 0.5 * (yaw_hi - yaw_lo) * float(u_yaw))
+    if yaw != 0.0:
+        ang = math.radians(yaw)
         # About the rod's own midpoint, so a yaw does not also translate it.
         mid = bowed.mean(axis=0)
         c, s_ = math.cos(ang), math.sin(ang)
@@ -881,7 +891,8 @@ class EntityRod(Centerline, Entity):
             return set()
         labels = list(model.body_label)
         bodies = {b for b in range(model.body_count) if labels[b].split("/")[-1] in tip_labels}
-        return {s for s in range(model.shape_count) if int(model.shape_body.numpy()[s]) in bodies}
+        body = model.shape_body.numpy()
+        return {s for s in range(model.shape_count) if int(body[s]) in bodies}
 
     def apply_model_materials(self, model: newton.Model) -> None:
         """The reference's post-finalize material pass, restated.
@@ -1043,11 +1054,12 @@ class EntityRod(Centerline, Entity):
         # recompute every world than to reason about which of them is stale.
         newton.eval_fk(self._fleet_model, pipeline.state_0.joint_q, pipeline.state_0.joint_qd, pipeline.state_0)
         wp.copy(pipeline.state_1.body_q, pipeline.state_0.body_q)
-        # Pin the anchored segment to the left hand. A pinch is not a clamp:
+        # Pin the anchored segment to the anchor hand. A pinch is not a clamp:
         # under the wind's drag the rod slides axially through the pads, and
-        # the anchor's whole job is that it does not.
-        if self._hold_flag is not None:
-            self.hold_segment(True, pipeline.state_0, arm="left", slot=1, world=world)
+        # the anchor's whole job is that it does not. A cable that permits
+        # contact grasps only stays a plain pinch.
+        if self._hold_flag is not None and spec.allow_grasp_latch:
+            self.hold_segment(True, pipeline.state_0, arm=arm, slot=1, world=world)
 
     # -------------------------------------------------------------- phase 5
     def reset(self, pipeline, episode, *, world: int = 0) -> None:
@@ -1496,13 +1508,13 @@ class EntityRod(Centerline, Entity):
         # suite's cable reader still has to know how much rod there is, and
         # `get_states` was the one generic read that answered for the cable
         # at all -- with two latch flags. Both are properties of the built
-        # rod, not of this instant, so they are cheap and never wrong.
-        try:
+        # rod, not of this instant, so they are cheap and never wrong. With no
+        # poses to read (a bare ``None``) the length is left out rather than
+        # reported as 0 m, and a rod centerline() cannot read raises.
+        shape = {"n_segments": float(len(self.bodies))}
+        if getattr(snapshot, "body_q", None) is not None:
             chain = self.centerline(snapshot)
-            length = float(np.linalg.norm(np.diff(chain, axis=0), axis=1).sum()) if len(chain) >= 2 else 0.0
-        except Exception:
-            length = 0.0
-        shape = {"length_m": length, "n_segments": float(len(self.bodies))}
+            shape["length_m"] = float(np.linalg.norm(np.diff(chain, axis=0), axis=1).sum()) if len(chain) >= 2 else 0.0
         if self._hold_flag is None:
             return {"held": 0.0, "anchor_held": 0.0, **shape}
         # This world's two rows. The context carries the world because an
