@@ -42,6 +42,9 @@ dependencies = [
     # every scene with a YAM in it needs this. Pinned: the pieces, and with them
     # the contact shapes, change between versions.
     "coacd==1.0.11",
+    # A cloth or soft mesh with simplify_faces set is coarsened by trimesh's
+    # simplify_quadric_decimation, which imports this at call time.
+    "fast_simplification",
     # The IK solver. Every arm is solved by PyRoKi from its URDF (jax, jaxls,
     # yourdfpy come with it); an arm that ships no URDF falls back to Newton's
     # own solver without being asked. Pinned to a commit because PyPI has no

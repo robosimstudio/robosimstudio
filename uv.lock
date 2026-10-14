@@ -4490,6 +4490,7 @@ name = "robosimstudio"
 source = { editable = "." }
 dependencies = [
     { name = "coacd" },
+    { name = "fast-simplification" },
     { name = "imageio", extra = ["ffmpeg"] },
     { name = "newton", extra = ["sim"] },
     { name = "numpy" },
@@ -4547,6 +4548,7 @@ rtx = [
 [package.metadata]
 requires-dist = [
     { name = "coacd", specifier = "==1.0.11" },
+    { name = "fast-simplification" },
     { name = "genesis-world", marker = "extra == 'genesis'", specifier = "==1.3.*" },
     { name = "graph-as-policy", marker = "extra == 'gap'", git = "https://github.com/KeplerC/graph-as-policy.git?rev=09e45f8de27bc1a29629382ed7c2b9b4b384b3d6" },
     { name = "graph-as-policy-core", marker = "extra == 'gap'", git = "https://github.com/KeplerC/graph-as-policy.git?subdirectory=gap-core&rev=09e45f8de27bc1a29629382ed7c2b9b4b384b3d6" },
