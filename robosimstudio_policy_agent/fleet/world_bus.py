@@ -54,6 +54,12 @@ class _Request:
     done: threading.Event = field(default_factory=threading.Event)
     result: Any = None
     error: BaseException | None = None
+    state: str = "queued"
+    """``queued``, ``claimed`` by whoever services or releases it, then
+    ``answered``; or ``abandoned`` by a poster that timed out before the
+    answer. Moved under :attr:`ServiceQueue._claims`, so exactly one side
+    wins: an abandoned request is never run if still queued, and never unparks
+    its thread, which has left this wait and may be inside another."""
 
 
 class ServiceQueue:
@@ -74,6 +80,7 @@ class ServiceQueue:
         """The fleet's park table, or ``None``. See :class:`.barrier.ParkTable`."""
         self._queue: queue.Queue[_Request] = queue.Queue()
         self._closed = threading.Event()
+        self._claims = threading.Lock()
         self.owner_thread: int | None = None
 
     def post(self, world: int, fn, args: tuple, kwargs: dict, timeout: float) -> Any:
@@ -96,7 +103,19 @@ class ServiceQueue:
         with park_if(self.parks, world):
             self._queue.put(request)
             if not request.done.wait(timeout):
-                raise BusTimeout(f"{getattr(fn, '__name__', fn)} was not serviced within {timeout:.0f} s")
+                # Withdraw before giving up. A request left queued would run
+                # after its caller had been told it failed, and its unpark would
+                # clear whatever wait this thread is in by then -- a world read
+                # as running while it is blocked.
+                with self._claims:
+                    abandoned = request.state != "answered"
+                    if abandoned:
+                        request.state = "abandoned"
+                if abandoned:
+                    raise BusTimeout(f"{getattr(fn, '__name__', fn)} was not serviced within {timeout:.0f} s")
+                # Answered in the same instant: its unpark was for this very
+                # wait, and the wake-up follows it at once.
+                request.done.wait()
         if request.error is not None:
             raise request.error
         return request.result
@@ -111,13 +130,14 @@ class ServiceQueue:
                 request = self._queue.get_nowait()
             except queue.Empty:
                 break
+            if not self._claim(request):
+                continue
             try:
                 request.result = request.fn(*request.args, **request.kwargs)
             except BaseException as exc:
                 request.error = exc
             finally:
-                self._unpark(request)
-                request.done.set()
+                self._answer(request)
                 serviced += 1
         return serviced
 
@@ -129,9 +149,10 @@ class ServiceQueue:
                 request = self._queue.get_nowait()
             except queue.Empty:
                 break
+            if not self._claim(request):
+                continue
             request.error = BusTimeout("the fleet's service queue closed")
-            self._unpark(request)
-            request.done.set()
+            self._answer(request)
 
     def reopen(self) -> None:
         """Serve again after a close. What starting the next wave does.
@@ -153,13 +174,32 @@ class ServiceQueue:
             except queue.Empty:
                 break
             if request.world == int(world):
+                if not self._claim(request):
+                    continue
                 request.error = BusTimeout(f"world {world} finished while a call was pending")
-                self._unpark(request)
-                request.done.set()
+                self._answer(request)
             else:
                 held.append(request)
         for request in held:
             self._queue.put(request)
+
+    def _claim(self, request: _Request) -> bool:
+        """Take a request to service or release, unless its poster withdrew it."""
+        with self._claims:
+            if request.state != "queued":
+                return False
+            request.state = "claimed"
+            return True
+
+    def _answer(self, request: _Request) -> None:
+        """Unpark a claimed request's thread and wake it, unless it gave up waiting."""
+        with self._claims:
+            answered = request.state == "claimed"
+            if answered:
+                request.state = "answered"
+        if answered:
+            self._unpark(request)
+        request.done.set()
 
     def _unpark(self, request: _Request) -> None:
         if self.parks is not None:

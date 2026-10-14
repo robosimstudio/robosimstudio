@@ -8,10 +8,10 @@ real perception stack would have to earn.
 
 That is a legitimate and useful mode, and it is why the privilege boundary is
 structural rather than a convention. These tools exist only in the in-process
-executor. A policy served over a socket receives only camera frames,
+executor. A policy served over a socket is to receive only camera frames,
 proprioception and intrinsics, and
-:func:`~robosimstudio_policy_agent.contract.assert_non_privileged` refuses to send
-anything else -- so a graph developed against ``sim.get_object_pose`` simply
+:func:`~robosimstudio_policy_agent.contract.assert_non_privileged` is the check a
+bridge sender runs to refuse anything else (none ships in this package) -- so a graph developed against ``sim.get_object_pose`` simply
 cannot run over the bridge until it has been rewritten to look.
 
 Every tool reads the simulator on the owner thread: off the
@@ -511,7 +511,11 @@ class SimTools:
             # an agent reaching for the collision world lost its episode to a
             # crash rather than a refusal. Found by the surface smoke.
             identity = {str(object_name).lower(), str(handle.category).lower()}
-            if any(token in value or value in token for token in excluded_categories for value in identity):
+            # A bodiless handle (body -1) has nothing to exclude, and -1 in the
+            # set would drop every world-static shape below.
+            if int(handle.body) >= 0 and any(
+                token in value or value in token for token in excluded_categories for value in identity
+            ):
                 excluded_bodies.add(int(handle.body))
 
         model = self.env.scene.index_model

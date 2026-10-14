@@ -25,7 +25,7 @@ from robosimstudio.arms import arm_order
 from robosimstudio.core.math import quat_xyzw_to_wxyz
 from robosimstudio.solvers.ik.tool_frame import tcp_pose, tool_offsets
 
-__all__ = ["RENDER", "camera_blocks", "format_runtime_obs", "world_observation"]
+__all__ = ["RENDER", "camera_blocks", "format_runtime_obs", "world_observation", "world_observations"]
 
 
 class _HostRows:
@@ -61,11 +61,24 @@ pass of the rig rather than in one pass each.
 """
 
 
-def world_observation(fleet, world: int, snapshot) -> dict[str, Any]:
+def world_observations(fleet, snapshot) -> list[dict[str, Any]]:
+    """Every world's raw observation, as :func:`world_observation` builds each.
+
+    The grippers' commands are read once for the fleet and handed in: the bank
+    answers with a copy of all W of them, so reading it per world made one
+    publish O(W^2) -- 8k copies of a 16 KB array per tick at 4096 worlds.
+    """
+    commands = {name: bank.commands() for name, bank in fleet.grippers.items()}
+    return [world_observation(fleet, world, snapshot, commands=commands) for world in range(fleet.num_worlds)]
+
+
+def world_observation(fleet, world: int, snapshot, *, commands: dict[str, Any] | None = None) -> dict[str, Any]:
     """One world's raw observation, in the keys the formatter expects.
 
     Built by the fleet's own reader rather than by the runtime's, so what counts
     as an observation stays a property of the scene and not of the graph.
+    *commands* is each gripper bank's ``commands()``, read once by a caller
+    observing every world (:func:`world_observations`); ``None`` reads the bank.
     """
     embodiment = fleet.scene.embodiment
     obs: dict[str, Any] = {"instruction": ""}
@@ -108,7 +121,10 @@ def world_observation(fleet, world: int, snapshot) -> dict[str, Any]:
         position, quat = tcp_pose(body_q, index.ee_body, *tool_offsets(fleet, name))
         proprio[f"{name}/ee_pose"] = np.concatenate([position, quat]).astype(np.float64)
         bank = fleet.grippers.get(name)
-        command = float(bank.commands()[world]) if bank is not None else 0.0
+        if bank is None:
+            command = 0.0
+        else:
+            command = float((commands[name] if commands is not None else bank.commands())[world])
         # The **measured** closure, as the single-world observation publishes
         # it, and the command beside it. The command alone used to stand in
         # for both, and the difference between them is the only signal a hand

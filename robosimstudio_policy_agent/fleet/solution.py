@@ -107,8 +107,6 @@ class _FleetServo:
         from robosimstudio.core.math import quat_wxyz_to_xyzw
         from robosimstudio.solvers.ik.solver import POS_TOLERANCE, ROT_TOLERANCE_DEG
 
-        if not 0.0 < float(speed_scale) <= 1.0:
-            raise ValueError(f"speed_scale must be in (0, 1], got {speed_scale}")
         position = np.array(
             [float(pose["position"]["x"]), float(pose["position"]["y"]), float(pose["position"]["z"])],
             dtype=np.float64,
@@ -244,8 +242,10 @@ class SolutionGraphBatched(FleetSolution):
         self.graph = graph
         self.perception = str(perception or "")
         """The ``perception`` workflow input, as the single-world policy passes it.
-        It used to land in ``kwargs`` unread, so a graph with a perception
-        router ran its oracle body on every world of a ``--perception vision`` run."""
+        Which body a graph's perception subgraphs run -- see the single-world
+        policy's own attribute for what the values mean. It used to land in
+        ``kwargs`` unread, so a graph with a perception router ran its oracle
+        body on every world of a ``--perception vision`` run."""
         # The registry set every world executes with, resolved from the
         # checkout rather than the cwd -- see robosimstudio_policy_agent.skills.
         self.skills = pinned_registries(skills)
@@ -253,9 +253,6 @@ class SolutionGraphBatched(FleetSolution):
         self.suite_tools = bool(suite_tools)
         self.settle_steps = int(settle_steps)
         self.bus_timeout = float(bus_timeout)
-        self.perception = str(perception)
-        """Which body a graph's perception subgraphs run. See the single-world
-        policy's own attribute for what the values mean."""
         self.motion = motion
         self.roll = str(roll)
         """The roll contract, as :class:`~robosimstudio_policy_agent.ik.IKBackend` takes it."""
@@ -270,6 +267,13 @@ class SolutionGraphBatched(FleetSolution):
             trace_dir = self._scratch_trace_dir = tempfile.mkdtemp(prefix="robosimstudio-fleet-gap-")
         self.trace_dir = Path(trace_dir)
         self.graph_path = self._resolve_graph(fleet, graph, registries=self.skills)
+        # Likewise a staged copy of the graph (one whose scripts resolve from
+        # outside it): this policy's scratch, removed at close. An unstaged
+        # graph is its source directory and is never touched.
+        from ..graph_solution import SolutionGraph
+
+        source = SolutionGraph._graph_source(fleet, graph)
+        self._staged_graph_dir: Path | None = Path(self.graph_path) if Path(self.graph_path) != Path(source) else None
         self.task_tools = self._task_tools(fleet)
         # Work arm first, as a runtime ``arm_id`` counts. Resolved once for the
         # fleet: role order is a fact about the pairing, not about a world.
@@ -321,15 +325,13 @@ class SolutionGraphBatched(FleetSolution):
         to :func:`~robosimstudio_policy_agent.graphs.stage_graph`, which is where a script
         the graph does not ship resolves from the bundle its subgraph's ``skill``
         names, else from its collection's ``_shared/scripts/``, else from
-        ``robosimstudio_policy_agent/nodes/``.
+        ``robosimstudio_policy_agent/nodes/``. A name that is neither shipped nor
+        an existing directory raises there too, rather than scoring every world
+        zero on a workflow that cannot load.
         """
-        try:
-            relative = fleet.task.graph_path(graph)
-        except KeyError:
-            return stage_graph(graph, registries=registries)
-        from robosimstudio_bench.solutions.base import graph_dir
+        from ..graph_solution import SolutionGraph
 
-        return stage_graph(graph_dir(fleet.task.suite, relative), registries=registries)
+        return stage_graph(SolutionGraph._graph_source(fleet, graph), registries=registries)
 
     @staticmethod
     def _task_tools(fleet):
@@ -473,13 +475,17 @@ class SolutionGraphBatched(FleetSolution):
         # an observation poller that calls the fleet on its own schedule -- and
         # the barrier must not wait for those or be released by them.
         self.parks.adopt(world)
+        # The ``_World`` is reused by the next wave, and a thread that outlives
+        # :meth:`close_worlds`' join must not write its end into that wave's
+        # episode. Only the thread the world is still running records anything.
+        me = threading.current_thread()
         try:
             from gap import execute
 
             inputs = {"instruction": instruction}
             if self.perception:
                 inputs["perception"] = self.perception
-            state.result = execute(
+            result = execute(
                 self.graph_path,
                 connector=state.connector,
                 skills=self.skills or None,
@@ -492,9 +498,12 @@ class SolutionGraphBatched(FleetSolution):
                 inputs=inputs,
                 trace_dir=str(state.trace_dir) if state.trace_dir else None,
             )
+            if state.thread is me:
+                state.result = result
         except BaseException as exc:
-            state.error = exc
-            state.trace["traceback"] = traceback.format_exc()
+            if state.thread is me:
+                state.error = exc
+                state.trace["traceback"] = traceback.format_exc()
 
     # -------------------------------------------------------------------- step
     def act(self, live: np.ndarray) -> None:
@@ -664,10 +673,9 @@ class SolutionGraphBatched(FleetSolution):
         return segment_many([payload for _world, payload in asks])
 
     def _observations(self) -> list[dict]:
-        from .obs_format import world_observation
+        from .obs_format import world_observations
 
-        snapshot = self.fleet.snapshot()
-        return [world_observation(self.fleet, world, snapshot) for world in range(self.num_worlds)]
+        return world_observations(self.fleet, self.fleet.snapshot())
 
     def _infos(self, snapshot) -> list[dict]:
         """Per world, what a graph's ``sim.check_success`` should answer from.
@@ -804,8 +812,12 @@ class SolutionGraphBatched(FleetSolution):
         self.rendezvous.close()
         self.service.close()
         self.waiter.close()
+        import shutil
+
         scratch = getattr(self, "_scratch_trace_dir", None)
         if scratch is not None:
-            import shutil
-
             shutil.rmtree(scratch, ignore_errors=True)
+        staged = getattr(self, "_staged_graph_dir", None)
+        if staged is not None:
+            shutil.rmtree(staged, ignore_errors=True)
+            self._staged_graph_dir = None

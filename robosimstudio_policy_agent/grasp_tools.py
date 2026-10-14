@@ -196,7 +196,13 @@ class GraspTools:
             the object rather than driving the pads together.
         """
         name = self._arm(int(arm_id), str(role))
-        body = self.env.handles.objects[object_name].body
+        handles = self.env.handles
+        try:
+            body = handles.entity(object_name).body
+        except KeyError:
+            raise ToolRefusal(
+                f"no object {object_name!r}; objects {sorted(handles.objects)}, statics {sorted(handles.statics)}"
+            ) from None
         if body < 0:
             raise ToolRefusal(f"{object_name!r} has no body to search; it may be a bodiless static")
 
@@ -220,6 +226,8 @@ class GraspTools:
         """The arm a call means. ``role`` wins over ``arm_id`` when given."""
         handles = self.env.handles
         if role:
+            if role not in ("work", "support"):
+                raise ValueError(f"role must be 'work' or 'support', not {role!r}")
             chosen = handles.work_arm if role == "work" else handles.support_arm
             if not chosen:
                 raise ToolRefusal(f"this scene has no {role!r} arm; arms are {sorted(handles.arms)}")

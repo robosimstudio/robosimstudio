@@ -180,16 +180,40 @@ class NonPrivilegedRegistry:
         self.dropped: list[str] = []
         """Names withheld, in registration order. Read by the contract test."""
 
-    def register_callable(self, name: str, fn: Any, **kwargs: Any) -> Any:
-        if str(name).startswith("sim.") or "privileged" in tuple(kwargs.get("tags") or ()):
+    def _withheld(self, name: str, tags: Any) -> bool:
+        if str(name).startswith("sim.") or "privileged" in tuple(tags or ()):
             self.dropped.append(str(name))
+            return True
+        return False
+
+    def register_callable(self, name: str, fn: Any, **kwargs: Any) -> Any:
+        if self._withheld(name, kwargs.get("tags")):
             return None
         return self._registry.register_callable(name, fn, **kwargs)
 
+    def register_rpc(self, name: str, client: Any, **kwargs: Any) -> Any:
+        if self._withheld(name, kwargs.get("tags")):
+            return None
+        return self._registry.register_rpc(name, client, **kwargs)
+
+    def __contains__(self, name: object) -> bool:
+        # Dunder lookups skip __getattr__, so ``in`` has to be spelled out.
+        return name in self._registry
+
+    def __len__(self) -> int:
+        return len(self._registry)
+
+    _READERS = frozenset({"get", "invoke", "runtime_tools", "codegen_tools", "by_transport"})
+    """The read-only part of the registry a suite registrar may reach through.
+
+    An allowlist, not a denylist of registrar names: the registry has more
+    doors than ``register*`` -- ``_discover_python``, the adapters' own
+    ``register``, the ``_tools`` dict itself -- and a door this class does
+    not know is a door it cannot check, so it is not forwarded at all."""
+
     def __getattr__(self, attr: str) -> Any:
-        # Everything else -- `get`, `__contains__` via the wrapped object, any
-        # method a future registrar reaches for -- passes straight through. Only
-        # registration is filtered.
+        if attr not in NonPrivilegedRegistry._READERS:
+            raise AttributeError(f"{attr!r} is not available to a registrar under --no-privileged")
         return getattr(self._registry, attr)
 
 
@@ -436,8 +460,8 @@ def make_connector(
     if planner_path:
         # A *peer* of the IK backend, not a replacement for it. `solve_ik` stays
         # on the cheap solver because CartesianServo calls it up to 400 times a
-        # move; only the plans go to the planner. See motion_composite for why
-        # honours_roll keeps following the IK member.
+        # move; only the plans go to the planner. `ik.honours_roll` keeps
+        # following the IK solver; describe_planner reports the planner's.
         from robosimstudio.paths import resolve_path
 
         spec = getattr(env.scene.embodiment, "spec", None)
@@ -603,7 +627,11 @@ def make_connector(
                     above = {"position": dict(pose["position"]), "rotation": dict(pose["rotation"])}
                     above["position"] = dict(above["position"])
                     above["position"]["z"] = float(above["position"]["z"]) + float(z_approach)
-                    servo.move(above, arm_id=arm_id)
+                    approach = servo.move(above, arm_id=arm_id)
+                    # A pre-approach that timed out or touched something has not
+                    # earned the descent: report it rather than go on down.
+                    if (approach or {}).get("outcome", "reached") != "reached":
+                        return {**approach, "phase": "approach"}
                 # The runtime's own ``tolerance`` reaches the servo: 0 keeps its default ball.
                 return servo.move(
                     pose,

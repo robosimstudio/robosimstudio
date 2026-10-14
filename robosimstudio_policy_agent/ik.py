@@ -452,6 +452,9 @@ class IKBackend:
         a constraint nobody applied is worse than a refusal.
         """
         self._own_refusal = ""
+        # Only the solved line measures its arrival; a planner's answer leaves
+        # it unmeasured rather than reporting an earlier line's number as its own.
+        self.last_position_error = None
         planner = self._planner
         if planner is None:
             return self._own_plan_linear(*args, **self._for(self._own_plan_linear, kwargs)[0])
@@ -524,8 +527,9 @@ class IKBackend:
         roll = self._contract(hold_rotation)
         tol = float(self.tolerance if tolerance is None else tolerance)
         steps = int(num_waypoints) or self.waypoints
+        bound = _LastError(self._bound(solver, template))
         path, refusals = plan_line(
-            self._bound(solver, template),
+            bound,
             seed,
             start.reshape(1, 3),
             end.reshape(1, 3),
@@ -540,9 +544,9 @@ class IKBackend:
         if refusal is not None:
             self.last_refusal = self._why_no_line(solver, seed, template, end, quat, roll, refusal, tol)
             return None
-        # The arrival error is the one number that says whether "planned" means "will get there".
-        _, err = self._solve_rows(solver, path[:, -1, :], end, quat, roll, template)
-        self.last_position_error = float(err[0, 0])
+        # The arrival error is the one number that says whether "planned" means "will get there":
+        # the last waypoint's own, not a fresh solve's, which would land closer than the path does.
+        self.last_position_error = float(bound.err[0, 0])
         return {"waypoints": [{"positions": [float(v) for v in row]} for row in path[0]]}
 
     def _why_no_line(self, solver, seed, template, end, quat, roll, refusal: LineRefusal, tol: float) -> str:
@@ -557,14 +561,14 @@ class IKBackend:
                 tolerance=tol, rot_tolerance=self.rot_tolerance
             )
         try:
-            _, err = self._solve_rows(solver, seed, end, quat, "held", template)
+            _, err = self._solve_rows(solver, seed, end, quat, roll, template)
             error = float(err[0, 0])
         except Exception:
             return ""
-        if error > self.tolerance:
+        if error > tol:
             return (
                 f"the end pose itself is out of reach for this arm -- solving it alone still misses by "
-                f"{error * 1000:.0f} mm against a {self.tolerance * 1000:.0f} mm tolerance. No approach makes "
+                f"{error * 1000:.0f} mm against a {tol * 1000:.0f} mm tolerance. No approach makes "
                 "a pose the arm cannot hold reachable; move the target."
             )
         return (
@@ -636,6 +640,19 @@ class _Templated:
 
     def solve(self, *args: Any, **kwargs: Any):
         return self.solver.solve(*args, template=self.template, **kwargs)
+
+
+class _LastError:
+    """A solver that keeps its last solve's error: a line's last is its arrival."""
+
+    def __init__(self, solver: IKSolver) -> None:
+        self.solver = solver
+        self.kinematics = solver.kinematics
+        self.err: np.ndarray | None = None
+
+    def solve(self, *args: Any, **kwargs: Any):
+        q, self.err = self.solver.solve(*args, **kwargs)
+        return q, self.err
 
 
 def approach_of(pose: dict) -> np.ndarray:

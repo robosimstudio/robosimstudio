@@ -337,22 +337,6 @@ class MotionTools:
             kwargs["center"] = tuple(float(v) for v in center)
         return self.backend.build_world_tsdf(**self._accepted(self.backend.build_world_tsdf, kwargs))
 
-    @staticmethod
-    def _accepted(fn, kwargs: dict[str, Any]) -> dict[str, Any]:
-        """Drop kwargs the backend's planner does not accept.
-
-        The collision kwargs describe constraints only a collision-aware
-        backend can check; a simpler fallback plans without one, so on it
-        they are not a request that can be honoured or refused -- dropping
-        them *is* the fallback, already announced when the backend was chosen.
-        """
-        import inspect
-
-        params = inspect.signature(fn).parameters
-        if any(p.kind is inspect.Parameter.VAR_KEYWORD for p in params.values()):
-            return kwargs
-        return {k: v for k, v in kwargs.items() if k in params}
-
     def plan_linear(
         self,
         end: dict,
@@ -608,12 +592,14 @@ class MotionTools:
         return {
             "backend": type(self.backend).__name__,
             "world_aware": bool(getattr(self.backend, "supports_world_aware_plan", False)),
-            # The *planner's*, not the composite's. The composite reports the
-            # IK member's honours_roll because that is what the servo's arrival
+            # The *planner's*, not the IK backend's. The IK backend reports its
+            # solver's honours_roll because that is what the servo's arrival
             # test must describe; a graph asking what a *plan* can express wants
             # the other answer, and conflating them is how a node concludes it
             # cannot stand a tool on end when the planner could.
-            "honours_roll": bool(getattr(getattr(self.backend, "motion", self.backend), "honours_roll", False)),
+            "honours_roll": bool(
+                getattr(getattr(self.backend, "_planner", None) or self.backend, "honours_roll", False)
+            ),
         }
 
 

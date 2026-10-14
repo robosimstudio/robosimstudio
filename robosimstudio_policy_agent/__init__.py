@@ -22,8 +22,9 @@ default) a graph may also call the ground-truth ``sim.*`` tools -- where an obje
 is, whether the goal holds -- which is what building and debugging a graph wants.
 With ``privileged=False`` it gets only what a real rig would have: camera frames,
 proprioception, calibration, and the ``robot.*`` and ``motion.*`` verbs. A frame
-sent to a policy in another process is held to the same line by
-:func:`~robosimstudio_policy_agent.contract.assert_non_privileged`.
+sent to a policy in another process is to be held to the same line by
+:func:`~robosimstudio_policy_agent.contract.assert_non_privileged`, which a
+bridge sender calls before it sends; this package ships none.
 
 Only the boundary-enforcing pieces are imported eagerly here, and the policies
 are imported on first use. Everything that runs a graph needs the ``[gap]``

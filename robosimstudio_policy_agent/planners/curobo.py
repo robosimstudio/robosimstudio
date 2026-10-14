@@ -88,6 +88,12 @@ CUROBO_INSTALL_HINT = (
 )
 
 MIN_TRAVEL_M = 1.0e-4
+"""Below this a 'linear' move has no direction to constrain, so it is planned free.
+
+A 0.1 mm move has a travel direction dominated by float noise, and constraining
+the two axes perpendicular to *noise* is how a trivial nudge becomes an
+unsolvable plan.
+"""
 # CuRobo defaults to 5 mm, but every returned endpoint is independently gated
 # by simulator FK at 3 mm below. Asking the optimizer to stop outside the
 # acceptance envelope creates valid-looking plans that this backend must then
@@ -95,12 +101,6 @@ MIN_TRAVEL_M = 1.0e-4
 # differences between the two FK implementations still have headroom.
 PLANNER_POSITION_TOLERANCE_M = 0.002
 PLANNER_ORIENTATION_TOLERANCE_RAD = 0.03
-"""Below this a 'linear' move has no direction to constrain, so it is planned free.
-
-A 0.1 mm move has a travel direction dominated by float noise, and constraining
-the two axes perpendicular to *noise* is how a trivial nudge becomes an
-unsolvable plan.
-"""
 
 TOOL_DRIFT_MM = 0.5
 """How far the measured tool-to-TCP transform may move between configurations.
@@ -506,6 +506,34 @@ class MotionBackendCuRobo:
         resolved = join_path(get_robot_configs_path(), name)
         return resolved if Path(resolved).is_file() else name
 
+    def _inline_collision_spheres(self, kinematics: dict) -> dict:
+        """``kinematics["collision_spheres"]`` as a mapping, stored back in place.
+
+        cuRobo accepts a mapping, ``None``, or a path to a sphere YAML; adding
+        an attached object's spheres to the tool link needs the mapping. A
+        relative path is tried beside the robot config first, then where
+        cuRobo itself looks -- its shipped robot-config directory.
+        """
+        spheres = kinematics.get("collision_spheres")
+        if isinstance(spheres, str):
+            from pathlib import Path
+
+            from curobo.config_io import join_path, load_yaml
+            from curobo.content import get_robot_configs_path
+
+            candidates = [] if not Path(spheres).is_absolute() else [spheres]
+            if not candidates:
+                if isinstance(self.config_path, str):
+                    config_dir = Path(self._resolve_config_path(self.config_path)).resolve().parent
+                    candidates.append(str(config_dir / spheres))
+                candidates.append(join_path(get_robot_configs_path(), spheres))
+            path = next((c for c in candidates if Path(c).is_file()), candidates[-1])
+            loaded = load_yaml(path) or {}
+            spheres = loaded.get("collision_spheres", loaded)
+        spheres = dict(spheres or {})
+        kinematics["collision_spheres"] = spheres
+        return spheres
+
     @property
     def planner(self) -> Any:
         """The planner, built once and warmed.
@@ -611,7 +639,7 @@ class MotionBackendCuRobo:
         config = copy.deepcopy(config)
         kinematics = config.setdefault("robot_cfg", {}).setdefault("kinematics", {})
         tool_link = self._frame or self.planner.tool_frames[0]
-        collision_spheres = kinematics.setdefault("collision_spheres", {})
+        collision_spheres = self._inline_collision_spheres(kinematics)
         link_spheres = list(collision_spheres.get(tool_link) or [])
         link_spheres.extend(
             {
@@ -731,7 +759,7 @@ class MotionBackendCuRobo:
         if converted:
             kinematics = config.setdefault("robot_cfg", {}).setdefault("kinematics", {})
             tool_link = self._frame or self.planner.tool_frames[0]
-            collision_spheres = kinematics.setdefault("collision_spheres", {})
+            collision_spheres = self._inline_collision_spheres(kinematics)
             link_spheres = list(collision_spheres.get(tool_link) or [])
             link_spheres.extend(
                 {"center": [float(v) for v in center], "radius": float(radius)} for center, radius in converted
@@ -1190,7 +1218,7 @@ class MotionBackendCuRobo:
                         backtrack_m * 1000.0,
                     )
                     plan = None
-        if plan is None and criteria is None and distance >= MIN_TRAVEL_M:
+        if plan is None and criteria is None:
             # No tool axis to free (travel is not along one, or there is
             # almost none) -- the planner's own plan, as before, decides pure
             # rotations and re-postures; only a real translation is a line.
@@ -1596,105 +1624,6 @@ class MotionBackendCuRobo:
             return None
         return _trajectory(rows)
 
-    def _save_goal_collision_visualization(
-        self, planner: Any, free_result: Any, world_config: dict, arm_id: int
-    ) -> None:
-        """Render the free-space goal spheres against the exact world meshes."""
-        import json
-        from pathlib import Path
-
-        import matplotlib.pyplot as plt
-        import torch
-        import trimesh
-        from mpl_toolkits.mplot3d.art3d import Poly3DCollection
-
-        rows = self._rows(planner, free_result, 0)
-        q = torch.as_tensor(rows[-1][None], dtype=torch.float32, device="cuda")
-        spheres = planner.kinematics.get_robot_as_spheres(q)[0]
-        base_rotation, base_translation = self._base(arm_id)
-        centers = np.asarray(
-            [base_rotation @ np.asarray(s.position) + base_translation for s in spheres],
-            dtype=np.float64,
-        )
-        radii = np.asarray([float(s.radius) for s in spheres], dtype=np.float64)
-
-        collision = np.zeros(len(spheres), dtype=bool)
-        closest_mesh = np.full(len(spheres), "", dtype=object)
-        clearance = np.full(len(spheres), np.inf, dtype=np.float64)
-        meshes = []
-        for mesh_data in world_config.get("meshes") or []:
-            vertices = np.asarray(mesh_data["vertices"], dtype=np.float64).reshape(-1, 3)
-            faces = np.asarray(mesh_data["faces"], dtype=np.int64).reshape(-1, 3)
-            mesh = trimesh.Trimesh(vertices=vertices, faces=faces, process=False)
-            _nearest, distance, _ = trimesh.proximity.closest_point_naive(mesh, centers)
-            signed_clearance = distance - radii
-            better = signed_clearance < clearance
-            clearance[better] = signed_clearance[better]
-            closest_mesh[better] = str(mesh_data.get("name", "mesh"))
-            collision |= signed_clearance <= 0.0
-            meshes.append((str(mesh_data.get("name", "mesh")), vertices, faces))
-
-        out_dir = Path("diagnostics/curobo_goal_collision")
-        out_dir.mkdir(parents=True, exist_ok=True)
-        payload = {
-            "goal_joint_position": rows[-1].tolist(),
-            "colliding_spheres": [
-                {
-                    "index": int(i),
-                    "center_world": centers[i].tolist(),
-                    "radius": float(radii[i]),
-                    "mesh": str(closest_mesh[i]),
-                    "clearance_m": float(clearance[i]),
-                }
-                for i in np.flatnonzero(collision)
-            ],
-            "minimum_clearance_m": float(clearance.min()),
-        }
-        (out_dir / "collision.json").write_text(json.dumps(payload, indent=2))
-
-        fig = plt.figure(figsize=(11, 8))
-        ax = fig.add_subplot(111, projection="3d")
-        for name, vertices, faces in meshes:
-            color = "gold" if "hook" in name else "lightgray"
-            alpha = 0.75 if "hook" in name else 0.12
-            ax.add_collection3d(Poly3DCollection(vertices[faces], facecolor=color, edgecolor="none", alpha=alpha))
-        ax.scatter(
-            centers[~collision, 0],
-            centers[~collision, 1],
-            centers[~collision, 2],
-            s=np.maximum(8.0, radii[~collision] * 5000),
-            c="deepskyblue",
-            alpha=0.45,
-            label="CuRobo robot/object spheres",
-        )
-        ax.scatter(
-            centers[collision, 0],
-            centers[collision, 1],
-            centers[collision, 2],
-            s=np.maximum(35.0, radii[collision] * 9000),
-            c="red",
-            marker="o",
-            edgecolors="darkred",
-            label="colliding spheres",
-        )
-        focus = np.vstack([centers, *[v for _, v, _ in meshes]])
-        lo, hi = focus.min(0), focus.max(0)
-        ax.set(
-            xlim=(lo[0], hi[0]),
-            ylim=(lo[1], hi[1]),
-            zlim=(lo[2], hi[2]),
-            xlabel="world X (m)",
-            ylabel="world Y (m)",
-            zlabel="world Z (m)",
-            title="CuRobo free-space goal: exact colliders and collision spheres",
-        )
-        ax.legend(loc="upper left")
-        ax.view_init(elev=18, azim=-72)
-        fig.tight_layout()
-        fig.savefig(out_dir / "collision.png", dpi=180)
-        plt.close(fig)
-        logger.warning("CuRobo goal collision visualization saved to %s", out_dir)
-
     def build_world_tsdf(
         self,
         cameras: list[dict],
@@ -1828,6 +1757,9 @@ class MotionBackendCuRobo:
                 cleared += int(inside.sum().item())
                 feature[inside] = free_value
         self._tsdf_grid = grid
+        # The frame the grid lives in. Carving must use the same one, and an
+        # arm mounted elsewhere cannot plan against it unchanged.
+        self._tsdf_base = (rotation, translation)
         # For the per-plan endpoint carving in _update_world: the corridor-
         # cleared state is the baseline every plan restores before carving its
         # own allowed-contact spheres, and these are the world coordinates of
@@ -1876,7 +1808,7 @@ class MotionBackendCuRobo:
         if spheres is None or not len(spheres):
             return
         free_value = float(feature.max().item())
-        rotation, translation = self._base(-1)
+        rotation, translation = getattr(self, "_tsdf_base", None) or self._base(-1)
         carved = 0
         for sphere in np.asarray(spheres, dtype=np.float64).reshape(-1, 4):
             center = (sphere[:3] - translation) @ rotation
@@ -1919,6 +1851,18 @@ class MotionBackendCuRobo:
             if grid is None:
                 raise ValueError(
                     "world_config asks for use_tsdf but no TSDF grid has been built; call motion.build_world_tsdf first"
+                )
+            grid_base = getattr(self, "_tsdf_base", None)
+            arm_base = self._base(arm_id)
+            if grid_base is not None and not (
+                np.allclose(grid_base[0], arm_base[0], atol=1e-6) and np.allclose(grid_base[1], arm_base[1], atol=1e-6)
+            ):
+                # The grid is in the base frame of the arm it was built for; on a
+                # robot whose arms are mounted apart, another arm would read every
+                # obstacle shifted by the mount offset.
+                raise ValueError(
+                    f"the TSDF grid was built in another arm's base frame than arm {arm_id}'s; "
+                    f"call motion.build_world_tsdf with arm_id={arm_id} first"
                 )
             self._carve_tsdf_contact_spheres(grid, allowed_contact_spheres)
             if not meshes:
@@ -1984,9 +1928,11 @@ class MotionBackendCuRobo:
                     device_cfg=planner.config.device_cfg,
                 )
             )
-        if converted:
-            grid = getattr(self, "_tsdf_grid", None) if (world_config or {}).get("use_tsdf") else None
-            planner.update_world(SceneCfg(mesh=converted, voxel=[grid] if grid is not None else None))
+        grid = getattr(self, "_tsdf_grid", None) if (world_config or {}).get("use_tsdf") else None
+        if converted or grid is not None:
+            # The cache was cleared above, so a TSDF world whose every mesh was
+            # filtered out still has to be loaded, or the plan runs in free space.
+            planner.update_world(SceneCfg(mesh=converted or None, voxel=[grid] if grid is not None else None))
         logger.info(
             "MotionBackendCuRobo: loaded %d/%d scene meshes after removing %d "
             "robot-overlapping triangles using %d live spheres",

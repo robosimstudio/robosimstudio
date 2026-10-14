@@ -174,6 +174,8 @@ class RobotTools:
         """The arm a call means. ``role`` wins over ``arm_id`` when given."""
         handles = self.env.handles
         if role:
+            if role not in ("work", "support"):
+                raise ValueError(f"role must be 'work' or 'support', not {role!r}")
             name = handles.work_arm if role == "work" else handles.support_arm
             if not name:
                 raise ToolRefusal(f"this scene has no {role!r} arm; arms are {sorted(handles.arms)}")
@@ -278,7 +280,9 @@ class RobotTools:
         # A script thread reads here; see :mod:`robosimstudio.core.streams`.
         with reading():
             lower, upper = model.joint_limit_lower.numpy(), model.joint_limit_upper.numpy()
-        position, quat = self.env.arm(name).ee_pose(self.env.state)
+        # The home posture's pose, fixed when the solver was built -- not the
+        # live TCP, which after a descent is wherever the hand went.
+        position, quat = self.env.arm(name).home_pose
         wxyz = quat_xyzw_to_wxyz(quat)
         return {
             "arm": name,
@@ -333,7 +337,9 @@ class RobotTools:
             return self._workspace[name]
         hand = self._hand(name)
         surface_z = float(self.env.handles.surface_z)
-        home_z = float(self.env.arm(name).ee_pose(self.env.state)[0][2])
+        # The resting height, not the live one: a first ask made after a descent
+        # would otherwise cache grasp height as transport height for good.
+        home_z = float(self.env.arm(name).home_pose[0][2])
         reach = float(hand.tip_reach)
         floor = surface_z + reach + MARGIN
         transport_z = max(home_z, floor)
@@ -576,15 +582,21 @@ class RobotTools:
         handle = self.env.handles.arms[name]
         ik = self.env.arm(name)
         coords = list(handle.arm_coords)
-        with reading():
-            full = np.asarray(self.env.state.joint_q.numpy(), dtype=np.float64).copy()
-        current = [float(v) for v in full[coords]]
-        poses = []
-        for config in joint_configs or []:
-            q = full.copy()
-            q[coords] = np.asarray(config, dtype=np.float64)[: len(coords)]
-            position, quat = ik.fk_ee(np.asarray(q, dtype=np.float32))
-            poses.append({"position": vec3(position), "rotation": quat_wxyz(quat)})
+
+        def run() -> tuple[list[float], list[dict[str, Any]]]:
+            # On the owner thread: fk_ee evaluates into the solver's shared
+            # scratch state, which the controller uses between steps.
+            with reading():
+                full = np.asarray(self.env.state.joint_q.numpy(), dtype=np.float64).copy()
+            poses = []
+            for config in joint_configs or []:
+                q = full.copy()
+                q[coords] = np.asarray(config, dtype=np.float64)[: len(coords)]
+                position, quat = ik.fk_ee(np.asarray(q, dtype=np.float32))
+                poses.append({"position": vec3(position), "rotation": quat_wxyz(quat)})
+            return [float(v) for v in full[coords]], poses
+
+        current, poses = self.bus.call(run)
         return {"arm": name, "joint_config": current, "poses": poses}
 
     def _wait(self, steps: int, timeout_s: float | None = None) -> int:
@@ -647,9 +659,6 @@ def _wait_budget(steps: int) -> float:
 # gap's types are TypedDicts of plain floats. A tool handing back a numpy array
 # serialises in process and fails the moment the same graph is pointed at an RPC
 # bundle, so the coercion happens here rather than being the thing under test.
-_CORNERS: dict[tuple[int, str], list[tuple[int, np.ndarray]]] = {}
-
-
 def fingertip_reach(env, arm: str, body_q: np.ndarray | None = None) -> float | None:
     """How far the fingertips sit past the tool-centre point right now [m], along the approach axis.
 
@@ -677,8 +686,10 @@ def fingertip_reach(env, arm: str, body_q: np.ndarray | None = None) -> float | 
         return None
     if body_q is None:
         body_q = np.asarray(env.state.body_q.numpy(), dtype=np.float64)
-    key = (id(env), arm)
-    corners = _CORNERS.get(key)
+    # Cached on the arm's handle, not in a module dict keyed by ``id(env)``: the
+    # handle is rebuilt with the scene and freed with it, so a later env that
+    # reuses a freed one's id can never be handed the old hand's corners.
+    corners = getattr(handle, "_finger_corners", None)
     if corners is None:
         from robosimstudio.solvers.grasp.obb import _shape_corners_local
 
@@ -696,7 +707,7 @@ def fingertip_reach(env, arm: str, body_q: np.ndarray | None = None) -> float | 
                         local = _shape_corners_local(builder, int(s))
                         if len(local):
                             corners.append((int(body), np.asarray(local, dtype=np.float64)))
-        _CORNERS[key] = corners
+        handle._finger_corners = corners
     if not corners:
         return None
     ee = np.asarray(body_q[handle.ee_body], dtype=np.float64)

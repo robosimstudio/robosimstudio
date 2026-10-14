@@ -143,6 +143,9 @@ class SolutionGraph(SolutionBase):
         self.skills = pinned_registries(skills)
         self.source_graph = self._graph_source(env, graph)
         self.graph_path = stage_graph(self.source_graph, registries=self.skills)
+        # A staged copy is a scratch directory of this policy's own, removed at
+        # close as ``check_graph`` removes its; an unstaged graph is the source.
+        self._staged_graph_dir = Path(self.graph_path) if Path(self.graph_path) != Path(self.source_graph) else None
         workflow_path = Path(self.graph_path) / "workflow.json"
         try:
             workflow_doc = json.loads(workflow_path.read_text())
@@ -167,7 +170,11 @@ class SolutionGraph(SolutionBase):
         # to eight other contributors' evidence, made from inside a cable
         # commit. The two graphs that want it declare it, and the same flag
         # already gates ``_OnDemandConnector`` below.
+        self._restore_obs_render: bool | None = None
+        """The env's own ``obs_render_enabled``, put back at close: the env
+        outlives this policy for any caller that reuses it."""
         if self._on_demand_observations and env.renderer is not None:
+            self._restore_obs_render = env.obs_render_enabled
             env.obs_render_enabled = False
         self.privileged = bool(privileged)
         self.perception = str(perception)
@@ -578,6 +585,15 @@ class SolutionGraph(SolutionBase):
         scratch = getattr(self, "_scratch_trace_dir", None)
         if scratch is not None:
             shutil.rmtree(scratch, ignore_errors=True)
+        staged = getattr(self, "_staged_graph_dir", None)
+        if staged is not None:
+            shutil.rmtree(staged, ignore_errors=True)
+            self._staged_graph_dir = None
+        restore = getattr(self, "_restore_obs_render", None)
+        if restore is not None:
+            env = self.env
+            env.obs_render_enabled = restore
+            self._restore_obs_render = None
 
     def raw_spans(self) -> list[dict[str, Any]]:
         """Tool begin/end markers for the recorder's raw capture tape."""

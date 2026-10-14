@@ -122,6 +122,9 @@ class GapEnvFacade:
         # The last *commanded* joint target per arm. Holding position means
         # re-issuing this, not re-reading the encoder -- see _step_holding.
         self._held: dict[int, np.ndarray] = {}
+        # The last published step's proprioception, so a blocking move's error
+        # check does not read the embodiment back a second time.
+        self._last_proprio: dict[str, Any] = {}
 
     # ---------------------------------------------------------------- helpers
     @property
@@ -174,13 +177,17 @@ class GapEnvFacade:
 
         return out
 
-    def _observation(self, *, refresh_cameras: bool = False) -> dict[str, Any]:
+    def _observation(self, *, refresh_cameras: bool = False, obs=None, body_q=None) -> dict[str, Any]:
         env = self.env
         # A headless evaluation may suppress per-step rendering. Perception
         # still receives pixels and camera poses from the same current state.
         if refresh_cameras and not env.obs_render_enabled and env.renderer is not None:
             env.frames = env.renderer.render(env.state)
-        obs = env.observe()
+            obs = None
+        # A stepper passes the obs ``env.step`` already gathered: observing is a
+        # device readback, and twice a step is once too many.
+        if obs is None:
+            obs = env.observe()
         out = self._proprioception(obs)
 
         for camera_name, frame in (obs.get("cameras") or {}).items():
@@ -201,7 +208,9 @@ class GapEnvFacade:
                 block["depth_data"] = frame["depth"]
             if spec is not None:
                 block["intrinsics"] = spec.intrinsics
-                world = spec.pose_on_body(env.state.body_q.numpy())
+                if body_q is None:
+                    body_q = env.state.body_q.numpy()
+                world = spec.pose_on_body(body_q)
                 from robosimstudio.core.math import xform_from_matrix
 
                 xform = xform_from_matrix(world)
@@ -230,8 +239,8 @@ class GapEnvFacade:
         beside the object instead of on it. Re-issuing the commanded target is
         what a real controller does, and it holds.
         """
-        _, reward, terminated, truncated, info = self.env.step(self.hold_action(), mode=self.JOINT_MODE)
-        self.publish_step(reward, terminated, truncated, info)
+        obs, reward, terminated, truncated, info = self.env.step(self.hold_action(), mode=self.JOINT_MODE)
+        self.publish_step(reward, terminated, truncated, info, obs=obs)
 
     def hold_action(self) -> np.ndarray | None:
         """The action that re-issues every arm's last *commanded* target.
@@ -403,8 +412,8 @@ class GapEnvFacade:
                 action[other_base : other_base + len(other)] = other
         for name in self.arm_names:
             action[(self._slot(name) + 1) * per_arm - 1] = self._gripper_command(name)
-        _, reward, terminated, truncated, info = env.step(action, mode=self.JOINT_MODE)
-        self.publish_step(reward, terminated, truncated, info)
+        obs, reward, terminated, truncated, info = env.step(action, mode=self.JOINT_MODE)
+        self.publish_step(reward, terminated, truncated, info, obs=obs)
 
     JOINT_MODE = "joint_position"
     """The mode a joint vector means something in.
@@ -436,8 +445,8 @@ class GapEnvFacade:
                 action[other_base : other_base + len(other)] = other
         for name in self.arm_names:
             action[(self._slot(name) + 1) * per_arm - 1] = self._gripper_command(name)
-        _, reward, terminated, truncated, info = env.step(action, mode=self.JOINT_MODE)
-        self.publish_step(reward, terminated, truncated, info)
+        obs, reward, terminated, truncated, info = env.step(action, mode=self.JOINT_MODE)
+        self.publish_step(reward, terminated, truncated, info, obs=obs)
 
     def move_to_joints_blocking(
         self,
@@ -468,35 +477,70 @@ class GapEnvFacade:
             return False
         name = self._arm(arm_id)
         for step in range(int(max_steps)):
-            self.bus.call(self.apply_joint_action, goal, arm_id)
-            reached = self.bus.call(self._joint_error, name, goal)
+            reached = self.bus.call(self._step_toward, goal, arm_id, name)
             if step > 0 and reached < tolerance:
                 return True
         return False
 
+    def _step_toward(self, goal: np.ndarray, arm_id: int, arm: str) -> float:
+        """One step of a blocking move and its error, in one owner-thread call."""
+        self.apply_joint_action(goal, arm_id)
+        return self._joint_error(arm, goal)
+
     def _joint_error(self, arm: str, goal: np.ndarray) -> float:
-        """How far this arm is from a joint target [rad], on the owner thread."""
-        proprio = self.env.scene.embodiment.observe(self.env.state)
+        """How far this arm is from a joint target [rad], on the owner thread.
+
+        Read off the proprioception the last step already observed, when it
+        carries this arm; the embodiment is read again only when it does not.
+        """
+        proprio = getattr(self, "_last_proprio", None) or {}
+        if f"{arm}/joint_q" not in proprio:
+            proprio = self.env.scene.embodiment.observe(self.env.state)
         current = np.asarray(proprio[f"{arm}/joint_q"], dtype=np.float64)
         n = min(len(current), len(goal))
         return float(np.linalg.norm(current[:n] - goal[:n]))
 
-    def publish_step(self, reward: float, terminated: bool, truncated: bool, info: dict[str, Any]) -> None:
+    def publish_step(
+        self,
+        reward: float,
+        terminated: bool,
+        truncated: bool,
+        info: dict[str, Any],
+        *,
+        obs: dict[str, Any] | None = None,
+    ) -> None:
         """Record a step's outcome and publish the snapshot workers read.
 
         Public because the graph policy calls it once at reset, so a node that
         reads before the first step sees the reset state rather than an empty
-        snapshot.
+        snapshot. A stepper passes the ``obs`` its ``env.step`` returned; without
+        one the env is observed here.
         """
         self._sim_step_count = self.env.step_count
         self._last_reward = float(reward)
         self._current_done = bool(terminated or truncated)
+        env = self.env  # bound locally: see _proprioception
+        if obs is None:
+            obs = env.observe()
+        else:
+            # ``env.step`` observes before it evaluates, and the bench renders
+            # in ``evaluate`` by rebinding ``env.frames`` -- so the camera dict
+            # the step's obs carries is the *previous* render, under a pose
+            # read from this step's ``body_q``. Re-read the frames off the env
+            # (no device readback) so image and pose come from the same step.
+            if "cameras" in obs:
+                obs = {**obs, "cameras": env.frames}
+            if "video_cameras" in obs:
+                obs = {**obs, "video_cameras": env.video_frames}
+        self._last_proprio = dict(obs.get("proprio") or {})
+        # Read back once, for the camera poses and the snapshot both.
+        body_q = self.env.state.body_q.numpy()
         self.bus.publish(
             SimSnapshot(
                 step=self.env.step_count,
                 sim_time=self.env.sim_time,
-                obs=self._observation(),
-                body_q=np.asarray(self.env.state.body_q.numpy(), dtype=np.float64),
+                obs=self._observation(obs=obs, body_q=body_q),
+                body_q=np.asarray(body_q, dtype=np.float64),
                 info=dict(info),
                 frames=dict(self.env.frames),
             )
@@ -534,6 +578,10 @@ class GapEnvFacade:
         self._sim_step_count = 0
         self._current_done = False
         self._last_reward = 0.0
+        # The last episode's commanded targets are not this one's hold.
+        self._held.clear()
+        self._gripper_fraction.clear()
+        self._last_proprio = {}
         del obs
         return info
 

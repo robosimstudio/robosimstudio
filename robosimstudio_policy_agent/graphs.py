@@ -297,17 +297,22 @@ def stage_graph(graph_dir: str | Path, *, registries: Sequence[str | Path] | Non
             helpers.setdefault(rel, helper)
 
     staged = Path(tempfile.mkdtemp(prefix="robosimstudio-gap-graph-"))
-    rebuilt = {Path(rel).parent for rel in (*outside, *helpers)}
-    for entry in graph_dir.iterdir():
-        if entry.name == "__pycache__":
-            continue
-        if entry.is_dir() and entry.relative_to(graph_dir) in rebuilt:
-            (staged / entry.name).mkdir()
-            for child in entry.iterdir():
-                if child.name != "__pycache__":
-                    _link(child, staged / entry.name / child.name)
-        else:
-            _link(entry, staged / entry.name)
+    # Every ancestor of a staged path is a real directory, not a link to the
+    # graph's own: ``scripts/sub/x.py`` written through a linked ``scripts``
+    # would land in the graph's source tree.
+    rebuilt = {parent for rel in (*outside, *helpers) for parent in Path(rel).parents if parent != Path(".")}
+
+    def mirror(source: Path, dest: Path) -> None:
+        for entry in source.iterdir():
+            if entry.name == "__pycache__":
+                continue
+            if entry.is_dir() and entry.relative_to(graph_dir) in rebuilt:
+                (dest / entry.name).mkdir()
+                mirror(entry, dest / entry.name)
+            else:
+                _link(entry, dest / entry.name)
+
+    mirror(graph_dir, staged)
     for rel, path in (*outside.items(), *helpers.items()):
         dest = staged / rel
         dest.parent.mkdir(parents=True, exist_ok=True)
@@ -339,7 +344,9 @@ def _display(path: Path) -> str:
 
 def outside_links(staged: str | Path, graph_dir: str | Path) -> list[str]:
     """``rel -> source`` for every staged file linked from outside the graph directory."""
-    staged, graph_dir = Path(staged), Path(graph_dir)
+    # Resolved, as ``_link`` resolves every target: a relative graph_dir would
+    # otherwise report the graph's own files as linked from outside it.
+    staged, graph_dir = Path(staged), Path(graph_dir).resolve()
     rows: list[str] = []
     for dirpath, _dirs, files in os.walk(staged, followlinks=True):
         for name in files:

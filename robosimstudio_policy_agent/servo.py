@@ -118,7 +118,16 @@ from robosimstudio.core.streams import reading
 from robosimstudio.solvers import OscSetpoint
 from robosimstudio.solvers.ik.solver import POS_TOLERANCE, ROT_TOLERANCE_DEG
 
-__all__ = ["POS_TOLERANCE", "ROT_TOLERANCE_DEG", "UNREACHABLE_GATE_M", "ArmLM", "CartesianServo", "build_arm_lm"]
+__all__ = [
+    "POS_TOLERANCE",
+    "ROT_TOLERANCE_DEG",
+    "UNREACHABLE_GATE_M",
+    "ArmLM",
+    "CartesianServo",
+    "build_arm_lm",
+    "rotation_error",
+    "solver_goal",
+]
 
 MAX_STEPS = 1000
 """Control steps before giving up: 16.7 s at 60 Hz.
@@ -152,6 +161,55 @@ UNREACHABLE_GATE_M = 0.03
 The gap backend's own reach gate (``IKBackend.tolerance``), which is read off
 the backend when it carries one; this is the value for a backend that does not.
 The fleet's stepper gates its verdict on the same number."""
+
+
+def rotation_error(measured_quat: Any, goal_quat: Any, honours_roll: bool) -> float:
+    """Orientation error [rad], measured the way the backend controls it.
+
+    Roll-honouring: the angle between the two quaternions. Roll-free: the angle
+    between the approach axes (tool +z), which is the whole of what a roll-free
+    solver is asked to align. Shared by :class:`CartesianServo` and the fleet's
+    stepper, so the serial and batched runners measure arrival alike.
+    """
+    measured = np.asarray(measured_quat, dtype=np.float64)
+    goal = np.asarray(goal_quat, dtype=np.float64)
+    if honours_roll:
+        return 2.0 * float(np.arccos(np.clip(abs(float(np.dot(measured, goal))), -1.0, 1.0)))
+    measured_axis = quat_to_mat(measured)[:, 2]
+    goal_axis = quat_to_mat(goal)[:, 2]
+    return float(np.arccos(np.clip(float(np.dot(measured_axis, goal_axis)), -1.0, 1.0)))
+
+
+def solver_goal(measured_quat: Any, goal_quat: Any, honours_roll: bool) -> np.ndarray:
+    """The goal orientation, restated in what the backend actually solves.
+
+    The goal unchanged when roll is honoured; otherwise the *measured*
+    orientation turned by the shortest arc that lands its approach axis (local
+    +z) on the goal's -- same axis as the goal, same roll as the arm. Asked once
+    per motion, by :meth:`CartesianServo._solver_goal` and by the fleet's
+    stepper alike, so the two runners close the same orientation.
+    """
+    goal = np.asarray(goal_quat, dtype=np.float64)
+    if honours_roll:
+        return goal
+    measured = np.asarray(measured_quat, dtype=np.float64)
+    measured_axis = quat_to_mat(measured)[:, 2]
+    goal_axis = quat_to_mat(goal)[:, 2]
+    cross = np.cross(measured_axis, goal_axis)
+    sin = float(np.linalg.norm(cross))
+    cos = float(np.dot(measured_axis, goal_axis))
+    if sin < 1.0e-9:
+        if cos > 0.0:  # already aligned: the measured pose *is* the goal
+            return measured
+        # Exactly opposed. Every arc is shortest, so pick one that exists:
+        # any axis perpendicular to the one being reversed will do.
+        perpendicular = np.cross(measured_axis, (1.0, 0.0, 0.0))
+        if float(np.linalg.norm(perpendicular)) < 1.0e-6:
+            perpendicular = np.cross(measured_axis, (0.0, 1.0, 0.0))
+        turn = quat_from_axis_angle(perpendicular, np.pi)
+    else:
+        turn = quat_from_axis_angle(cross / sin, float(np.arctan2(sin, cos)))
+    return np.asarray(quat_multiply(turn, measured), dtype=np.float64)
 
 
 class ArmLM:
@@ -267,6 +325,24 @@ class CartesianServo:
             see the module docstring.
     """
 
+    @property
+    def honours_roll(self) -> bool:
+        """The backend's roll contract, read live rather than cached at construction.
+
+        The backend builds its solver lazily, and a PyRoKi build that falls back
+        to the DLS family can drop the roll declaration then (``IKBackend._adopt``):
+        a flag cached here would test arrival on a roll the solver never closes.
+        A value assigned directly (the contract tests do) overrides the backend.
+        """
+        override = self.__dict__.get("_honours_roll")
+        if override is not None:
+            return override
+        return bool(getattr(getattr(self, "ik", None), "honours_roll", False))
+
+    @honours_roll.setter
+    def honours_roll(self, value: bool) -> None:
+        self._honours_roll = bool(value)
+
     def __init__(self, env, facade, ik) -> None:
         self.env = env
         self.facade = facade
@@ -289,7 +365,6 @@ class CartesianServo:
         the host: a factor derived from the machine would move the measurement
         with the machine, which is the defect this replaces.
         """
-        self.honours_roll = bool(getattr(ik, "honours_roll", False))
         self._lm: dict[str, ArmLM | None] = {}
         """Per arm, its one-world fleet solver, or ``None`` for an arm the old path serves. Built on first use."""
         self._lm_scene: int | None = None
@@ -350,14 +425,8 @@ class CartesianServo:
         return pos, np.asarray(quat, dtype=np.float64)
 
     def _rotation_error(self, measured_quat: np.ndarray, goal_quat: np.ndarray) -> float:
-        """Orientation error [rad], measured the way the backend controls it."""
-        if self.honours_roll:
-            return 2.0 * float(np.arccos(np.clip(abs(float(np.dot(measured_quat, goal_quat))), -1.0, 1.0)))
-        # The approach axis is the tool's local +z, which is the whole of what a
-        # roll-free solver is asked to align.
-        measured_axis = quat_to_mat(measured_quat)[:, 2]
-        goal_axis = quat_to_mat(goal_quat)[:, 2]
-        return float(np.arccos(np.clip(float(np.dot(measured_axis, goal_axis)), -1.0, 1.0)))
+        """Orientation error [rad], measured the way the backend controls it: :func:`rotation_error`."""
+        return rotation_error(measured_quat, goal_quat, self.honours_roll)
 
     def _solver_goal(self, measured_quat: np.ndarray, goal_quat: np.ndarray) -> np.ndarray:
         """The goal orientation, restated in what the backend actually solves.
@@ -376,26 +445,7 @@ class CartesianServo:
         discarded component was still costing the axis its correction rate --
         see the module docstring for the measurement.
         """
-        if self.honours_roll:
-            return np.asarray(goal_quat, dtype=np.float64)
-        measured_quat = np.asarray(measured_quat, dtype=np.float64)
-        measured_axis = quat_to_mat(measured_quat)[:, 2]
-        goal_axis = quat_to_mat(goal_quat)[:, 2]
-        cross = np.cross(measured_axis, goal_axis)
-        sin = float(np.linalg.norm(cross))
-        cos = float(np.dot(measured_axis, goal_axis))
-        if sin < 1.0e-9:
-            if cos > 0.0:  # already aligned: the measured pose *is* the goal
-                return measured_quat
-            # Exactly opposed. Every arc is shortest, so pick one that exists:
-            # any axis perpendicular to the one being reversed will do.
-            perpendicular = np.cross(measured_axis, (1.0, 0.0, 0.0))
-            if float(np.linalg.norm(perpendicular)) < 1.0e-6:
-                perpendicular = np.cross(measured_axis, (0.0, 1.0, 0.0))
-            turn = quat_from_axis_angle(perpendicular, np.pi)
-        else:
-            turn = quat_from_axis_angle(cross / sin, float(np.arctan2(sin, cos)))
-        return quat_multiply(turn, measured_quat)
+        return solver_goal(measured_quat, goal_quat, self.honours_roll)
 
     def _lm_for(self, arm_name: str) -> ArmLM | None:
         """This arm's one-world fleet solver, built once per scene, or ``None`` for the old path.

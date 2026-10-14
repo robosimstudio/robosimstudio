@@ -33,6 +33,7 @@ from robosimstudio.core.math import quat_to_mat
 from robosimstudio.core.streams import reading
 from robosimstudio.solvers.ik.tool_frame import tcp_pose, tool_offsets
 
+from ..servo import rotation_error, solver_goal
 from .intents import GripperMove, JointTrajectory, MoveToJoints, ServoToPose, slot_kind
 
 __all__ = ["MotionNotInstallable", "StepService"]
@@ -102,8 +103,9 @@ class _Program:
         self.kind = kind
         self.solver_quat = None if solver_quat is None else np.asarray(solver_quat, dtype=np.float64)
         """The one orientation the lead is driven toward for the whole motion:
-        ``requested_quat`` restated by ``_solver_goal`` from the measurement at
-        install (or at the first lead tick, for a program built without one)."""
+        ``requested_quat`` restated by :func:`~robosimstudio_policy_agent.servo.solver_goal`
+        from the measurement at install (or at the first lead tick, for a
+        program built without one)."""
         self.goal = goal
         self.deadline = int(deadline)
         self.tolerance = float(tolerance)
@@ -123,7 +125,7 @@ class _Program:
         self.best_dist = float("inf")
         self.stalled = 0
         self.steps = 0
-        self.reach_judged_at = -1
+        self.reach_judged_at = 0
         """The stall count at which the goal was last judged for reach, so a
         move that stays stalled is judged once per stall window, not per tick."""
         """The rate-capped setpoint this servo is being led by.
@@ -132,48 +134,6 @@ class _Program:
         what serial runs at -- and it is advanced once per control step by the
         host, see :meth:`StepService._advance_lead` and :meth:`StepService._lead`.
         ``None`` only when the arm has no solver."""
-
-
-def _solver_goal(measured_quat: Any, goal_quat: Any, honours_roll: bool) -> np.ndarray:
-    """The goal orientation, restated in what the solver actually closes.
-
-    A port of ``robosimstudio_policy_agent.servo.CartesianServo._solver_goal``, which is
-    the contract every shipped graph's Cartesian move was measured against: the
-    goal unchanged when roll is honoured; otherwise the *measured* orientation
-    turned by the shortest arc that lands its approach axis (local +z) on the
-    goal's -- same axis as the goal, same roll as the arm. Restated from the
-    measurement on every tick, so the roll the solve keeps is always the roll
-    the wrist has now, and an arc that turns the tool ninety degrees carries
-    the roll the way the serial servo carries it.
-
-    Asked ONCE per motion, at install (``_Program.solver_quat``), and held for
-    every tick after -- as the serial servo now holds it for its whole move.
-    Restating it from each tick's measurement let the LM solve ratchet the
-    roll on a blocked leg: a solve that rolled the wrist to gain position was
-    ratified by the next tick's restatement and rolled again (25-50 degrees on
-    tool_hanging's insert legs, serially, where the DLS solve held 0.2-4).
-    """
-    from robosimstudio.core.math import quat_from_axis_angle, quat_multiply, quat_to_mat
-
-    goal = np.asarray(goal_quat, dtype=np.float64)
-    if honours_roll:
-        return goal
-    measured = np.asarray(measured_quat, dtype=np.float64)
-    measured_axis = quat_to_mat(measured)[:, 2]
-    goal_axis = quat_to_mat(goal)[:, 2]
-    cross = np.cross(measured_axis, goal_axis)
-    sin = float(np.linalg.norm(cross))
-    cos = float(np.dot(measured_axis, goal_axis))
-    if sin < 1.0e-9:
-        if cos > 0.0:
-            return measured
-        perpendicular = np.cross(measured_axis, (1.0, 0.0, 0.0))
-        if float(np.linalg.norm(perpendicular)) < 1.0e-6:
-            perpendicular = np.cross(measured_axis, (0.0, 1.0, 0.0))
-        turn = quat_from_axis_angle(perpendicular, np.pi)
-    else:
-        turn = quat_from_axis_angle(cross / sin, float(np.arctan2(sin, cos)))
-    return np.asarray(quat_multiply(turn, measured), dtype=np.float64)
 
 
 class StepService:
@@ -393,7 +353,7 @@ class StepService:
             # unblocked geodesic); and the full requested quaternion stalled the
             # pre-grasp leg 16 mm short, the saddle the docstring below describes.
             measured_pos, measured_quat = self._tcp(world, name)
-            solver_quat = _solver_goal(measured_quat, intent.quat_xyzw, intent.honours_roll)
+            solver_quat = solver_goal(measured_quat, intent.quat_xyzw, intent.honours_roll)
             lead = self._lead(world, name, intent)
             # The FIRST target is the law's first step, exactly as the serial
             # servo's first iteration is ``law.advance`` from the measurement:
@@ -513,22 +473,6 @@ class StepService:
         rows = self.fleet.worlds.body_view(body, world)
         return tcp_pose(rows, index.ee_body, *self._offsets(name))
 
-    @staticmethod
-    def _rotation_error(measured_quat: np.ndarray, goal_quat: np.ndarray, honours_roll: bool) -> float:
-        """Orientation error [rad], exactly as ``CartesianServo._rotation_error`` measures it.
-
-        Roll-honouring: the angle between the two quaternions. Roll-free: the
-        angle between the approach axes (tool +z), which is the whole of what a
-        roll-free solver is asked to align.
-        """
-        measured = np.asarray(measured_quat, dtype=np.float64)
-        goal = np.asarray(goal_quat, dtype=np.float64)
-        if honours_roll:
-            return 2.0 * float(np.arccos(np.clip(abs(float(np.dot(measured, goal))), -1.0, 1.0)))
-        measured_axis = quat_to_mat(measured)[:, 2]
-        goal_axis = quat_to_mat(goal)[:, 2]
-        return float(np.arccos(np.clip(float(np.dot(measured_axis, goal_axis)), -1.0, 1.0)))
-
     def _arm_targets(self, world: int, name: str) -> np.ndarray:
         """Where this arm is currently commanded, as the start of a new segment.
 
@@ -559,9 +503,9 @@ class StepService:
         immediately, and it should see the state its motion ended in rather than
         the one before it.
         """
-        from .obs_format import world_observation
+        from .obs_format import world_observations
 
-        obs = [world_observation(self.fleet, world, snapshot) for world in range(self.fleet.num_worlds)]
+        obs = world_observations(self.fleet, snapshot)
         self.snapshots.publish(snapshot, infos=infos, obs=obs)
         self.waiter.notify(snapshot.step)
         self.step = int(snapshot.step)
@@ -596,7 +540,7 @@ class StepService:
         # here, on the first tick of a program built without one) -- exactly as
         # the single-world servo restates it once before its first ``law.advance``.
         if program.solver_quat is None:
-            program.solver_quat = _solver_goal(measured_quat, program.requested_quat, program.honours_roll)
+            program.solver_quat = solver_goal(measured_quat, program.requested_quat, program.honours_roll)
         quat = program.solver_quat
         for _ in range(self.cadence):
             set_pos, set_quat = program.lead.advance(measured_pos, measured_quat, goal[:3], quat)
@@ -674,7 +618,7 @@ class StepService:
             tcp, tcp_quat = tcp_pose(snapshot.body(world), index.ee_body, *self._offsets(arm_name))
             dist = float(np.linalg.norm(tcp - target[:3]))
             ang = (
-                self._rotation_error(tcp_quat, program.requested_quat, program.honours_roll)
+                rotation_error(tcp_quat, program.requested_quat, program.honours_roll)
                 if program.requested_quat is not None
                 else 0.0
             )
@@ -688,10 +632,15 @@ class StepService:
                 if dist < program.best_dist - program.stall_epsilon:
                     program.best_dist = dist
                     program.stalled = 0
+                    program.reach_judged_at = 0
                 else:
                     program.stalled += self.cadence
                 stalled = program.steps >= program.stall_steps and program.stalled >= program.stall_steps
-                if stalled and dist > self.UNREACHABLE_GATE_M and program.reach_judged_at != program.stalled:
+                if (
+                    stalled
+                    and dist > self.UNREACHABLE_GATE_M
+                    and program.stalled - program.reach_judged_at >= program.stall_steps
+                ):
                     # Stalled, and still well short: is the goal beyond the arm?
                     # The serial servo learns this from its solver -- three
                     # consecutive solves outside the 30 mm gate raise

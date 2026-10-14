@@ -293,6 +293,12 @@ class Ask:
     and not whichever other thread of the world happens to be waiting."""
     done: threading.Event = field(default_factory=threading.Event, repr=False)
     result: Any = None
+    abandoned: bool = False
+    """Set, under the rendezvous lock, by an asker that timed out before its
+    answer: :meth:`Rendezvous._settle` then leaves its park alone, because the
+    thread has left this wait and may be inside another."""
+    answered: bool = False
+    """Set, under the same lock, by the settle that unparks it."""
 
     def complete(self, result: Any) -> None:
         self.result = result
@@ -357,7 +363,20 @@ class Rendezvous:
                 raise BusTimeout("the fleet's rendezvous is closed")
             self._pending.setdefault(kind, []).append(ask)
         if not ask.done.wait(timeout):
-            raise BusTimeout(f"{kind} was not answered within {timeout:.0f} s")
+            # Withdraw before giving up. An ask left pending is answered later,
+            # by which time this thread has moved on to another fleet wait --
+            # and settling the stale ask unparks *that* wait, so the barrier
+            # reads the world as running while it is blocked.
+            with self._lock:
+                group = self._pending.get(kind, [])
+                if any(entry is ask for entry in group):
+                    self._pending[kind] = [entry for entry in group if entry is not ask]
+                ask.abandoned = not ask.answered
+            if ask.abandoned:
+                raise BusTimeout(f"{kind} was not answered within {timeout:.0f} s")
+            # Settled in the same instant: its unpark was for this very wait,
+            # and the wake-up follows it at once.
+            ask.done.wait()
         if isinstance(ask.result, BaseException):
             raise ask.result
         return ask.result
@@ -400,8 +419,15 @@ class Rendezvous:
         return answered
 
     def _settle(self, asks: list[Ask], results: list[Any]) -> None:
-        """Unpark every asker, then wake it. Order matters -- see the module docstring."""
-        for ask in asks:
+        """Unpark every asker, then wake it. Order matters -- see the module docstring.
+
+        An asker that has already given up is woken but not unparked.
+        """
+        with self._lock:
+            live = [ask for ask in asks if not ask.abandoned]
+            for ask in live:
+                ask.answered = True
+        for ask in live:
             self.parks.unpark(ask.world, ask.ident)
         for ask, result in zip(asks, results, strict=False):
             ask.complete(result)

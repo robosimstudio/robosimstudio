@@ -37,7 +37,7 @@ from .intents import (
     ServoToPose,
     Superseded,
 )
-from .obs_format import format_runtime_obs, world_observation
+from .obs_format import format_runtime_obs, world_observation, world_observations
 from .snapshots import SnapshotTable
 from .solution import SolutionGraphBatched
 from .stepper import StepService
@@ -68,4 +68,5 @@ __all__ = [
     "format_runtime_obs",
     "park_if",
     "world_observation",
+    "world_observations",
 ]

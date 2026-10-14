@@ -13,6 +13,11 @@ crossing the bridge may contain a fixed set of keys, and
 observation is therefore a deliberate edit to this file, which is exactly the
 amount of friction that decision deserves.
 
+This package ships no bridge sender of its own; the check is the gate one has
+to call on every frame before it leaves the process. It accepts the frame the
+facade builds as it stands -- ``robot_joint_pos_N``, ``robot_cartesian_pos_N``,
+one block per declared camera name, and ``instruction``.
+
 What is allowed, and why each is not privileged:
 
 * ``rgb``, ``depth`` -- what a camera would see. A real rig has these.
@@ -28,9 +33,11 @@ success bit or a reward.
 
 from __future__ import annotations
 
+import re
+from collections.abc import Iterable
 from typing import Any
 
-__all__ = ["ALLOWED_KEYS", "PRIVILEGED_KEYS", "assert_non_privileged"]
+__all__ = ["ALLOWED_KEYS", "ALLOWED_PATTERNS", "PRIVILEGED_KEYS", "assert_non_privileged"]
 
 ALLOWED_KEYS = frozenset(
     {
@@ -65,6 +72,9 @@ ALLOWED_KEYS = frozenset(
 )
 """Every key a frame crossing the bridge may carry, at any nesting depth."""
 
+ALLOWED_PATTERNS = (re.compile(r"robot_joint_pos_\d+"), re.compile(r"robot_cartesian_pos_\d+"))
+"""Per-arm proprioception keys, one per runtime ``arm_id``, as the facade names them."""
+
 PRIVILEGED_KEYS = frozenset(
     {
         "body_q",
@@ -88,7 +98,7 @@ the allowlist, since a new privileged field nobody thought to list here would
 otherwise pass."""
 
 
-def assert_non_privileged(frame: Any, *, path: str = "frame") -> None:
+def assert_non_privileged(frame: Any, *, path: str = "frame", cameras: Iterable[str] = ()) -> None:
     """Raise if an observation frame carries anything privileged.
 
     Walks the whole structure, since the offending key is usually nested inside
@@ -97,20 +107,39 @@ def assert_non_privileged(frame: Any, *, path: str = "frame") -> None:
     Args:
         frame: The frame about to be sent.
         path: Where in the structure the walk is, for the error message.
+        cameras: The scene's declared camera names. Each may key a camera block
+            at the top of the frame, and nowhere else; what is inside the block
+            is held to the allowlist like everything else.
 
     Raises:
         ValueError: Naming the first disallowed key and where it was found.
     """
     if isinstance(frame, dict):
+        cameras = frozenset(cameras)
         for key, value in frame.items():
             if not isinstance(key, str):
                 raise ValueError(f"{path}: non-string key {key!r} in a bridge frame")
-            if key not in ALLOWED_KEYS:
+            allowed = (
+                key in ALLOWED_KEYS
+                or (key in cameras and key not in PRIVILEGED_KEYS)
+                or any(pattern.fullmatch(key) for pattern in ALLOWED_PATTERNS)
+            )
+            if not allowed:
                 why = " (ground-truth state)" if key in PRIVILEGED_KEYS else ""
+                patterns = ", ".join(pattern.pattern for pattern in ALLOWED_PATTERNS)
+                named = f", or a declared camera name {sorted(cameras)} at the top" if cameras else ""
+                # The usual way a facade camera block fails is a sender that
+                # never said which names are cameras.
+                hint = (
+                    " If this is a camera block, pass cameras=<the scene's camera names>."
+                    if path == "frame" and not cameras and key not in PRIVILEGED_KEYS
+                    else ""
+                )
                 raise ValueError(
                     f"{path}.{key}{why} is not on the bridge allowlist. A frame crossing the "
-                    f"privilege boundary may only carry {sorted(ALLOWED_KEYS)}; adding to that list "
-                    f"is a deliberate edit to robosimstudio_policy_agent.contract."
+                    f"privilege boundary may only carry {sorted(ALLOWED_KEYS)}, keys matching "
+                    f"{patterns}{named}; adding to that list is a deliberate edit to "
+                    f"robosimstudio_policy_agent.contract.{hint}"
                 )
             assert_non_privileged(value, path=f"{path}.{key}")
     elif isinstance(frame, (list, tuple)):

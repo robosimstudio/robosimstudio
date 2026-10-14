@@ -220,8 +220,6 @@ class IntentHandle:
         not arrive" is a *result* the connector routes on, not an error."""
         self.superseded = False
         self.steps = 0
-        self.result: Any = None
-        """What the motion reported when it ended -- a servo's outcome dict -- or ``None``."""
 
         self.ident = threading.get_ident()
         """Whoever submitted this, which is whoever will wait on it.
@@ -242,7 +240,6 @@ class IntentHandle:
         if self._done.is_set():
             return
         self.error = error
-        self.result = result
         self.superseded = bool(superseded)
         self.steps = int(steps)
         self.result = result
