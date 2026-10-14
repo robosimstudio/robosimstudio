@@ -213,7 +213,8 @@ def compare_still(
         reading = C.compare_masks(pm, sm)
         objects[key.name] = reading
         lines.append(C.advice(key.name, reading, w, key))
-    ious = [o["iou"] for o in objects.values() if o["iou"] is not None]
+    # a thing the photo shows and the render does not counts as no overlap, not as left out
+    ious = [o["iou"] or 0.0 for o in objects.values() if o["photo"] is not None]
     score = round(float(np.mean(ious)), 4) if ious else 0.0
     if not keys:
         lines.append("no --key given: nothing was measured; the look sheet still shows the pair")
@@ -438,6 +439,7 @@ def compare_take(
     rows: list[dict] = []
     tiles: list[tuple[np.ndarray, np.ndarray, str]] = []
     try:
+        last = reader.count_frames() - 1
         for anchor in anchors:
             t_ref = float(anchor["t"])
             if anchor.get("sim_step") is not None:
@@ -447,7 +449,7 @@ def compare_take(
             else:
                 frame = _nearest_frame(frames, t_ref / clip_len * take_len)
             i = int(frame["i"])
-            rgb = np.asarray(reader.get_data(min(i, reader.count_frames() - 1)))[..., :3].astype(np.uint8)
+            rgb = np.asarray(reader.get_data(min(i, last)))[..., :3].astype(np.uint8)
             seg = None
             if segs is not None and i < len(segs):
                 seg = np.asarray(segs[i]).astype(np.int32)
@@ -457,14 +459,12 @@ def compare_take(
             objects: dict[str, dict] = {}
             pairs: dict[str, tuple] = {}
             found = photo_masks(photo, keys)
+            masks = C.sim_masks(seg, names, [k.name for k in keys]) if seg is not None else {}
             for key in keys:
                 pm = found[key.name]
                 pm = C.fit_mask(pm, w, h) if pm is not None else None
-                sm = None
-                if seg is not None:
-                    ids = {v: k for k, v in names.items()}
-                    if key.name in ids:
-                        sm = C.fit_mask(seg == ids[key.name], w, h)
+                sm = masks.get(key.name)
+                sm = C.fit_mask(sm, w, h) if sm is not None else None
                 reading = C.compare_masks(pm, sm)
                 objects[key.name] = reading
                 pairs[key.name] = (pm, sm)
@@ -524,7 +524,7 @@ def compare_take(
             lines.append(
                 f"{key.name}: {'moved' if p['moved'] else 'stayed'} in both; clip ({p['dx']:+.0f}, {p['dy']:+.0f}) px, take ({s['dx']:+.0f}, {s['dy']:+.0f}) px"
             )
-    ious = [o["iou"] for r in rows for o in r["objects"].values() if o["iou"] is not None]
+    ious = [o["iou"] or 0.0 for r in rows for o in r["objects"].values() if o["photo"] is not None]
     score = round(float(np.mean(ious)), 4) if ious else 0.0
     for r in rows:
         per = ", ".join(
@@ -558,6 +558,7 @@ def write_strip(base: Path, tiles: list[tuple[np.ndarray, np.ndarray, str]], til
         sheet.paste(Image.fromarray(bottom).resize((tile_width, th)), (x, 18 + th))
         draw.text((x + 4, 3), label, fill=(255, 255, 255))
     path = base.with_name(base.stem + "_strip.png")
+    path.parent.mkdir(parents=True, exist_ok=True)
     sheet.save(path)
     return str(path)
 
@@ -583,16 +584,15 @@ def gate(
     def add(name: str, ok: bool, detail: str) -> None:
         checks.append({"name": name, "ok": bool(ok), "detail": detail})
 
+    # only a build's own failure: a routine, a click or a take that failed leaves last_error but not this
+    build_error = server.build_error
     add(
         "builds",
-        not server.last_error,
-        "the last rebuild landed" if not server.last_error else server.last_error.strip().splitlines()[-1],
+        not build_error,
+        "the last rebuild landed" if not build_error else build_error.strip().splitlines()[-1],
     )
-    add(
-        "finite",
-        bool(sim.state_is_finite()),
-        "every number in the state is finite" if sim.state_is_finite() else "the state has gone nan",
-    )
+    finite = bool(sim.state_is_finite())
+    add("finite", finite, "every number in the state is finite" if finite else "the state has gone nan")
 
     cameras = {c.name: c for c in sim.cameras}
     cam = cameras.get(camera) if camera else (next(iter(cameras.values())) if cameras else None)
@@ -625,12 +625,16 @@ def gate(
     )
 
     # penetration, as the scene stands
-    worst_mm, pairs = _penetration(sim)
-    add(
-        "penetration",
-        worst_mm <= penetration_mm,
-        f"worst overlap {worst_mm:.2f} mm" + (f" between {pairs[0]}" if pairs else ""),
-    )
+    try:
+        worst_mm, pairs = _penetration(sim)
+    except Exception as e:  # a probe that cannot answer is a failed line, not a gate with no report
+        add("penetration", False, f"the contact probe raised {type(e).__name__}: {e}")
+    else:
+        add(
+            "penetration",
+            worst_mm <= penetration_mm,
+            f"worst overlap {worst_mm:.2f} mm" + (f" between {pairs[0]}" if pairs else ""),
+        )
 
     # rest: leave the scene alone and see what drifts
     before = _positions(sim, wanted or list(have))
@@ -648,11 +652,8 @@ def gate(
         if worst[1] <= settle_mm
         else f"{worst[0]} drifted {worst[1]:.1f} mm in {steps} steps left alone",
     )
-    add(
-        "finite_after",
-        bool(sim.state_is_finite()),
-        f"still finite after {steps} steps" if sim.state_is_finite() else f"went nan within {steps} steps",
-    )
+    finite = bool(sim.state_is_finite())
+    add("finite_after", finite, f"still finite after {steps} steps" if finite else f"went nan within {steps} steps")
 
     passed = all(c["ok"] for c in checks)
     report = "\n".join(f"{'PASS' if c['ok'] else 'FAIL'}  {c['name']:<12} {c['detail']}" for c in checks)
@@ -675,23 +676,9 @@ def _positions(sim: Any, names: list[str]) -> dict[str, list[float]]:
 
 
 def _penetration(sim: Any) -> tuple[float, list[str]]:
-    probe = getattr(sim, "contacts", None)
-    if probe is None:
-        return 0.0, []
-    try:
-        from robosimstudio.scene.snapshot import _bodies
-        from robosimstudio.scene.snapshot import _penetration as named
+    from robosimstudio.scene.snapshot import penetration_rows
 
-        rows = named(sim, sim.model, _bodies(sim))
-    except Exception:
-        probe.update()
-        rows = [
-            {
-                "depth_mm": 1000.0 * float(r[2]),
-                "between": [str(int(r[0])), str(int(r[1]))],
-            }
-            for r in probe.penetrations()
-        ]
+    rows = penetration_rows(sim)
     if not rows:
         return 0.0, []
     worst = rows[0]

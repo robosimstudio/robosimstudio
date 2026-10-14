@@ -407,7 +407,9 @@ def wait_for_steps(sock: Path, reply: dict, steps: int) -> dict:
 
     A rebuild (a save) or a reset under the run ends it: the step count starts
     over, so the target would never be reached, and the reply says what
-    happened instead of waiting out the deadline.
+    happened instead of waiting out the deadline. A reset is read off the
+    page's reset count, not the step count, which may have climbed back past
+    ``start`` by the next poll.
     """
     start = int(reply["step"])
     target = start + int(steps)
@@ -419,7 +421,7 @@ def wait_for_steps(sock: Path, reply: dict, steps: int) -> dict:
             break
         if status.get("generation", reply.get("generation")) != reply.get("generation"):
             return {"ok": False, "error": "the scene was rebuilt during the run; the run ended", "step": status["step"]}
-        if status["step"] < start:
+        if status.get("resets", reply.get("resets")) != reply.get("resets") or status["step"] < start:
             return {"ok": False, "error": "the scene was reset during the run; the run ended", "step": status["step"]}
         if status["step"] >= target or (status["paused"] and status["playing"] == 0):
             return {
@@ -513,10 +515,14 @@ def cmd_up(args: argparse.Namespace, sock: Path) -> int:
     try:
         status = request(sock, {"cmd": "status"}, 5.0)
     except NoServer:
+        if sock.exists() and not sock.is_socket():
+            print(f"ctl: {sock} exists and is not a socket; name another --sock", file=sys.stderr)
+            return 2
         try:
-            sock.unlink()  # a socket file with nobody behind it
-        except FileNotFoundError:
-            pass
+            sock.unlink(missing_ok=True)  # a socket file with nobody behind it
+        except OSError as exc:
+            print(f"ctl: a dead socket at {sock} cannot be removed ({exc}); name another --sock", file=sys.stderr)
+            return 2
     except NoReply:
         print(
             f"ctl: a server at {sock} is not answering; `quit` it, or pick another --run-dir",

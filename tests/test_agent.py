@@ -59,8 +59,10 @@ class TestTheSceneFileContract(unittest.TestCase):
         self.assertEqual(self.calls, [], "nothing is built for a file with no scene")
 
     def test_a_bound_sim_wins_over_building(self) -> None:
-        loaded = scenefile.run_scene_file(_write(self.tmp, SCENE + 'sim = "SENTINEL"\n'), build=self.build)
-        self.assertEqual(loaded.sim, "SENTINEL")
+        loaded = scenefile.run_scene_file(
+            _write(self.tmp, SCENE + "sim = rss.Sim.__new__(rss.Sim)\n"), build=self.build
+        )
+        self.assertIsInstance(loaded.sim, rss.Sim)
         self.assertEqual(self.calls, [])
         self.assertIsInstance(loaded.scene, rss.Scene)
         self.assertGreaterEqual(loaded.seconds, 0.0)

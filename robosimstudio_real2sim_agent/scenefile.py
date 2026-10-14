@@ -5,8 +5,10 @@ When the file has run, ``scene`` is an ``rss.Scene``. That is all. The server
 builds it with ``scene.build(control_mode="joint_position")`` -- or takes the
 ``sim`` the file bound, if it bound one -- and a ``BUILD = {...}`` dict is
 passed to ``build`` as keyword arguments. ``rss.view``, ``rss.draw`` and
-``rss.viewer`` are no-ops while the file runs, so a script pasted from
-``examples/scenes/`` works unchanged: the page is this process's, and a file
+``rss.viewer`` are no-ops that return None while the file runs, so a script
+pasted from ``examples/`` that calls ``rss.view`` or ``rss.draw`` works
+unchanged (one that drives the viewer ``rss.viewer`` returns does not:
+``viewer.scene`` is an attribute of None): the page is this process's, and a file
 that opened a second one would block on viser's tunnel. The file runs as
 ``scene``, not ``__main__``, so a ``__main__`` guard does not fire.
 
@@ -78,6 +80,10 @@ def run_scene_file(path: Path | str, *, build: Callable[..., Any] | None = None)
         kwargs: dict = {"control_mode": "joint_position"}
         kwargs.update(ns.get("BUILD") or {})
         sim = (build or _build)(scene, **kwargs)
+    elif not isinstance(sim, rss.Sim):
+        raise TypeError(
+            f"{path.name} bound `sim` to {type(sim).__name__}; it must be an rss.Sim built from `scene`, or left unbound"
+        )
     return Loaded(ns=ns, scene=scene, sim=sim, seconds=time.perf_counter() - started)
 
 

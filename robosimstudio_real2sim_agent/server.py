@@ -50,10 +50,12 @@ import importlib
 import inspect
 import io
 import json
+import math
 import os
 import queue
 import signal
 import sys
+import sysconfig
 import time
 import traceback
 from contextlib import redirect_stdout
@@ -76,6 +78,8 @@ STABLE_SECONDS = 0.3
 """How long a saved file has to stop changing before it is executed."""
 REFRESH_SECONDS = 0.5
 """How often the ``Live`` folder's readouts are rewritten."""
+BOARD_LIMIT = 8
+"""Pictures kept on the board; the oldest goes when another comes. The run directory keeps every one."""
 
 
 class LiveServer:
@@ -113,9 +117,13 @@ class LiveServer:
         self.scene: Any = None
         self.sim: Any = None
         self.last_error = ""
+        self.build_error = ""
+        """The last build's failure alone; ``last_error`` also holds a routine's, a click's or a take's."""
         self.loaded_at = 0.0
         self.load_seconds = 0.0
         self.run_budget = 0
+        self.resets = 0
+        """Resets taken since the page came up: ``ctl run N`` reads a change in it as its run ended."""
         """Steps left before the page pauses again; -1 is no limit."""
         self.script: list = []
         """Generators an ``eval`` returned, advanced one ``next()`` per loop pass."""
@@ -156,6 +164,8 @@ class LiveServer:
         file's directory: a helper beside ``scene.py``, or a package of them.
         """
         root = self.path.parent
+        # installed packages are never helpers, even when the virtualenv sits under the scene file's directory
+        installed = {Path(p).resolve() for key in ("purelib", "platlib") if (p := sysconfig.get_paths().get(key))}
         gone = []
         for name, module in list(sys.modules.items()):
             if name in self._baseline_modules or name.partition(".")[0] in self._baseline_modules:
@@ -163,9 +173,14 @@ class LiveServer:
             file = getattr(module, "__file__", None)
             if not file:
                 continue
+            resolved = Path(file).resolve()
             try:
-                Path(file).resolve().relative_to(root)
+                resolved.relative_to(root)
             except ValueError:
+                continue
+            if any(part in ("site-packages", "dist-packages") for part in resolved.parts) or any(
+                resolved.is_relative_to(lib) for lib in installed
+            ):
                 continue
             del sys.modules[name]
             gone.append(name)
@@ -198,7 +213,7 @@ class LiveServer:
                     "\n\nand the bare scene that should have replaced it failed too:\n" + traceback.format_exc()[-2000:]
                 )
                 print(f"[live] the bare scene failed too:\n{error}", file=sys.stderr, flush=True)
-            self.last_error = error
+            self.last_error = self.build_error = error
             self.session.status = f"rebuild failed going into the page: {type(exc).__name__}: {exc}"
             ok = False
         del old
@@ -212,7 +227,7 @@ class LiveServer:
         self.generation += 1
         self.session.adopt(loaded.sim, label="live")
         self.session.begin_run()
-        self.last_error = ""
+        self.last_error = self.build_error = ""
         self.loaded_at = time.time()
         self.load_seconds = loaded.seconds
 
@@ -222,7 +237,7 @@ class LiveServer:
         try:
             loaded = self.load()
         except (Exception, SystemExit) as exc:
-            self.last_error = traceback.format_exc()[-3000:]
+            self.last_error = self.build_error = traceback.format_exc()[-3000:]
             self.session.status = f"reload failed: {type(exc).__name__}: {exc}"
             print(
                 f"[live] reload ({why}) failed:\n{self.last_error}",
@@ -295,15 +310,21 @@ class LiveServer:
                     self.last_error = str(reply.get("error", ""))
                     self.refresh_live(force=True)
 
-    def routine_names(self) -> list[str]:
-        """The routines the scene file offers: ``routine`` (one) and ``routines`` (a dict of name -> callable)."""
-        names = []
+    def routines(self) -> dict[str, Any]:
+        """The routines the scene file offers, by the name their button carries: ``routine`` (one) and
+        ``routines`` (a dict of name -> callable, its keys named as ``str`` names them)."""
+        found: dict[str, Any] = {}
         if callable(self.ns.get("routine")):
-            names.append("routine")
+            found["routine"] = self.ns["routine"]
         many = self.ns.get("routines")
         if isinstance(many, dict):
-            names.extend(str(k) for k, v in many.items() if callable(v))
-        return names
+            for k, v in many.items():
+                if callable(v):
+                    found.setdefault(str(k), v)
+        return found
+
+    def routine_names(self) -> list[str]:
+        return list(self.routines())
 
     def start_script(self, gen, *, record: str = "", every: int = 4, camera: str = "") -> None:
         """Queue a generator to play one step per loop pass, filming it when asked.
@@ -313,6 +334,8 @@ class LiveServer:
         so when the queue empties the page carries on as it was before.
         """
         if record:
+            # the new take films the new routine alone: what was queued ahead of it is dropped, not filmed into it
+            self.script.clear()
             self._finish_recorder("another recording started")
             recorder = checks.Recorder(self, record, camera=camera, every=every)
             try:
@@ -327,6 +350,9 @@ class LiveServer:
     def stop_scripts(self, why: str) -> None:
         """Drop every queued script and finish the take filming them. Main thread."""
         self.script.clear()
+        if self.run_budget > 0:
+            # a `run N` under way ends held, as it would have at its last step, not running on unbounded
+            self.session.set_paused(True)
         self.run_budget = 0
         self._finish_recorder(why)
 
@@ -336,16 +362,26 @@ class LiveServer:
         gen = self.script[0]
         try:
             next(gen)
-            if self.recorder is not None:
-                self.recorder.maybe()
-            return
         except StopIteration:
             self.script.pop(0)
             print("[live] script finished", flush=True)
         except Exception:
             self.script.pop(0)
+            gen.close()
             self.last_error = traceback.format_exc()[-3000:]
             print(f"[live] script failed:\n{self.last_error}", file=sys.stderr, flush=True)
+        else:
+            if self.recorder is not None:
+                try:
+                    self.recorder.maybe()
+                except Exception:
+                    # the recording failed, not the routine: drop the take and let the routine play on
+                    recorder, self.recorder = self.recorder, None
+                    recorder.close()
+                    print(
+                        f"[live] the recording failed:\n{traceback.format_exc()[-3000:]}", file=sys.stderr, flush=True
+                    )
+            return
         if not self.script:
             self._finish_recorder("the script ended")
 
@@ -436,6 +472,11 @@ class LiveServer:
             while self.session.viewer.is_running() and not self.session.quit_requested:
                 self.tick_once()
         finally:
+            try:
+                # a take still filming is written out, as a reset would write it, before the page goes
+                self.stop_scripts("the server stopped")
+            except Exception:
+                print(f"[live] the take could not be finished:\n{traceback.format_exc()[-3000:]}", file=sys.stderr)
             self.socket.close()
             self.bus.close()
             self.session.close()
@@ -471,7 +512,7 @@ class LiveServer:
         # viser takes the next port up when the one asked for is busy
         self.url = f"http://localhost:{self.session.server.get_port()}"
         self.generation += 1
-        self.last_error = error
+        self.last_error = self.build_error = error
         self.loaded_at = time.time()
         self.load_seconds = loaded.seconds
         self.session.begin_run()
@@ -528,6 +569,7 @@ class LiveServer:
             "paused": bool(self.session.paused),
             "playing": len(self.script),
             "generation": self.generation,
+            "resets": self.resets,
             "finite": bool(sim.state_is_finite()),
             "routines": self.routine_names(),
             "board": list(self.board),
@@ -552,6 +594,7 @@ class LiveServer:
             "step": int(self.sim.step_count),
             "budget": self.run_budget,
             "generation": self.generation,
+            "resets": self.resets,
         }
 
     def cmd_pause(self) -> dict:
@@ -719,7 +762,29 @@ class LiveServer:
             return {"ok": False, "error": f"no clip at {clip}"}
         out_dir = Path(out) if out else self.ref_dir()
         meta = frames.probe(clip_path)
+        if meta["duration"] <= 0:
+            # ffmpeg read "Duration: N/A" (a raw .h264 stream, some webm): "end" would be 0 and no time can be sought
+            return {
+                "ok": False,
+                "error": f"{clip} has no duration ffmpeg can read; re-mux it (ffmpeg -i {clip} -c copy out.mp4)",
+            }
         times = frames.parse_times(at, meta["duration"] - 1.0 / (meta["fps"] or 30.0))  # "end" is the last frame
+        # a still is named to the hundredth, so the anchor is that hundredth: two times inside one name are one moment
+        floored: dict[float, tuple[str, str]] = {}  # t -> (label, the time as asked)
+        for t, label in times:
+            moment = math.floor(t * 100 + 1e-6) / 100
+            if moment not in floored:
+                floored[moment] = (label, f"{t:g}")
+                continue
+            kept, asked = floored[moment]
+            if label and kept and label != kept:
+                return {
+                    "ok": False,
+                    "error": f"{asked}:{kept} and {t:g}:{label} fall in one still ({frames._stem(moment)}.jpg); "
+                    "mark them at least 0.01 s apart",
+                }
+            floored[moment] = (kept or label, asked)
+        times = [(t, label) for t, (label, _) in floored.items()]
         stills_cut = frames.extract(clip_path, [t for t, _ in times], out_dir, width=width)
         anchors = [{"t": t, "file": p.name, "label": label} for (t, label), p in zip(times, stills_cut, strict=True)]
         spacing = float(every) if every else max(0.5, round(meta["duration"] / 24.0, 1))
@@ -880,6 +945,11 @@ class LiveServer:
         timeline: str = "",
         note: str = "",
     ) -> dict:
+        if self.script:
+            return {
+                "ok": False,
+                "error": "a routine is playing and steps the scene itself; wait for it to end, or `reset` to stop it",
+            }
         parsed = self._keys(keys)
         line = self._timeline(timeline)
         was_paused = self.session.paused
@@ -896,11 +966,12 @@ class LiveServer:
                 timeline=line,
             )
         except Exception as exc:
-            # the rest check may already have stepped the scene: put it back, as a passing check does
+            # the rest check may already have stepped the scene: reset it, as a passing check does
             self.session.reset_requested = True
             self.session.set_paused(was_paused)
             return {"ok": False, "error": f"{type(exc).__name__}: {exc}"}
-        # the rest check stepped the scene: put it back where it was, and resume if it was running
+        # the rest check stepped the scene: reset it to its start (what `eval` or `run N` moved is not kept),
+        # and resume if it was running
         self.session.reset_requested = True
         self.session.set_paused(was_paused)
         (self.run_dir / "check.json").write_text(json.dumps(result, default=checks._plain, indent=1))
@@ -925,7 +996,8 @@ class LiveServer:
 
     def cmd_play(self, name: str = "", record: str = "", every: int = 4, camera: str = "") -> dict:
         """Play a routine the scene file binds, the way its button does."""
-        names = self.routine_names()
+        found = self.routines()
+        names = list(found)
         if not names:
             return {
                 "ok": False,
@@ -934,7 +1006,7 @@ class LiveServer:
         name = name or names[0]
         if name not in names:
             return {"ok": False, "error": f"no routine called {name!r}; the scene file binds {', '.join(names)}"}
-        fn = self.ns["routine"] if name == "routine" else self.ns["routines"][name]
+        fn = found[name]
         try:
             # a routine that asks for the page's session gets it: the arm panels write the gripper
             # every tick, and a routine closing a grip has to hold them off while it plays
@@ -963,8 +1035,13 @@ class LiveServer:
             return {"ok": False, "error": "show needs a picture, or --clear"}
         image, name = stills.load_reference(path)
         label = label or name
+        self.board.pop(label, None)  # a picture shown again is the newest, not kept in its old place
         self.board[label] = image
         self.session.show(label, image)
+        while len(self.board) > BOARD_LIMIT:
+            oldest = next(iter(self.board))
+            del self.board[oldest]
+            self.session.clear(oldest)
         return {"ok": True, "board": list(self.board)}
 
     def cmd_log(self, last: int = 0) -> dict:

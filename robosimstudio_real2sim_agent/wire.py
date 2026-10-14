@@ -68,14 +68,13 @@ def socket_path(run_dir: str | os.PathLike | None, sock: str | os.PathLike | Non
     if sock:
         return Path(sock)
     path = Path(run_dir or DEFAULT_RUN_DIR) / SOCKET_NAME
-    if (
-        len(os.fsencode(path)) <= SUN_PATH_MAX
-    ):  # as given: a relative `run/ctl.sock` is short however deep the directory
-        return path
+    full = path.resolve()
+    if len(os.fsencode(full)) <= SUN_PATH_MAX:  # resolved, so every spelling of one run dir chooses alike
+        return path if len(os.fsencode(path)) <= SUN_PATH_MAX else full  # the path returned is one that fits
     import hashlib
     import tempfile
 
-    digest = hashlib.sha1(os.fsencode(path.resolve())).hexdigest()[:12]
+    digest = hashlib.sha1(os.fsencode(full)).hexdigest()[:12]
     return Path(tempfile.gettempdir()) / f"rss-live-{digest}.sock"
 
 
@@ -122,17 +121,22 @@ def request(sock: Path | str, req: dict, timeout: float) -> dict:
     client.settimeout(timeout)
     try:
         client.connect(str(sock))
-    except (FileNotFoundError, ConnectionRefusedError) as exc:
+    except (BlockingIOError, TimeoutError) as exc:  # a full backlog: a server frozen, not gone
         client.close()
-        raise NoServer(f"no server at {sock}") from exc
+        raise NoReply(f"the server at {sock} is not accepting connections") from exc
+    except OSError as exc:
+        client.close()
+        raise NoServer(f"no server at {sock} ({exc.strerror or exc})") from exc
     with client:
-        stream = client.makefile("rwb")
-        stream.write(encode(req))
-        stream.flush()
         try:
+            stream = client.makefile("rwb")
+            stream.write(encode(req))
+            stream.flush()
             line = stream.readline()
         except TimeoutError as exc:
             raise NoReply(f"no reply within {timeout:.0f} s") from exc
+        except OSError as exc:
+            raise NoReply(f"the server dropped the connection ({exc.strerror or exc})") from exc
     if not line:
         raise NoReply("the server closed the connection without answering")
     return json.loads(line)
@@ -171,7 +175,9 @@ class ControlSocket:
     def bind(self) -> socket.socket:
         """Take the socket path and listen on it. Raises if a live server holds it, or on any bind failure."""
         self.path.parent.mkdir(parents=True, exist_ok=True)
-        if self.path.exists() or self.path.is_socket():
+        if self.path.exists() and not self.path.is_socket():
+            raise FileExistsError(f"{self.path} exists and is not a socket; name another --sock")
+        if self.path.is_socket():
             probe = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
             probe.settimeout(1.0)
             try:

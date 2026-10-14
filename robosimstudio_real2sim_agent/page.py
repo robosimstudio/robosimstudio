@@ -53,6 +53,7 @@ class LiveSession(StudioSession):
         """A reset ends whatever routine is playing and the take filming it, then resets."""
         # Before the reset: a take's last frame is read off the scene as it stands.
         self.host.stop_scripts("reset")
+        self.host.resets += 1
         return super().reset_now()
 
     def build_gui(self) -> None:

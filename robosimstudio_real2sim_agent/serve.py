@@ -1,13 +1,15 @@
 # SPDX-License-Identifier: Apache-2.0
 """Serve the live page on a scene file, in the foreground.
 
-    python -m robosimstudio_real2sim_agent.serve --scene examples/live/scene.py --port 8080
+    python -m robosimstudio_real2sim_agent.serve --scene examples/live/scene.py --run-dir examples/live/run --port 8080
 
 The page's log is this terminal; ``python -m robosimstudio_real2sim_agent up`` is the
 same server started detached, and ``python -m robosimstudio_real2sim_agent`` is the
-command line onto either. ``scripts/live.py`` is this, listed with the other
-doors. All this file does is turn a command line into a
-:class:`~robosimstudio_studio.StudioConfig` and a :class:`~.server.LiveServer`.
+command line onto either. ``--run-dir`` (default ``run/`` under the working directory)
+is where the socket is: ``./ctl`` in ``examples/live/`` looks in
+``examples/live/run``. ``scripts/live.py`` is this, listed with the other doors. All
+this file does is turn a command line into a :class:`~robosimstudio_studio.StudioConfig`
+and a :class:`~.server.LiveServer`.
 
 ``--camera-view`` is the studio's *live camera view* -- a scene camera
 rendered into the sidebar as the loop runs -- and is off here by default

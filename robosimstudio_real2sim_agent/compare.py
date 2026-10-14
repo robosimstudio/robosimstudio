@@ -407,7 +407,7 @@ def look_sheet(
     width: int = 1280,
 ) -> np.ndarray:
     """One picture to reason about: the pair on top, then every captioned row (each thing up close, the background)."""
-    from PIL import Image, ImageDraw
+    from PIL import Image
 
     h = int(round(photo.shape[0] * (width // 2) / photo.shape[1]))
     top = np.concatenate(
@@ -430,7 +430,6 @@ def look_sheet(
         padded[:, : tile.shape[1]] = tile
         blocks += [_caption(caption, width), padded]
     sheet = np.concatenate(blocks, axis=0)
-    del ImageDraw
     return sheet
 
 

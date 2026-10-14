@@ -82,6 +82,8 @@ def extract(clip: str | Path, times: list[float], out_dir: str | Path, *, width:
     paths = []
     for t in times:
         path = out_dir / f"{_stem(t)}.jpg"
+        # whether ffmpeg wrote a frame is read off the file, so a still left by an earlier clip must go first
+        path.unlink(missing_ok=True)
         argv = [exe, "-v", "error", "-y", "-ss", f"{t:.3f}", "-i", str(clip), "-frames:v", "1", "-q:v", "2"]
         if width:
             argv += ["-vf", f"scale={int(width)}:-2"]
@@ -89,6 +91,7 @@ def extract(clip: str | Path, times: list[float], out_dir: str | Path, *, width:
         if not path.exists():
             # past the last frame: ffmpeg exits 0 and writes nothing, so step back one frame and ask again
             argv[5] = f"{max(0.0, t - 2.0 / _fps(clip)):.3f}"
+            path.unlink(missing_ok=True)
             subprocess.run([*argv, str(path)], check=True, stdin=subprocess.DEVNULL)
             if not path.exists():
                 raise ValueError(f"no frame at {t:.3f} s in {clip}")
@@ -157,6 +160,9 @@ def write_timeline(ref_dir: str | Path, meta: dict[str, Any], anchors: list[dict
         for a in current.get("anchors", [])
         if not fresh or not a.get("file") or Path(a["file"]).is_absolute() or (ref_dir / a["file"]).exists()
     }
+    # a label marked again at another time moves that moment; the old one would be scored as a second
+    relabelled = {str(a["label"]): round(float(a["t"]), 3) for a in anchors if a.get("label")}
+    kept = {t: a for t, a in kept.items() if relabelled.get(str(a.get("label") or ""), t) == t}
     for anchor in anchors:
         t = round(float(anchor["t"]), 3)
         merged = dict(kept.get(t, {}))

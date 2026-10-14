@@ -57,6 +57,10 @@ def parse_size(text: str, default: tuple[int, int]) -> tuple[int, int]:
 
 def camera_for(sim: Any, scene: Any, *, name: str = "", size: str = "", eye: str = "", look_at: str = ""):
     """The camera a still is taken through: named, posed, the first declared, or a default three-quarter view."""
+    if bool(eye) != bool(look_at):
+        raise ValueError("--eye and --look-at go together; got only one")
+    if name and eye:
+        raise ValueError("--camera or --eye/--look-at, not both")
     import robosimstudio as rss
 
     cameras = {c.name: c for c in sim.cameras}
@@ -112,12 +116,27 @@ def render_still(sim: Any, cam: Any) -> np.ndarray:
     return to_uint8(sim.render(cam)["rgb"][..., :3])
 
 
+BROWSER_TIMEOUT = 10.0
+"""Seconds to wait for a connected browser to send its frame back."""
+
+
 def browser_still(server: Any, size: str = "") -> np.ndarray | None:
-    """What the connected browser shows from its own viewpoint, or None when nobody is connected."""
-    if not server.get_clients():
+    """What the connected browser shows from its own viewpoint, or None when nobody is connected.
+
+    The render is asked of a client, not the server (viser's server has no
+    ``get_render``), as JPEG so it comes back opaque RGB rather than RGBA over
+    a transparent background.
+    """
+    clients = server.get_clients()
+    if not clients:
         return None
+    client = next(iter(clients.values()))
     w, h = parse_size(size, (1280, 720))
-    return to_uint8(np.asarray(server.get_render(h, w, transport_format="png"))[..., :3])
+    try:
+        rgb = client.get_render(h, w, transport_format="jpeg", timeout=BROWSER_TIMEOUT)
+    except TimeoutError as exc:
+        raise TimeoutError(f"the browser sent no frame within {BROWSER_TIMEOUT:.0f} s") from exc
+    return to_uint8(np.asarray(rgb)[..., :3])
 
 
 def side_by_side(sim_rgb: np.ndarray, reference_path: str) -> np.ndarray:

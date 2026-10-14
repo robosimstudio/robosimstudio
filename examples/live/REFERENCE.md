@@ -56,8 +56,9 @@ scene.add(rss.robot("yam_i2rt"))  # a scene needs something that moves before it
 - The server builds it with `scene.build(control_mode="joint_position")`. Bind
   `sim` yourself and the server takes that instead.
 - A `BUILD = {...}` dict is passed to `build` as keyword arguments.
-- `rss.view`, `rss.draw` and `rss.viewer` do nothing while the file runs, so a
-  script pasted from the examples works unchanged.
+- `rss.view`, `rss.draw` and `rss.viewer` do nothing and return None while the
+  file runs, so a script pasted from the examples works unchanged unless it
+  drives the viewer `rss.viewer` returns.
 - Poses are in the work-surface frame. See [Frames and units](#frames-and-units).
 - Bind `routine` (a callable taking the built `sim` and returning a
   generator that yields once per control step), or `routines`, a dict of
@@ -213,10 +214,11 @@ FAIL  penetration  worst overlap 1.99 mm between socket and table
 PASS  rest         nothing moved more than 0.4 mm in 60 steps
 ```
 
-The rest check steps the scene and puts it back afterwards. `--steps`,
-`--settle-mm` and `--penetration-mm` set the bars. On the socket-case twin
-the overlap line found the socket two millimetres into the table, which no
-picture showed.
+The rest check steps the scene, then resets it to its start: a pose set with
+`eval` or reached with `run N` is not kept. `check` is refused while a routine
+plays. `--steps`, `--settle-mm` and `--penetration-mm` set the bars. On the
+socket-case twin the overlap line found the socket two millimetres into the
+table, which no picture showed.
 
 ### The take
 
