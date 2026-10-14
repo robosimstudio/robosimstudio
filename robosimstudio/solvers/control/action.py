@@ -47,6 +47,7 @@ __all__ = [
     "ActionJointPosition",
     "ActionOsc",
     "ActionSpace",
+    "UnsupportedMode",
     "control_mode_class",
     "make_action_space",
     "make_action_spaces",
@@ -67,11 +68,18 @@ added with :func:`register_control_mode`, and **a dotted path needs no
 registration at all**, so a control mode written outside this tree is nameable
 by whoever wrote it. Anything answering the four methods of
 :class:`~robosimstudio.core.env.ActionSpace` is drivable.
+
+A mode that cannot serve an embodiment raises :class:`UnsupportedMode` from its
+constructor and :func:`make_action_spaces` leaves it out; any other error
+propagates and fails the build.
 """
 
 
 def register_control_mode(mode: str, cls: str | type) -> str:
     """Register a control mode under a name. Identical re-registration is accepted.
+
+    A mode that cannot serve an embodiment raises :class:`UnsupportedMode` and is
+    skipped by :func:`make_action_spaces`; any other error propagates.
 
     Raises:
         ValueError: If ``mode`` is taken by a different class.
@@ -104,6 +112,16 @@ wants more than one within an episode: a planner's joint trajectory to get acros
 the workcell, then normalized Cartesian deltas for the part that needs feedback.
 See :meth:`~robosimstudio.core.env.EnvBase.use_control`.
 """
+
+
+class UnsupportedMode(ValueError):
+    """This embodiment or environment cannot do this control mode.
+
+    The one failure :func:`make_action_spaces` skips a mode for. Distinct from a
+    plain ``ValueError`` so a misconfigured option -- a misspelled convention, a
+    backwards ``gripper_range`` -- still raises with its own message instead of
+    surfacing later as a mode that is merely missing.
+    """
 
 
 class ActionSpace:
@@ -161,7 +179,7 @@ class ActionJointPosition(ActionSpace):
         super().__init__(arms, by_dof=by_dof)
         widths = {len(ik.arm_coords) for ik, _ in self.arms}
         if len(widths) != 1:
-            raise ValueError(f"joint_position needs arms of equal width, got {sorted(widths)}")
+            raise UnsupportedMode(f"joint_position needs arms of equal width, got {sorted(widths)}")
         self.per_arm = widths.pop() + 1
 
     def apply(self, action: Sequence[float], control, state) -> None:
@@ -232,6 +250,49 @@ class ActionEEPoseAbs(ActionSpace):
         return np.concatenate(parts).astype(np.float32)
 
 
+class _RangedGripper:
+    """The gripper number of a Cartesian space: an interval mapped onto 0..1.
+
+    Shared by :class:`ActionEEDelta` and :class:`ActionOsc` so the open/closed
+    convention lives in one place; two copies could drift apart without either
+    raising.
+    """
+
+    gripper_range: tuple[float, float] = (0.0, 1.0)
+
+    def _set_gripper_range(self, gripper_range: tuple[float, float]) -> None:
+        low, high = (float(v) for v in gripper_range)
+        if high <= low:
+            raise ValueError(f"gripper_range must be increasing, got {gripper_range}")
+        self.gripper_range = (low, high)
+
+    def grip_command(self, value: float, gripper: Gripper | None = None) -> float:
+        """Map a gripper command out of :attr:`gripper_range` onto 0 open .. 1 closed.
+
+        **Which end of the range closes is the hand's to say**, not this space's.
+        A benchmark's gripper controller maps a normalized action linearly onto
+        the joint's own ``[low, high]``, so a hand whose fingers *open* with
+        increasing travel is driven opposite to one whose fingers rotate shut --
+        and the two SimplerEnv robots are exactly that pair. Getting it wrong is
+        silent in every direction that matters: a scripted routine asking for
+        "closed" still closes, and only a trained checkpoint asking for -1
+        discovers that the hand opens.
+        """
+        low, high = self.gripper_range
+        normalized = float(np.clip((float(value) - low) / (high - low), 0.0, 1.0))
+        if gripper is not None and not gripper.action_closed_at_high:
+            return 1.0 - normalized
+        return normalized
+
+    def grip_action(self, command: float, gripper: Gripper | None = None) -> float:
+        """The inverse of :meth:`grip_command`: 0..1 back into the action's range."""
+        low, high = self.gripper_range
+        fraction = float(np.clip(command, 0.0, 1.0))
+        if gripper is not None and not gripper.action_closed_at_high:
+            fraction = 1.0 - fraction
+        return float(low + fraction * (high - low))
+
+
 EE_DELTA_CONVENTIONS = ("align", "align2", "tool")
 """How a delta pose composes onto the standing setpoint.
 
@@ -255,7 +316,7 @@ through another moves differently on every step that rotates:
 """
 
 
-class ActionEEDelta(ActionSpace):
+class ActionEEDelta(_RangedGripper, ActionSpace):
     """``[dx, dy, dz, drx, dry, drz, grip]`` per arm: a delta pose, integrated.
 
     The setpoint is *internal*, integrated from deltas rather than read back off
@@ -336,15 +397,12 @@ class ActionEEDelta(ActionSpace):
         super().__init__(arms, by_dof=by_dof)
         if convention not in EE_DELTA_CONVENTIONS:
             raise ValueError(f"unknown ee_delta convention {convention!r}; have {list(EE_DELTA_CONVENTIONS)}")
-        low, high = (float(v) for v in gripper_range)
-        if high <= low:
-            raise ValueError(f"gripper_range must be increasing, got {gripper_range}")
+        self._set_gripper_range(gripper_range)
         self.pos_scale = float(pos_scale)
         self.rot_scale = float(rot_scale)
         self.convention = convention
         self.use_target = bool(use_target)
         self.gripper_delta = bool(gripper_delta)
-        self.gripper_range = (low, high)
         self.frame_bodies = list(frame_bodies) if frame_bodies else [-1] * len(self.arms)
         if len(self.frame_bodies) != len(self.arms):
             raise ValueError(f"frame_bodies has {len(self.frame_bodies)} entries for {len(self.arms)} arms")
@@ -358,32 +416,6 @@ class ActionEEDelta(ActionSpace):
     def setpoints(self) -> list[tuple[np.ndarray, np.ndarray]]:
         """The current per-arm Cartesian setpoints, for readouts and recording."""
         return [(p.copy(), q.copy()) for p, q in self._setpoints]
-
-    def grip_command(self, value: float, gripper: Gripper | None = None) -> float:
-        """Map a gripper command out of :attr:`gripper_range` onto 0 open .. 1 closed.
-
-        **Which end of the range closes is the hand's to say**, not this space's.
-        A benchmark's gripper controller maps a normalized action linearly onto
-        the joint's own ``[low, high]``, so a hand whose fingers *open* with
-        increasing travel is driven opposite to one whose fingers rotate shut --
-        and the two SimplerEnv robots are exactly that pair. Getting it wrong is
-        silent in every direction that matters: a scripted routine asking for
-        "closed" still closes, and only a trained checkpoint asking for -1
-        discovers that the hand opens.
-        """
-        low, high = self.gripper_range
-        normalized = float(np.clip((float(value) - low) / (high - low), 0.0, 1.0))
-        if gripper is not None and not gripper.action_closed_at_high:
-            return 1.0 - normalized
-        return normalized
-
-    def grip_action(self, command: float, gripper: Gripper | None = None) -> float:
-        """The inverse of :meth:`grip_command`: 0..1 back into the action's range."""
-        low, high = self.gripper_range
-        fraction = float(np.clip(command, 0.0, 1.0))
-        if gripper is not None and not gripper.action_closed_at_high:
-            fraction = 1.0 - fraction
-        return float(low + fraction * (high - low))
 
     def _frame_quat(self, arm: int, state) -> np.ndarray:
         """The orientation the deltas are expressed in, as an xyzw quaternion."""
@@ -473,7 +505,7 @@ class ActionEEDelta(ActionSpace):
         return out
 
 
-class ActionOsc(ActionSpace):
+class ActionOsc(_RangedGripper, ActionSpace):
     """``[dx, dy, dz, drx, dry, drz, grip]`` per arm, robosuite ``OSC_POSE``'s space.
 
     The same width as :class:`ActionEEDelta` and a different contract, which is
@@ -521,11 +553,8 @@ class ActionOsc(ActionSpace):
     ) -> None:
         super().__init__(arms, by_dof=by_dof)
         if control_hz <= 0.0:
-            raise ValueError(f"osc_pose needs the environment's control rate, got control_hz={control_hz}")
-        low, high = (float(v) for v in gripper_range)
-        if high <= low:
-            raise ValueError(f"gripper_range must be increasing, got {gripper_range}")
-        self.gripper_range = (low, high)
+            raise UnsupportedMode(f"osc_pose needs the environment's control rate, got control_hz={control_hz}")
+        self._set_gripper_range(gripper_range)
         self.controllers = [
             OscController(ik, control_dt=1.0 / float(control_hz), gains=gains, output_max=output_max)
             for ik, _ in self.arms
@@ -539,26 +568,6 @@ class ActionOsc(ActionSpace):
     def setpoints(self) -> list[tuple[np.ndarray, np.ndarray]]:
         """Each arm's last commanded tool-centre pose, for readouts and recording."""
         return [controller.setpoint for controller in self.controllers]
-
-    def grip_command(self, value: float, gripper: Gripper | None = None) -> float:
-        """Map a gripper command out of :attr:`gripper_range` onto 0 open .. 1 closed.
-
-        Which end closes is the hand's to say; see
-        :meth:`ActionEEDelta.grip_command`, which this mirrors.
-        """
-        low, high = self.gripper_range
-        normalized = float(np.clip((float(value) - low) / (high - low), 0.0, 1.0))
-        if gripper is not None and not gripper.action_closed_at_high:
-            return 1.0 - normalized
-        return normalized
-
-    def grip_action(self, command: float, gripper: Gripper | None = None) -> float:
-        """The inverse of :meth:`grip_command`: 0..1 back into the action's range."""
-        low, high = self.gripper_range
-        fraction = float(np.clip(command, 0.0, 1.0))
-        if gripper is not None and not gripper.action_closed_at_high:
-            fraction = 1.0 - fraction
-        return float(low + fraction * (high - low))
 
     def apply(self, action: Sequence[float], control, state) -> None:
         for controller, ((_, gripper), values) in zip(
@@ -609,12 +618,10 @@ def make_action_space(
         **kwargs: Forwarded to the chosen class.
     """
     cls = control_mode_class(mode)
-    # ``control_hz`` goes only to a class that declares it, and that is load
-    # bearing rather than tidy: ``make_action_spaces`` reads a ``TypeError`` as
-    # "this embodiment cannot do this mode" and silently drops it, so handing
-    # the rate to a class that does not take one would cost every replay and
-    # every planner the joint mode they need. Asked of the signature, so a mode
-    # registered from outside states its own needs the same way.
+    # ``control_hz`` goes only to a class that declares it: handing the rate to
+    # a class that does not take one is a ``TypeError``, which would cost every
+    # environment the joint mode. Asked of the signature, so a mode registered
+    # from outside states its own needs the same way.
     wants_rate = "control_hz" in inspect.signature(cls).parameters
     return cls(arms, by_dof=by_dof, **({"control_hz": control_hz} if wants_rate else {}), **kwargs)
 
@@ -636,29 +643,48 @@ def make_action_spaces(
     and not the joint one. Asking for such a mode later fails then, naming what is
     available -- which is a better error than a scene that would not compile.
 
+    Only :class:`UnsupportedMode` is read that way. Any other error -- a bad
+    option, an argument the class does not take -- raises here with its own
+    message, rather than costing the mode and reappearing later as "this scene
+    has no control mode".
+
     Args:
         arms: One ``(ArmIK, Gripper | None)`` pair per arm.
         modes: Which modes to try. Defaults to :data:`CONTROL_MODES`.
         by_dof: Whether joint targets index by ``joint_qd``.
         control_hz: The environment's control rate.
         options: Per-mode extra arguments, ``{mode: kwargs}``. **Per mode rather
-            than shared**, because the silent-skip above turns a shared argument
-            into a missing mode: handing ``convention="align2"`` to every
-            constructor makes ``ActionJointPosition`` raise ``TypeError``, which
-            this loop reads as "this embodiment cannot do joint control" and
-            quietly drops the mode every replay and every planner needs.
-        **kwargs: Forwarded to every mode that accepts them.
+            than shared**, because a shared argument reaches every constructor:
+            handing ``convention="align2"`` to all of them makes
+            ``ActionJointPosition`` raise ``TypeError``.
+        **kwargs: Forwarded to every mode whose constructor accepts them, asked
+            of its signature. One that no mode in ``modes`` accepts raises
+            ``TypeError`` rather than vanishing.
     """
     spaces: dict[str, ActionSpace] = {}
     per_mode = dict(options or {})
+    taken: set[str] = set()
     for mode in modes:
+        shared = _accepted(control_mode_class(mode), kwargs)
+        taken.update(shared)
         try:
             spaces[mode] = make_action_space(
-                mode, arms, by_dof=by_dof, control_hz=control_hz, **kwargs, **per_mode.get(mode, {})
+                mode, arms, by_dof=by_dof, control_hz=control_hz, **shared, **per_mode.get(mode, {})
             )
-        except (ValueError, TypeError):
+        except UnsupportedMode:
             continue
+    unused = sorted(set(kwargs) - taken)
+    if unused:
+        raise TypeError(f"no control mode in {list(modes)} accepts {unused}")
     return spaces
+
+
+def _accepted(cls: type, kwargs: dict[str, Any]) -> dict[str, Any]:
+    """The part of ``kwargs`` that ``cls``'s constructor takes by name, or all of it given ``**kwargs``."""
+    params = inspect.signature(cls).parameters
+    if any(p.kind is inspect.Parameter.VAR_KEYWORD for p in params.values()):
+        return dict(kwargs)
+    return {k: v for k, v in kwargs.items() if k in params}
 
 
 def zero_action(space: ActionSpace, state) -> np.ndarray:

@@ -81,6 +81,11 @@ class EntityRigid(Entity):
         self.obb: ObbGrasp | None = None
         self.init_pose = np.asarray(spec.pose, dtype=np.float64)
         self.init_quat = np.asarray(spec.quat, dtype=np.float64)
+        # What every episode's layout is measured from, set once. ``init_pose``
+        # and ``init_quat`` follow the episode last placed; measuring from them
+        # would carry that episode's pose into the next one that does not name
+        # this object.
+        self._declared = np.concatenate([self.init_pose, self.init_quat])
         self.bbox: np.ndarray | None = None if spec.bbox is None else np.asarray(spec.bbox, dtype=np.float64)
 
     # -------------------------------------------------------------- phase 1
@@ -423,8 +428,8 @@ class EntityRigid(Entity):
 
     @property
     def declared_q(self) -> np.ndarray:
-        """The pose this object currently measures its episode layouts from."""
-        return np.concatenate([self.init_pose, self.init_quat])
+        """The pose this object measures its episode layouts from: the spec's own."""
+        return self._declared.copy()
 
     def _add_primitive(self, builder: newton.ModelBuilder, pose) -> None:
         """A body made from a primitive, with no file behind it.
@@ -1019,9 +1024,8 @@ class EntityRigid(Entity):
         if self.coord_start < 0:
             return
         # The remembered start pose stays in the frame the *spec* stated it in,
-        # because _episode_pose reads it back as its own base -- writing the
-        # placed pose here would re-place it on the next call, and again on the
-        # one after that.
+        # the frame _episode_pose works in. It is a record of this episode's
+        # start, not a base: the next episode is measured from ``declared_q``.
         raw = self._episode_pose(episode)
         self.init_pose, self.init_quat = raw[:3].copy(), raw[3:7].copy()
         pose = self._placed(raw)
@@ -1048,18 +1052,17 @@ class EntityRigid(Entity):
         if self.coord_start < 0:
             return
         # The remembered start pose stays in the frame the *spec* stated it in,
-        # because _episode_pose reads it back as its own base -- writing the
-        # placed pose here would re-place it on the next call, and again on the
-        # one after that.
+        # the frame _episode_pose works in. It is a record of this episode's
+        # start, not a base: the next episode is measured from ``declared_q``.
         raw = self._episode_pose(episode)
         self.init_pose, self.init_quat = raw[:3].copy(), raw[3:7].copy()
-        pose = self._placed(raw)
+        pose = np.asarray(self._placed(raw)[:7], dtype=np.float32)
+        # Just the seven coordinates, uploaded: a read of the whole vector and a
+        # write of it back, per object per state, is what a reset of forty
+        # objects spent most of its time on.
+        c = self.coord_start
         for state in (pipeline.state_0, pipeline.state_1):
-            q = state.joint_q.numpy()
-            c = self.coord_start
-            q[c : c + 3] = pose[:3]
-            q[c + 3 : c + 7] = pose[3:7]
-            state.joint_q.assign(q)
+            state.joint_q[c : c + 7].assign(pose)
 
     # ---------------------------------------------------------------- tuning
     def tunables(self, pipeline=None):

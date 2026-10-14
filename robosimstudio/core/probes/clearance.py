@@ -50,7 +50,7 @@ def _segment_segment(p1: np.ndarray, q1: np.ndarray, p2: np.ndarray, q2: np.ndar
     Ericson's ``ClosestPtSegmentSegment``, vectorised to an ``[n, m]`` table.
     Degenerate (zero-length) segments are points and fall out of the same
     formula through the ``a``/``e`` guards, which is why a sphere needs no
-    special case.
+    special case beyond Ericson's point-against-segment branch.
     """
     d1, d2 = q1 - p1, q2 - p2
     r = p1[:, None, :] - p2[None, :, :]
@@ -68,6 +68,9 @@ def _segment_segment(p1: np.ndarray, q1: np.ndarray, p2: np.ndarray, q2: np.ndar
     # against that end -- the standard two-pass fix-up.
     s = np.where(t < 0.0, np.clip(-c / np.where(a_ok, a, 1.0), 0.0, 1.0), s)
     s = np.where(t > 1.0, np.clip((b - c) / np.where(a_ok, a, 1.0), 0.0, 1.0), s)
+    # Second segment a point: t is already 0, and s is the first segment's
+    # closest point to it -- denom is 0 there, so the first pass left s at 0.
+    s = np.where(a_ok & ~e_ok, np.clip(-c / np.where(a_ok, a, 1.0), 0.0, 1.0), s)
     s = np.where(a_ok, s, 0.0)
     t = np.clip(t, 0.0, 1.0)
     closest_1 = p1[:, None, :] + d1[:, None, :] * s[..., None]

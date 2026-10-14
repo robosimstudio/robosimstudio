@@ -40,6 +40,7 @@ __all__ = [
     "TaskRequirements",
     "TaskSpec",
     "TaskSuite",
+    "park_lattice",
     "park_poses",
     "restage",
 ]
@@ -671,6 +672,7 @@ class TaskSpec:
         """
         scene = scene or self.scene
         embodiment = embodiment or self.embodiment
+        gripper = gripper or self.gripper
         bindings = self.bindings
         if (scene, embodiment, gripper) not in self.binding_keys:
             bindings = (
@@ -778,6 +780,17 @@ def restage(spec: TaskSpec, **changes: Any) -> TaskSpec:
     return replace(out, **rest) if rest else out
 
 
+def park_lattice(index: int) -> Xform:
+    """The ``index``-th slot of the default park lattice, in world coordinates.
+
+    :data:`_PARK_ROW` slots a row centred on x = 0, :data:`PARK_PITCH` apart,
+    :data:`PARK_HEIGHT` up, identity orientation. The one rule both
+    :func:`park_poses` and a hand-assembled scene's parking use.
+    """
+    row, col = divmod(index, _PARK_ROW)
+    return ((col - (_PARK_ROW - 1) * 0.5) * PARK_PITCH, row * PARK_PITCH, PARK_HEIGHT, 0.0, 0.0, 0.0, 1.0)
+
+
 def park_poses(task: TaskSpec) -> dict[str, Xform]:
     """Where each of a task's objects goes when an episode parks it. World coordinates.
 
@@ -800,16 +813,7 @@ def park_poses(task: TaskSpec) -> dict[str, Xform]:
         if spec.name in stated:
             out[spec.name] = stated[spec.name]  # type: ignore[assignment]
             continue
-        row, col = divmod(index, _PARK_ROW)
-        out[spec.name] = (
-            (col - (_PARK_ROW - 1) * 0.5) * PARK_PITCH,
-            row * PARK_PITCH,
-            PARK_HEIGHT,
-            0.0,
-            0.0,
-            0.0,
-            1.0,
-        )
+        out[spec.name] = park_lattice(index)
     return out
 
 

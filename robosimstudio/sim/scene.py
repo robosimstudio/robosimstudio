@@ -338,7 +338,7 @@ class Scene:
             )
         cell = get_cell(self.cell) if self.cell else None
         binding = self.binding or Binding(scene=self.cell, embodiment=self._robot.label)
-        return replace(binding, mount=in_surface(cell, at))
+        return replace(binding, scene=binding.scene or self.cell, mount=in_surface(cell, at))
 
     def build(
         self,

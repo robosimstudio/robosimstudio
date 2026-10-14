@@ -216,6 +216,26 @@ class ParticleMixin:
             probe.update(state)
             probe.snapshot_baseline()
 
+    def join_settle(self, pipeline: Any, run: tuple[int, int] | None = None) -> None:
+        """Join the scene's one particle settle, then re-baseline every thing in it.
+
+        A settle steps the whole scene and a reset restores the last whole-array
+        snapshot, so the particle things in a scene share one record on the
+        pipeline, ``particle_settles``: a *run* (``(frames, substeps)``) one of
+        them already ran is not run again, and each that has snapshotted
+        snapshots again after one that is. ``run=None`` joins without settling,
+        as a kind that does not settle does.
+        """
+        settles = getattr(pipeline, "particle_settles", None)
+        if settles is None:
+            settles = pipeline.particle_settles = {"runs": set(), "things": []}
+        if run is not None and run not in settles["runs"]:
+            settles["runs"].add(run)
+            self.settle(pipeline)  # type: ignore[attr-defined]
+        settles["things"].append(self)
+        for thing in settles["things"]:
+            thing.snapshot_rest(pipeline)
+
     def reset(self, pipeline: Any, episode: Any, *, world: int = 0) -> None:
         """Put the particles back where :meth:`snapshot_rest` found them.
 

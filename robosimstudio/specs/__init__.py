@@ -146,6 +146,7 @@ from .task import (
     TaskRequirements,
     TaskSpec,
     TaskSuite,
+    park_lattice,
     park_poses,
     restage,
 )
@@ -226,6 +227,7 @@ __all__ = [
     "jaw_gap_from",
     "list_domains",
     "param_ui",
+    "park_lattice",
     "park_poses",
     "register_backend",
     "register_coupler",

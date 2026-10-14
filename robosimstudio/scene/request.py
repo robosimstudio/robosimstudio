@@ -29,7 +29,7 @@ which is the same ten fields with none of the rest.
 
 from __future__ import annotations
 
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, replace
 from typing import Any, Protocol, runtime_checkable
 
 from robosimstudio.specs import (
@@ -200,7 +200,11 @@ class BuildRequest:
         one pairing by name. Asking for a *different* one is a mistake worth
         naming rather than silently building the only one there is.
         """
-        have = self.binding or Binding(scene=self.cell, embodiment=self.embodiment_name)
+        have = self.binding or Binding()
+        # A binding passed for its gripper or collisions leaves the pairing to
+        # the request: an empty field is the request's cell and robot, not none.
+        if not have.scene or not have.embodiment:
+            have = replace(have, scene=have.scene or self.cell, embodiment=have.embodiment or self.embodiment_name)
         want = (scene or have.scene, embodiment or have.embodiment, gripper or have.gripper)
         if want != (have.scene, have.embodiment, have.gripper):
             raise KeyError(

@@ -19,7 +19,7 @@ from __future__ import annotations
 
 import math
 from collections.abc import Sequence
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 
 import numpy as np
 
@@ -155,24 +155,14 @@ class CameraSpec:
         """
         k = self.intrinsics
         sx, sy = width / self.width, height / self.height
-        return CameraSpec(
-            name=self.name,
+        return replace(
+            self,
             width=int(width),
             height=int(height),
             fx=float(k[0, 0] * sx),
             fy=float(k[1, 1] * sy),
             cx=float(k[0, 2] * sx),
             cy=float(k[1, 2] * sy),
-            near=self.near,
-            far=self.far,
-            eye=self.eye,
-            look_at=self.look_at,
-            up=self.up,
-            xform=self.xform,
-            parent_body=self.parent_body,
-            parent_frame=self.parent_frame,
-            background=self.background,
-            channels=self.channels,
         )
 
     # ------------------------------------------------------------------- pose
@@ -216,23 +206,9 @@ class CameraSpec:
 
     def with_pose(self, eye: Sequence[float], look_at: Sequence[float]) -> CameraSpec:
         """This camera moved to another viewpoint."""
-        return CameraSpec(
-            name=self.name,
-            width=self.width,
-            height=self.height,
-            fov_y=self.fov_y,
-            fx=self.fx,
-            fy=self.fy,
-            cx=self.cx,
-            cy=self.cy,
-            near=self.near,
-            far=self.far,
+        return replace(
+            self,
             eye=tuple(float(v) for v in eye),
             look_at=tuple(float(v) for v in look_at),
-            up=self.up,
             xform=None,
-            parent_body=self.parent_body,
-            parent_frame=self.parent_frame,
-            background=self.background,
-            channels=self.channels,
         )

@@ -105,44 +105,42 @@ def locate_cloth(model: Any, entity: Any) -> ClothTarget:
 class LiveMaterial:
     """Writes the live-tier fields of a material into one cloth's arrays.
 
-    Keeps a host mirror of every array it touches, so a slider move costs one
-    upload rather than a download and an upload. The mirror is seeded from the
-    model the first time each array is needed, which is after the build, so it
-    starts out agreeing with what was built.
+    Every write downloads the array fresh, edits this cloth's rows and uploads
+    the whole thing. No host copy is kept between writes: the arrays are shared
+    by every cloth in the model, so a copy held here would put another cloth's
+    rows -- or an outside write, a ``ctl eval`` or a preset -- back to whatever
+    they were when it was taken.
     """
 
     def __init__(self, model: Any, target: ClothTarget) -> None:
         self.model = model
         self.target = target
-        self._mirror: dict[str, np.ndarray | None] = {}
 
-    def _mirrored(self, attr: str) -> np.ndarray | None:
-        if attr not in self._mirror:
-            array = getattr(self.model, attr, None)
-            self._mirror[attr] = None if array is None else np.array(array.numpy(), copy=True)
-        return self._mirror[attr]
+    def _fetched(self, attr: str) -> np.ndarray | None:
+        array = getattr(self.model, attr, None)
+        return None if array is None else np.array(array.numpy(), copy=True)
 
-    def _flush(self, attr: str) -> None:
-        getattr(self.model, attr).assign(self._mirror[attr])
+    def _flush(self, attr: str, values: np.ndarray) -> None:
+        getattr(self.model, attr).assign(values)
 
     def _write_rows(self, attr: str, rows: np.ndarray, column: int, value: float) -> bool:
         if not len(rows):
             return False
-        mirror = self._mirrored(attr)
-        if mirror is None:
+        values = self._fetched(attr)
+        if values is None:
             return False
-        mirror[rows, column] = value
-        self._flush(attr)
+        values[rows, column] = value
+        self._flush(attr, values)
         return True
 
     def _write_flat(self, attr: str, rows: np.ndarray, value: float) -> bool:
         if not len(rows):
             return False
-        mirror = self._mirrored(attr)
-        if mirror is None:
+        values = self._fetched(attr)
+        if values is None:
             return False
-        mirror[rows] = value
-        self._flush(attr)
+        values[rows] = value
+        self._flush(attr, values)
         return True
 
     # -------------------------------------------------------------- per field

@@ -337,6 +337,7 @@ class FleetContactProbe:
 
         self.geoms = np.zeros((0, 2), dtype=np.int32)
         self.impulses = np.zeros((0, 3))
+        self.depths = np.zeros(0)
         self.worldids = np.zeros(0, dtype=np.int32)
         self.step: int | None = None
         self._views: dict[int, ContactView] = {}
@@ -352,23 +353,22 @@ class FleetContactProbe:
         self.step = step
         self._views.clear()
         data = self.solver.mjw_data
-        # Active slots only — same stale-slot dereference the single-world
-        # probe fixed; see ContactProbe.update.
-        n_active = min(int(np.max(data.nacon.numpy())), len(self._ids))
-        if n_active:
-            with wp.ScopedDevice(self.model.device):  # see ContactProbe.update
-                self._mjw.contact_force(self.solver.mjw_model, data, self._ids[:n_active], True, self._force[:n_active])
-        # Four reads of one frame, and something else may be reading a world's
-        # state at the same moment: see :mod:`robosimstudio.core.streams` for
-        # what an overlapping read costs.
+        # Every read and the launch between them under the stream lock: a
+        # world's graph thread reaches this through WorldView.make_context, and
+        # an unlocked .numpy() or a launch on the current stream can land
+        # inside another thread's capture. See :mod:`robosimstudio.core.streams`.
         with reading():
-            n = n_active
+            # Active slots only — same stale-slot dereference the single-world
+            # probe fixed; see ContactProbe.update.
+            n = min(int(np.max(data.nacon.numpy())), len(self._ids))
             if n == 0:
                 self.geoms = np.zeros((0, 2), dtype=np.int32)
                 self.impulses = np.zeros((0, 3))
                 self.depths = np.zeros(0)
                 self.worldids = np.zeros(0, dtype=np.int32)
                 return
+            with wp.ScopedDevice(self.model.device):  # see ContactProbe.update
+                self._mjw.contact_force(self.solver.mjw_model, data, self._ids[:n], True, self._force[:n])
             self.impulses = np.asarray(self._force.numpy()[:n, :3], dtype=np.float64) * self.dt
             self.geoms = np.asarray(data.contact.geom.numpy()[:n], dtype=np.int32)
             self.depths = np.asarray(data.contact.dist.numpy()[:n], dtype=np.float64)

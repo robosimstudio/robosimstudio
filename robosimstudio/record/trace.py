@@ -225,27 +225,36 @@ def summarise(rows: list[dict[str, Any]], *, task: str = "", episode_id: int = 0
     summary.close_kind = rows[-1].get("close_kind")
 
     for key in keys:
-        series = [row["metrics"][key] for row in rows if key in row["metrics"]]
-        if not series:
+        # Paired with each row's step: an event-gated metric is absent from
+        # the rows before its event, so a position in the series is not a
+        # position in ``rows``.
+        pairs = [(row["step"], row["metrics"][key]) for row in rows if key in row["metrics"]]
+        if not pairs:
             continue
+        steps = [step for step, _ in pairs]
+        series = [value for _, value in pairs]
         if isinstance(series[0], bool):
             trues = [i for i, v in enumerate(series) if v]
             summary.boolean[key] = {
                 "true_fraction": len(trues) / len(series),
-                "first_true_step": float(rows[trues[0]]["step"]) if trues else -1.0,
+                "first_true_step": float(steps[trues[0]]) if trues else -1.0,
                 # How often it flips, which is what catches a debounce or a
                 # hold-duration change that leaves the ending identical.
                 "n_transitions": float(sum(1 for a, b in itertools.pairwise(series) if a != b)),
             }
         else:
-            values = [float(v) for v in series]
+            try:
+                values = [float(v) for v in series]
+            except (TypeError, ValueError):
+                # A label such as ``awaiting`` or ``worst``: nothing to band.
+                continue
             best = max(range(len(values)), key=lambda i: values[i])
             summary.numeric[key] = {
                 "min": min(values),
                 "max": max(values),
                 "final": values[-1],
                 "mean": statistics.fmean(values),
-                "argmax_step": float(rows[best]["step"]),
+                "argmax_step": float(steps[best]),
             }
     return summary
 

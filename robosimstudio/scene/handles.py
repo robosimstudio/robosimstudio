@@ -75,11 +75,17 @@ class EntityHandle:
     world: int = 0
 
     def pose(self, body_q: np.ndarray) -> np.ndarray:
-        """World pose as ``(px, py, pz, qx, qy, qz, qw)``."""
+        """World pose as ``(px, py, pz, qx, qy, qz, qw)``.
+
+        A static that owns no body carries ``body=-1`` and its pose in
+        :attr:`xform`; indexing ``body_q[-1]`` would read the last body's.
+        """
+        if self.body < 0:
+            return np.asarray(self.xform, dtype=np.float64)
         return np.asarray(body_q[self.body], dtype=np.float64)
 
     def position(self, body_q: np.ndarray) -> np.ndarray:
-        return np.asarray(body_q[self.body][:3], dtype=np.float64)
+        return self.pose(body_q)[:3]
 
 
 @dataclass

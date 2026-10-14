@@ -380,14 +380,20 @@ class OscController:
         a wrist that is purely rotating as stationary, and the damping term would
         have nothing to damp.
         """
-        body_q = np.asarray(state.body_q.numpy()[self.ik.ee_body], dtype=np.float64)
-        pos = transform_point(body_q, self.ik.ee_offset)
-        quat = quat_multiply(body_q[3:7], self.ik.ee_offset_rot)
-
+        body_q, pos, quat = self._pose(state)
         twist = np.asarray(state.body_qd.numpy()[self.ik.ee_body], dtype=np.float64)
         linear, angular = twist[:3], twist[3:]
         com = transform_point(body_q, self._body_com)
         return pos, quat, linear + np.cross(angular, pos - com), angular
+
+    def _pose(self, state) -> tuple[np.ndarray, np.ndarray, np.ndarray]:
+        """``(body_q, pos, quat)``: :meth:`measure` without the twist.
+
+        One host copy of ``body_q`` and none of ``body_qd``, for the per-step
+        callers that discard the twist anyway.
+        """
+        body_q = np.asarray(state.body_q.numpy()[self.ik.ee_body], dtype=np.float64)
+        return body_q, transform_point(body_q, self.ik.ee_offset), quat_multiply(body_q[3:7], self.ik.ee_offset_rot)
 
     # ------------------------------------------------------------------ the law
     def scale_action(self, action: Sequence[float]) -> np.ndarray:
@@ -413,7 +419,11 @@ class OscController:
         convention ``set_goal_orientation`` uses and the one the reference's
         waypoint quaternions are composed in.
         """
-        pos, quat, _, _ = self.measure(state)
+        _, pos, quat = self._pose(state)
+        return self._goal_from(pos, quat, action)
+
+    def _goal_from(self, pos: np.ndarray, quat: np.ndarray, action: Sequence[float]) -> tuple[np.ndarray, np.ndarray]:
+        """:meth:`goal` from a pose already measured."""
         delta = self.scale_action(action)
         return pos + delta[:3], quat_multiply(quat_from_axis_angle(delta[3:], float(np.linalg.norm(delta[3:]))), quat)
 
@@ -436,8 +446,8 @@ class OscController:
         Applying the clamp *after* the step rather than before is what keeps a
         blocked arm from creeping: clamping first would leave room to step again.
         """
-        pos, quat, _, _ = self.measure(state)
-        goal_pos, goal_quat = self.goal(action, state)
+        _, pos, quat = self._pose(state)
+        goal_pos, goal_quat = self._goal_from(pos, quat, action)
         return self.law.advance(pos, quat, goal_pos, goal_quat)
 
     def apply(self, action: Sequence[float], control, state) -> None:

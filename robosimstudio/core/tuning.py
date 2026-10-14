@@ -127,13 +127,13 @@ def notify(pipeline: Any, flags: int) -> None:
 
 
 class ArrayWriter:
-    """Assigns into a built model's arrays, through a host mirror.
+    """Assigns into a built model's arrays, through a host copy read fresh per write.
 
-    The mirror is what makes a slider affordable: writing one row of
-    ``shape_material_mu`` without one costs a download of the whole array, an
-    edit and an upload, per notch of the drag. With one it costs an upload. It is
-    seeded from the model the first time each array is touched -- after the build,
-    so it starts out agreeing with what was built.
+    A write downloads the array, edits this entity's rows and uploads it. The copy
+    is not kept between writes: these arrays are model-wide -- every entity's
+    shapes share one ``shape_material_mu`` -- so a copy kept by one writer goes
+    stale the moment another writer, a script or ``ctl eval`` touches the array,
+    and uploading it would put the other rows back the way they were.
 
     Args:
         model: The finalized model.
@@ -146,31 +146,29 @@ class ArrayWriter:
     def __init__(self, model: Any, pipeline: Any = None) -> None:
         self.model = model
         self.pipeline = pipeline
-        self._mirror: dict[str, np.ndarray | None] = {}
 
     # ------------------------------------------------------------------ arrays
-    def _mirrored(self, attr: str) -> np.ndarray | None:
-        if attr not in self._mirror:
-            array = getattr(self.model, attr, None)
-            self._mirror[attr] = None if array is None else np.array(array.numpy(), copy=True)
-        return self._mirror[attr]
+    def _fetched(self, attr: str) -> np.ndarray | None:
+        """The array as the model holds it now, as a host copy to edit."""
+        array = getattr(self.model, attr, None)
+        return None if array is None else np.array(array.numpy(), copy=True)
 
-    def _flush(self, attr: str) -> None:
-        getattr(self.model, attr).assign(self._mirror[attr])
+    def _flush(self, attr: str, values: np.ndarray) -> None:
+        getattr(self.model, attr).assign(values)
 
     def _write(self, attr: str, rows: Sequence[int], value: Any, *, column: int | None = None) -> bool:
         """Write one value into ``rows`` of one array. ``False`` if there is nowhere to."""
         index = np.asarray(rows, dtype=np.int64)
         if not len(index):
             return False
-        mirror = self._mirrored(attr)
-        if mirror is None or not len(mirror):
+        values = self._fetched(attr)
+        if values is None or not len(values):
             return False
         if column is None:
-            mirror[index] = value
+            values[index] = value
         else:
-            mirror[index, column] = value
-        self._flush(attr)
+            values[index, column] = value
+        self._flush(attr, values)
         return True
 
     def _read(self, attr: str, rows: Sequence[int], *, column: int | None = None, default: float = 0.0) -> Any:
@@ -185,7 +183,7 @@ class ArrayWriter:
         array = getattr(self.model, attr, None)
         if array is None or not len(index):
             return default
-        values = self._mirrored(attr)
+        values = self._fetched(attr)
         if values is None or not len(values):
             return default
         row = values[index[0]]
@@ -275,7 +273,12 @@ class BodyWriter(ArrayWriter):
         return self.landed(self._scale_mass(float(value)))
 
     def _scale_mass(self, mass: float) -> bool:
-        current = self._mirrored("body_mass")
+        if not np.isfinite(mass) or mass <= 0.0:
+            # Zero would weld a dynamic body to the world -- and then the guard
+            # below would refuse it its mass back -- and a negative one would
+            # turn its inertia inside out. Neither is a mass.
+            return False
+        current = self._fetched("body_mass")
         if current is None or not len(self.bodies):
             return False
         wrote = False
@@ -286,20 +289,20 @@ class BodyWriter(ArrayWriter):
                 continue
             factor = mass / was
             current[body] = mass
-            self._write("body_inv_mass", [body], 1.0 / mass if mass > 0.0 else 0.0)
+            self._write("body_inv_mass", [body], 1.0 / mass)
             self._scale_tensor("body_inertia", body, factor)
-            self._scale_tensor("body_inv_inertia", body, 1.0 / factor if factor else 0.0)
+            self._scale_tensor("body_inv_inertia", body, 1.0 / factor)
             wrote = True
         if wrote:
-            self._flush("body_mass")
+            self._flush("body_mass", current)
         return wrote
 
     def _scale_tensor(self, attr: str, body: int, factor: float) -> None:
-        mirror = self._mirrored(attr)
-        if mirror is None or body >= len(mirror):
+        values = self._fetched(attr)
+        if values is None or body >= len(values):
             return
-        mirror[body] = mirror[body] * factor
-        self._flush(attr)
+        values[body] = values[body] * factor
+        self._flush(attr, values)
 
 
 class JointWriter(ArrayWriter):

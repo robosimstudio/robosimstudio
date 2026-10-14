@@ -222,10 +222,9 @@ class Sim(EnvBase):
         needs both live at once. ``control_mode`` picks which starts active.
 
         The :class:`~robosimstudio.specs.ActionSpec` is folded in **per mode**,
-        never as shared keyword arguments: ``make_action_spaces`` drops a mode
-        whose constructor raises, so one ``TypeError`` from handing
-        ``convention=`` to the joint-space class would silently cost every
-        replay and every planner the mode they need.
+        never as shared keyword arguments: handing ``convention=`` to the
+        joint-space class is a ``TypeError``. A bad option raises here; only a
+        mode the embodiment cannot do is left out.
         """
         embodiment = self.scene.embodiment
         if embodiment is None or not embodiment.iks:
@@ -1003,9 +1002,16 @@ class Sim(EnvBase):
         return made
 
     def names(self) -> list[str]:
-        """Every name in the scene, sorted."""
+        """Every name in the scene, sorted: every name ``sim[name]`` answers.
+
+        The handle tables as well as the entities, because :meth:`__getitem__`
+        resolves through both -- a region, or a body a merged import brought, has
+        a handle and no entity.
+        """
         scene = self.scene
-        return sorted(set(self.refs) | set(scene.by_name))
+        handles = scene.handles
+        found = set().union(handles.objects, handles.deformables, handles.statics, handles.regions)
+        return sorted(set(self.refs) | set(scene.by_name) | found)
 
     def __contains__(self, name: str) -> bool:
         return name in self.names()

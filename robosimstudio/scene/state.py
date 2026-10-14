@@ -110,7 +110,7 @@ class WorldState:
 
     def settled_position(self, name: str) -> np.ndarray:
         """Where an entity was when the episode started [m]."""
-        return np.asarray(self.settled_body_q[self.handles.entity(name).body][:3], dtype=np.float64)
+        return self.handles.entity(name).position(self.settled_body_q)
 
     def linear_speed(self, name: str) -> float:
         """One entity's linear speed [m/s].
@@ -120,9 +120,10 @@ class WorldState:
         warp.sim convention this stack's ancestry came from -- read the wrong
         half and a spinning-but-stationary object looks like it is moving.
         """
-        if not len(self.body_qd):
+        body = self.handles.entity(name).body
+        if not len(self.body_qd) or body < 0:
             return 0.0
-        return float(np.linalg.norm(self.body_qd[self.handles.entity(name).body][:3]))
+        return float(np.linalg.norm(self.body_qd[body][:3]))
 
     def probe(self, cloth: str) -> ParticleProbe:
         if cloth not in self.particles:

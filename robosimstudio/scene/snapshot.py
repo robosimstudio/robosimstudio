@@ -49,7 +49,7 @@ from typing import Any
 
 import numpy as np
 
-__all__ = ["snapshot", "summarise", "write_snapshot"]
+__all__ = ["penetration_rows", "snapshot", "summarise", "write_snapshot"]
 
 FLAGGED_PENETRATION = 0.001
 """Overlap worth complaining about in the summary line [m].
@@ -71,16 +71,19 @@ def _label(model, shape: int) -> str:
         return f"shape{shape}"
 
 
-def _owner(env, shape: int, bodies: dict[int, str], model) -> str:
+def _owner(env, shape: int, bodies: dict[int, str], model, shape_body: np.ndarray | None = None) -> str:
     """The object a shape belongs to, falling back to the shape's label.
 
     An object name is what a reader recognises; a shape label is what is left
     when the shape belongs to the arena, the robot, or a collider substitute
-    that no handle owns.
+    that no handle owns. ``shape_body`` is ``model.shape_body`` already on the
+    host, for a caller naming many shapes: each read is a full device copy.
     """
     if shape < 0:
         return "world"
-    body = int(model.shape_body.numpy()[shape])
+    if shape_body is None:
+        shape_body = model.shape_body.numpy()
+    body = int(shape_body[shape])
     named = bodies.get(body)
     return named if named else _label(model, shape).split("/")[-1]
 
@@ -102,16 +105,29 @@ def _penetration(env, model, bodies: dict[int, str]) -> list[dict[str, Any]]:
         return []
     probe.update()
     out = []
+    shape_body = None
     for shape_a, shape_b, depth in probe.penetrations():
         a, b = int(shape_a), int(shape_b)
+        if shape_body is None:
+            shape_body = model.shape_body.numpy()
         out.append(
             {
                 "depth_mm": round(float(depth) * 1000.0, 4),
-                "between": [_owner(env, a, bodies, model), _owner(env, b, bodies, model)],
+                "between": [_owner(env, a, bodies, model, shape_body), _owner(env, b, bodies, model, shape_body)],
                 "shapes": [_label(model, a), _label(model, b)],
             }
         )
     return out
+
+
+def penetration_rows(env) -> list[dict[str, Any]]:
+    """Every overlapping pair in ``env`` as it stands, worst first, named.
+
+    The ``penetration`` rows of :func:`snapshot` without the rest of it: each a
+    ``depth_mm``, the two objects ``between`` and the two ``shapes``. Empty when
+    the scene has no contact probe.
+    """
+    return _penetration(env, env.model, _bodies(env))
 
 
 def _objects(env, model) -> list[dict[str, Any]]:
@@ -136,8 +152,8 @@ def _objects(env, model) -> list[dict[str, Any]]:
                 # sliding and a pile that is buzzing in place look the same in a
                 # single magnitude. Newton's body_qd is (linear, angular),
                 # linear first (see SceneState.body_qd).
-                "linear_speed": round(float(np.abs(velocity[:3]).max()), 6),
-                "angular_speed": round(float(np.abs(velocity[3:]).max()), 6),
+                "linear_speed": round(float(np.linalg.norm(velocity[:3])), 6),
+                "angular_speed": round(float(np.linalg.norm(velocity[3:])), 6),
                 "mass_kg": round(float(mass[body]), 6),
             }
         )
@@ -157,6 +173,8 @@ def _materials(env, model, bodies: dict[int, str]) -> list[dict[str, Any]]:
     ke, kd = model.shape_material_ke.numpy(), model.shape_material_kd.numpy()
     mu = model.shape_material_mu.numpy()
     gap = getattr(model, "shape_gap", None)
+    gap = gap.numpy() if gap is not None else None
+    shape_body = model.shape_body.numpy()
     out = []
     for shape in range(int(model.shape_count)):
         if not int(flags[shape]) & collide:
@@ -164,11 +182,11 @@ def _materials(env, model, bodies: dict[int, str]) -> list[dict[str, Any]]:
         out.append(
             {
                 "shape": _label(model, shape),
-                "owner": _owner(env, shape, bodies, model),
+                "owner": _owner(env, shape, bodies, model, shape_body),
                 "ke": float(ke[shape]),
                 "kd": float(kd[shape]),
                 "mu": round(float(mu[shape]), 4),
-                "gap": round(float(gap.numpy()[shape]), 6) if gap is not None else None,
+                "gap": round(float(gap[shape]), 6) if gap is not None else None,
             }
         )
     return out

@@ -10,8 +10,9 @@ Two things follow, and both are structural rather than aspirational:
 
 * **The recorder never steps or renders the environment.** Ordinary recording
   consumes the observation/action/info already produced. Raw capture reuses the
-  evaluator's ``last_context`` and reads joint/particle arrays explicitly; that
-  costs host copies, but cannot advance physics or change a command.
+  evaluator's ``last_context`` and takes joint/particle arrays from the step's
+  shared host snapshot; that costs no copy of its own, and cannot advance
+  physics or change a command.
 * **Raw capture observes the environment's canonical step stream.** Blocking
   graph tools perform many control steps inside one outer policy call, so a
   rollout-loop hook would record only their endpoints. A read-only environment
@@ -296,7 +297,8 @@ class EpisodeRecorder:
     def _record_capture(self, env) -> None:
         """Append one raw state point. No relations or labels are derived."""
         context = getattr(env, "last_context", None) or env.make_context()
-        state = env.state
+        # The step's host copy, already read for the evaluator: no device read here.
+        snap = env.pipeline.snapshot
         values: dict[str, np.ndarray] = {
             "step": np.asarray(int(env.step_count), dtype=np.int64),
             "sim_time": np.asarray(float(env.sim_time), dtype=np.float64),
@@ -304,13 +306,13 @@ class EpisodeRecorder:
             "body_q": np.asarray(context.body_q, dtype=np.float32),
             "body_qd": np.asarray(context.body_qd, dtype=np.float32),
             "settled_body_q": np.asarray(context.settled_body_q, dtype=np.float32),
-            "joint_q": np.asarray(state.joint_q.numpy(), dtype=np.float32),
-            "joint_qd": np.asarray(state.joint_qd.numpy(), dtype=np.float32),
+            "joint_q": np.asarray(snap.joint_q, dtype=np.float32),
+            "joint_qd": np.asarray(snap.joint_qd, dtype=np.float32),
             "joint_target_q": np.asarray(context.joint_target_q, dtype=np.float32),
         }
         if env.model.particle_count:
-            values["particle_q"] = np.asarray(state.particle_q.numpy(), dtype=np.float32)
-            values["particle_qd"] = np.asarray(state.particle_qd.numpy(), dtype=np.float32)
+            values["particle_q"] = np.asarray(snap.particle_q, dtype=np.float32)
+            values["particle_qd"] = np.asarray(snap.particle_qd, dtype=np.float32)
         for key, value in values.items():
             self._capture.setdefault(key, []).append(value.copy())
 
@@ -318,7 +320,11 @@ class EpisodeRecorder:
         # variable while a bisect attributed peel's CUDA 700 to this snapshot
         # (it calls mujoco-warp's contact_force during film tearing).
         if self.capture_spec.contacts and context.contacts is not None:
-            context.contacts.update(env.step_count)
+            # A restricted :class:`ContactView` (a parked shape was in contact)
+            # has no ``update``: it was cut from a probe the env already
+            # refreshed for this step before building the context.
+            if hasattr(context.contacts, "update"):
+                context.contacts.update(env.step_count)
             shape_a, shape_b = context.contacts._shape_pairs()
             pairs = [
                 {
@@ -402,7 +408,7 @@ class EpisodeRecorder:
                 self._videos.close()
                 self._videos = None
             if self.record_enabled:
-                np.savez_compressed(self._dir / "steps.npz", **{k: np.stack(v) for k, v in self._steps.items() if v})
+                np.savez_compressed(self._dir / "steps.npz", **_stack_steps(self._steps))
             if self.record_enabled and (self._privileged or self._anchors):
                 arrays = {k: np.stack(v) for k, v in self._privileged.items() if v}
                 arrays.update(self._anchors)
@@ -501,6 +507,32 @@ class EpisodeRecorder:
             except Exception:
                 pass
             self._videos = None
+
+
+def _stack_steps(steps: dict[str, list[np.ndarray]]) -> dict[str, np.ndarray]:
+    """One array per step key, ragged vectors padded rather than refused.
+
+    An episode's ``action`` is empty on a held (``None``) step and a full
+    vector otherwise, and a policy that switches control modes changes its
+    length mid-episode. Such a key is padded with NaN to its longest step and
+    a ``<key>_len`` array says how much of each row is real.
+    """
+    arrays: dict[str, np.ndarray] = {}
+    for key, values in steps.items():
+        if not values:
+            continue
+        shapes = {np.shape(v) for v in values}
+        if len(shapes) == 1 or any(np.ndim(v) > 1 for v in values):
+            arrays[key] = np.stack(values)
+            continue
+        flat = [np.asarray(v).reshape(-1) for v in values]
+        lengths = np.asarray([len(v) for v in flat], dtype=np.int32)
+        padded = np.full((len(flat), int(lengths.max())), np.nan, dtype=np.result_type(*flat, np.float32))
+        for i, row in enumerate(flat):
+            padded[i, : len(row)] = row
+        arrays[key] = padded
+        arrays[f"{key}_len"] = lengths
+    return arrays
 
 
 def _overlay_stage(frames: dict[str, Any], stage: str) -> dict[str, Any]:

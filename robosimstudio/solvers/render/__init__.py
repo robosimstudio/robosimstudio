@@ -16,6 +16,7 @@ from __future__ import annotations
 import importlib
 import importlib.util
 import os
+from collections.abc import Sequence
 from typing import Any
 
 import newton

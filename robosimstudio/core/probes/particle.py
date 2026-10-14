@@ -29,6 +29,29 @@ import numpy as np
 __all__ = ["ParticleProbe"]
 
 
+def _grid_area(pts: np.ndarray, cell: float) -> float:
+    """Occupied area [m²] of ``pts`` on a ``cell``-sized xy grid; see :meth:`ParticleProbe.covered_area`."""
+    if not len(pts):
+        return 0.0
+    size = float(cell)
+    if not size > 0.0:
+        raise ValueError(f"grid cell must be positive, got {cell}")
+    # A diverged solver hands back NaN positions, and casting those to an
+    # integer bin is undefined -- numpy warns and produces garbage indices,
+    # so the metric would report a confident number for a scene that no
+    # longer exists. NaN in, NaN out: the caller can then say "diverged"
+    # instead of quoting a coverage.
+    pts = pts[np.isfinite(pts[:, :2]).all(axis=1)]
+    if not len(pts):
+        return float("nan")
+    keys = np.floor(pts[:, :2] / size).astype(np.int64)
+    # One pass, no dict: pack the two indices into a single integer and
+    # count the distinct ones. Cloth is thousands of particles per step and
+    # this is called every step.
+    packed = (keys[:, 0] - keys[:, 0].min()) * (int(np.ptp(keys[:, 1])) + 1) + (keys[:, 1] - keys[:, 1].min())
+    return float(len(np.unique(packed))) * size * size
+
+
 class ParticleProbe:
     """Particle positions for one step, plus named subsets and a baseline.
 
@@ -252,26 +275,7 @@ class ParticleProbe:
         Returns:
             Occupied area [m²]. Zero for an empty set.
         """
-        pts = self.points(name)
-        if not len(pts):
-            return 0.0
-        size = float(cell)
-        if not size > 0.0:
-            raise ValueError(f"grid cell must be positive, got {cell}")
-        # A diverged solver hands back NaN positions, and casting those to an
-        # integer bin is undefined -- numpy warns and produces garbage indices,
-        # so the metric would report a confident number for a scene that no
-        # longer exists. NaN in, NaN out: the caller can then say "diverged"
-        # instead of quoting a coverage.
-        pts = pts[np.isfinite(pts[:, :2]).all(axis=1)]
-        if not len(pts):
-            return float("nan")
-        keys = np.floor(pts[:, :2] / size).astype(np.int64)
-        # One pass, no dict: pack the two indices into a single integer and
-        # count the distinct ones. Cloth is thousands of particles per step and
-        # this is called every step.
-        packed = (keys[:, 0] - keys[:, 0].min()) * (int(np.ptp(keys[:, 1])) + 1) + (keys[:, 1] - keys[:, 1].min())
-        return float(len(np.unique(packed))) * size * size
+        return _grid_area(self.points(name), cell)
 
     def coverage(self, name: str | None = None, *, cell: float = 0.01) -> float:
         """Covered area as a fraction of what the set covered when it settled.
@@ -289,15 +293,11 @@ class ParticleProbe:
         """
         if self.baseline is None:
             raise RuntimeError("no settled baseline; call snapshot_baseline() when the scene is ready")
-        idx = self.indices(name)
-        base = self.baseline[idx]
-        if not len(base):
-            return 0.0
-        size = float(cell)
-        keys = np.floor(base[:, :2] / size).astype(np.int64)
-        packed = (keys[:, 0] - keys[:, 0].min()) * (int(np.ptp(keys[:, 1])) + 1) + (keys[:, 1] - keys[:, 1].min())
-        flat = float(len(np.unique(packed))) * size * size
-        return 0.0 if flat <= 1.0e-9 else self.covered_area(name, cell=size) / flat
+        # The denominator is binned by the same function as the numerator, so a
+        # baseline taken from a diverged state reads NaN rather than counting
+        # its NaN rows as an occupied cell.
+        flat = _grid_area(self.baseline[self.indices(name)], cell)
+        return 0.0 if flat <= 1.0e-9 else self.covered_area(name, cell=cell) / flat
 
     def spread_ratio(self, name: str | None = None) -> float:
         """Footprint area as a fraction of the settled footprint.

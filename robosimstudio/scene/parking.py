@@ -46,7 +46,7 @@ from typing import Any
 
 import numpy as np
 
-from robosimstudio.specs import park_poses
+from robosimstudio.specs import park_lattice, park_poses
 
 __all__ = ["GravcompParking", "active_objects", "parked_objects", "restrict_contacts", "scene_park_poses"]
 
@@ -99,12 +99,7 @@ def scene_park_poses(scene: Any) -> dict[str, np.ndarray]:
     if objects is not None and hasattr(request, "parking"):
         table = park_poses(request)
     else:
-        from robosimstudio.specs import PARK_HEIGHT, PARK_PITCH
-
-        table = {}
-        for index, name in enumerate(scene.objects):
-            row, col = divmod(index, 8)
-            table[name] = ((col - 3.5) * PARK_PITCH, row * PARK_PITCH, PARK_HEIGHT, 0.0, 0.0, 0.0, 1.0)
+        table = {name: park_lattice(index) for index, name in enumerate(scene.objects)}
     return {name: np.asarray(xform, dtype=np.float64).reshape(-1)[:7] for name, xform in table.items()}
 
 
