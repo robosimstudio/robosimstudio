@@ -73,6 +73,10 @@ class RenderSpec:
             for noise. RTX renders a burst of passes per frame and averages
             them; ``final`` is the longer burst a video wants and ``preview``
             the one an interactive look wants.
+        sample_scale: RGB subpixel grid width and height for a backend that
+            can integrate linear radiance over each output pixel. Tiled only.
+        exposure: Linear radiance multiplier applied before RGB encoding.
+            Tiled only.
         background: What fills the frame where nothing was hit, as RGB in [0, 1].
 
             ``None`` keeps each backend's own, and those are not one colour
@@ -97,6 +101,8 @@ class RenderSpec:
     environment_map: str | None = None
     scenery: str | None = None
     quality: str | None = None
+    sample_scale: int | None = None
+    exposure: float | None = None
     background: Vec3 | None = None
 
     def directional_rig(self) -> tuple[tuple[Vec3, float], ...] | None:
