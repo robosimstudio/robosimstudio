@@ -821,6 +821,7 @@ class EmbodimentSpec:
     gripper: str = ""
     arm_actuation: ActuationSpec | None = None
     gripper_actuation: ActuationSpec | None = None
+    aux_home_q: tuple[tuple[str, float], ...] = ()
     monolithic: bool = False
     unbuildable: str = ""
     base_xform: Xform = IDENTITY

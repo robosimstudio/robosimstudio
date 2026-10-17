@@ -220,6 +220,9 @@ class EntityEmbodiment(Entity):
         self.trunk_shapes: tuple[int, ...] = ()
         """Colliding shapes no arm claimed, filled alongside :attr:`arm_shapes`."""
         self._home_target: np.ndarray | None = None
+        self.aux_coords: list[int] = []
+        self.aux_dofs: list[int] = []
+        self.aux_home: list[float] = []
         self._body_cache: list[int] | None = None
 
     # -------------------------------------------------------------- phase 1
@@ -988,6 +991,10 @@ class EntityEmbodiment(Entity):
             if arm.home_q:
                 for coord, value in zip(index.arm_coords, arm.home_q, strict=False):
                     builder.joint_q[coord] = float(value)
+        if self.spec.aux_home_q:
+            for jname, val in self.spec.aux_home_q:
+                j = label_index(builder.joint_label, jname)
+                builder.joint_q[int(builder.joint_q_start[j])] = float(val)
         if unlimited_dofs:
             self._unlimit_ctrlrange(builder, unlimited_dofs)
 
@@ -1208,6 +1215,14 @@ class EntityEmbodiment(Entity):
                     action_closed_at_high=hand.action_closed_at_high if hand else True,
                 )
 
+        self.aux_coords = []
+        self.aux_dofs = []
+        self.aux_home = []
+        for jname, val in self.spec.aux_home_q:
+            j = label_index(joint_labels, jname)
+            self.aux_coords.append(int(q_start[j]))
+            self.aux_dofs.append(int(qd_start[j]))
+            self.aux_home.append(float(val))
         self._home_target = self.home_target_q()
 
     # ---------------------------------------------------------------- runtime
@@ -1218,6 +1233,8 @@ class EntityEmbodiment(Entity):
         home posture never drags a loose object with it.
         """
         q = np.array(self.model.joint_q.numpy(), dtype=np.float32)
+        for coord, value in zip(self.aux_coords, self.aux_home, strict=False):
+            q[coord] = float(value)
         for arm_spec in self.spec.arms:
             index = self.arms[arm_spec.name]
             for coord, value in zip(index.arm_coords, index.home_q, strict=False):
@@ -1293,6 +1310,7 @@ class EntityEmbodiment(Entity):
         home = self.home_joint_q()
         coords = [c for index in self.arms.values() for c in (*index.arm_coords, *index.gripper_coords)]
         coords += [c for index in self.arms.values() for c in index.gripper_follower_coords]
+        coords += list(self.aux_coords)
         if not coords:
             return
         for state in (pipeline.state_0, pipeline.state_1):
@@ -1311,6 +1329,8 @@ class EntityEmbodiment(Entity):
             for index in self.arms.values():
                 for d in (*index.arm_dofs, *index.gripper_dofs, *index.gripper_follower_dofs):
                     qd[d] = 0.0
+            for d in self.aux_dofs:
+                qd[d] = 0.0
             state.joint_qd.assign(qd)
 
     def observe(self, state: newton.State) -> dict[str, np.ndarray]:

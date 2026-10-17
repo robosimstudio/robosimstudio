@@ -24,11 +24,13 @@ handles) and this maps through it, so a task's segmentation ids are the task's.
 from __future__ import annotations
 
 from collections.abc import Mapping, Sequence
+from dataclasses import replace
 from typing import Any
 
 import newton
 import numpy as np
 import warp as wp
+from newton.utils import ColorSpace
 
 from robosimstudio.core.cameras import CameraSpec
 from robosimstudio.core.math import xform_from_matrix
@@ -102,7 +104,7 @@ def _packed_rgba(rgb: Sequence[float]) -> int:
 
 
 class RendererTiled(RendererBase):
-    """Every camera in one launch, off the model's BVHs.
+    """Native camera channels in one launch; refined RGB uses a separate HDR pass.
 
     All cameras share one output buffer set, so they must share a resolution;
     a scene wanting two sizes builds two renderers, which is one extra launch
@@ -128,6 +130,8 @@ class RendererTiled(RendererBase):
         render_config: A fully-specified
             :class:`newton.sensors.SensorTiledCamera.RenderConfig`, overriding
             the convenience arguments above.
+        sample_scale: RGB subpixel grid width and height. Depth and segmentation stay native.
+        exposure: Linear radiance multiplier applied before RGB encoding.
     """
 
     name = "tiled"
@@ -144,6 +148,8 @@ class RendererTiled(RendererBase):
         put(out, "enable_textures", look.enable_textures)
         put(out, "fill_lights", look.fill_lights)
         put(out, "background", look.background)
+        put(out, "sample_scale", look.sample_scale)
+        put(out, "exposure", look.exposure)
         return out
 
     def __init__(
@@ -161,9 +167,18 @@ class RendererTiled(RendererBase):
         shadows: bool = True,
         enable_textures: bool = True,
         background: Sequence[float] | None = None,
+        sample_scale: int = 1,
+        exposure: float = 1.0,
         render_config=None,
     ) -> None:
         super().__init__(cameras, channels=channels)
+        if not isinstance(sample_scale, int) or isinstance(sample_scale, bool) or sample_scale < 1:
+            raise ValueError("sample_scale must be a positive integer")
+        if not np.isfinite(exposure) or exposure <= 0:
+            raise ValueError("exposure must be positive and finite")
+        self.sample_scale = sample_scale
+        self.exposure = float(exposure)
+        self._refined_rgb = sample_scale != 1 or exposure != 1.0
 
         from newton.sensors import SensorTiledCamera
 
@@ -241,19 +256,73 @@ class RendererTiled(RendererBase):
                     "rays": rays,
                     "transforms": wp.zeros((n, model.world_count), dtype=wp.transformf, device=model.device),
                     "host": np.zeros((n, model.world_count, 7), dtype=np.float32),
-                    "color": utils.create_color_image_output(width, height, n) if "rgb" in wanted else None,
+                    "color": utils.create_color_image_output(width, height, n) if "rgb" in wanted and not self._refined_rgb else None,
                     "depth": utils.create_forward_depth_image_output(width, height, n) if "depth" in wanted else None,
                     "shape": utils.create_shape_index_image_output(width, height, n) if "seg" in wanted else None,
                 }
             )
+            pass_ = self._passes[-1]
+            pass_["detail"] = None
+            if "rgb" in wanted and self._refined_rgb:
+                render_width, render_height = width * sample_scale, height * sample_scale
+                detail_rays = wp.zeros((n, render_height, render_width, 2), dtype=wp.vec3f, device=model.device)
+                for slot, index in enumerate(members):
+                    sample_camera = replace(
+                        self.cameras[index].scaled(render_width, render_height),
+                        cx=(self.cameras[index].intrinsics[0, 2] + 0.5) * sample_scale - 0.5,
+                        cy=(self.cameras[index].intrinsics[1, 2] + 0.5) * sample_scale - 0.5,
+                    )
+                    utils.compute_camera_rays_pinhole(
+                        render_width,
+                        render_height,
+                        out_rays=detail_rays,
+                        camera_index=slot,
+                        **aperture_from_intrinsics(sample_camera),
+                    )
+                pass_["detail"] = {
+                    "rays": detail_rays,
+                    "hdr": utils.create_hdr_color_image_output(render_width, render_height, n),
+                    "shape": utils.create_shape_index_image_output(render_width, render_height, n),
+                }
 
         self._label_lut: np.ndarray | None = None
+        self._deformable_label: int = 0
         if shape_labels is not None:
             lut = np.zeros(model.shape_count + 1, dtype=np.int32)
             for shape, label in shape_labels.items():
-                if 0 <= int(shape) < model.shape_count:
-                    lut[int(shape)] = int(label)
+                s_idx = int(shape)
+                if 0 <= s_idx < model.shape_count:
+                    lut[s_idx] = int(label)
+                elif s_idx in (0xFFFFFFFD, 0xFFFFFFFE):
+                    self._deformable_label = int(label)
             self._label_lut = lut
+
+    def _detail_colors(self, pass_: dict, state: newton.State) -> np.ndarray | None:
+        detail = pass_["detail"]
+        if detail is None:
+            return None
+        self.sensor.update(
+            state,
+            camera_transforms=pass_["transforms"],
+            camera_rays=detail["rays"],
+            hdr_color_image=detail["hdr"],
+            shape_index_image=detail["shape"],
+        )
+        linear = detail["hdr"].numpy()
+        shape = detail["shape"].numpy()
+        clear = int(self.sensor.default_clear_data.clear_color)
+        background = np.array([clear & 255, (clear >> 8) & 255, (clear >> 16) & 255], dtype=np.float32) / 255
+        background = np.where(background <= 0.04045, background / 12.92, ((background + 0.055) / 1.055) ** 2.4)
+        linear[shape == _NO_SHAPE] = background
+        if self.sample_scale > 1:
+            linear = linear.reshape(
+                self.num_worlds, len(pass_["members"]), pass_["height"], self.sample_scale,
+                pass_["width"], self.sample_scale, 3,
+            ).mean(axis=(3, 5))
+        linear *= self.exposure
+        if self.sensor.default_render_config.output_color_space == ColorSpace.SRGB:
+            linear = np.where(linear <= 0.0031308, 12.92 * linear, 1.055 * np.power(linear, 1 / 2.4) - 0.055)
+        return np.clip(np.rint(linear * 255), 0, 255).astype(np.uint8)
 
     # ------------------------------------------------------------------ render
     def _write_transforms(self, pass_: dict, body_q: np.ndarray | None) -> None:
@@ -282,7 +351,7 @@ class RendererTiled(RendererBase):
         return frames[self.world] if self.world < len(frames) else {}
 
     def render_worlds(self, state: newton.State, worlds: Sequence[int] | None = None) -> list[FrameSet]:
-        """Every world's frames, from one launch. ``[num_worlds]`` of FrameSet.
+        """Every world's frames, including optional refined RGB. ``[num_worlds]`` of FrameSet.
 
         Args:
             state: What to photograph.
@@ -320,14 +389,16 @@ class RendererTiled(RendererBase):
         out: list[FrameSet] = [{} for _ in range(self.num_worlds)]
         for pass_ in self._passes:
             self._write_transforms(pass_, body_q)
-            self.sensor.update(
-                state,
-                camera_transforms=pass_["transforms"],
-                camera_rays=pass_["rays"],
-                color_image=pass_["color"],
-                forward_depth_image=pass_["depth"],
-                shape_index_image=pass_["shape"],
-            )
+            if any(pass_[key] is not None for key in ("color", "depth", "shape")):
+                self.sensor.update(
+                    state,
+                    camera_transforms=pass_["transforms"],
+                    camera_rays=pass_["rays"],
+                    color_image=pass_["color"],
+                    forward_depth_image=pass_["depth"],
+                    shape_index_image=pass_["shape"],
+                )
+            detail_colors = self._detail_colors(pass_, state)
             width, height = pass_["width"], pass_["height"]
             # One read-back per channel for the whole fleet, then sliced on the
             # host: the copy is the cost, and doing it per world would pay it
@@ -337,7 +408,7 @@ class RendererTiled(RendererBase):
             shapes = pass_["shape"].numpy() if pass_["shape"] is not None else None
 
             for world in chosen:
-                rgb = colors[world] if colors is not None else None
+                rgb = detail_colors[world] if detail_colors is not None else (colors[world] if colors is not None else None)
                 depth = depths[world] if depths is not None else None
                 shape = shapes[world] if shapes is not None else None
                 for slot, index in enumerate(pass_["members"]):
@@ -345,8 +416,10 @@ class RendererTiled(RendererBase):
                     frame: dict[str, np.ndarray] = {}
                     wanted = self.channels[cam.name]
                     if "rgb" in wanted:
-                        # Packed RGBA uint32, little-endian: view as bytes and drop alpha.
-                        frame["rgb"] = np.ascontiguousarray(rgb[slot].view(np.uint8).reshape(height, width, 4)[..., :3])
+                        if detail_colors is not None:
+                            frame["rgb"] = np.ascontiguousarray(rgb[slot])
+                        else:
+                            frame["rgb"] = np.ascontiguousarray(rgb[slot].view(np.uint8).reshape(height, width, 4)[..., :3])
                     if "depth" in wanted:
                         # A miss is already cleared to 0; nan_to_num only guards against
                         # a degenerate ray, which a zero-aperture camera can produce.
@@ -357,8 +430,14 @@ class RendererTiled(RendererBase):
                         idx = np.asarray(shape[slot], dtype=np.int64)
                         # Misses arrive as the clear value, not a shape; both land on 0.
                         miss = idx == _NO_SHAPE
-                        idx = np.where(miss, 0, idx)
-                        labels = idx.astype(np.int32) if self._label_lut is None else self._label_lut[idx]
+                        deform_hit = (idx == 0xFFFFFFFD) | (idx == 0xFFFFFFFE)
+                        if self._label_lut is None:
+                            labels = np.where(miss | deform_hit, 0, idx).astype(np.int32)
+                        else:
+                            safe_idx = np.where((idx >= 0) & (idx < len(self._label_lut)), idx, 0)
+                            labels = self._label_lut[safe_idx]
+                            if self._deformable_label:
+                                labels = np.where(deform_hit, self._deformable_label, labels)
                         frame["seg"] = np.where(miss, 0, labels).astype(np.int32)
                     out[world][cam.name] = frame
         return out

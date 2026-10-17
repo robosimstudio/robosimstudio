@@ -472,6 +472,11 @@ class SceneHandles:
         del background
         lut: dict[int, int] = {}
         for label_id, name in enumerate(self._segmentation_order(), start=1):
+            if name in self.deformables:
+                # Newton raytrace writes TRIANGLE_MESH_SHAPE_ID (0xFFFFFFFD) and PARTICLES_SHAPE_ID (0xFFFFFFFE)
+                lut[0xFFFFFFFD] = label_id
+                lut[0xFFFFFFFE] = label_id
+                continue
             handle = self.entity(name) if name in self.objects or name in self.statics else None
             shapes = handle.shapes if handle is not None else self.robot_shapes
             for shape in shapes:
@@ -483,7 +488,7 @@ class SceneHandles:
         return dict(enumerate(self._segmentation_order(), start=1))
 
     def _segmentation_order(self) -> list[str]:
-        return [*sorted(self.statics), *sorted(self.objects), "__robot__"]
+        return [*sorted(self.statics), *sorted(self.objects), *sorted(self.deformables), "__robot__"]
 
     def summary(self) -> str:
         """One line per group, for a build log."""

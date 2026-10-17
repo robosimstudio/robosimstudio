@@ -255,6 +255,11 @@ class TestRenderSpec(unittest.TestCase):
         self.assertEqual(look_kwargs("tiled", spec)["background"], (0.2, 0.3, 0.4))
         self.assertNotIn("background", look_kwargs("rtx", spec))
 
+    def test_refined_rgb_settings_reach_only_tiled(self):
+        spec = RenderSpec(sample_scale=4, exposure=0.65)
+        self.assertEqual(look_kwargs("tiled", spec), {"sample_scale": 4, "exposure": 0.65})
+        self.assertEqual(look_kwargs("rtx", spec), {})
+
     def test_the_house_look_is_what_an_unstated_scene_gets(self):
         """``look_for`` is where the all-None spec stops meaning "do nothing".
 
