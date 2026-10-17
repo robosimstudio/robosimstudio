@@ -1,0 +1,325 @@
+<?xml version='1.0' encoding='utf-8'?>
+<mujoco model="robot">
+  <compiler angle="radian" meshdir="assets" autolimits="true" />
+  <default>
+    <default class="robot">
+      <site group="4" />
+      <default class="visual">
+        <geom type="mesh" contype="0" conaffinity="0" group="2" />
+      </default>
+      <default class="collision">
+        <geom group="3" />
+      </default>
+      <default class="base_xy">
+        <joint frictionloss="150" damping="50" armature="0.1" />
+        <default class="base_xy_pos">
+          <position forcerange="-2000 2000" />
+        </default>
+      </default>
+      <default class="base_yaw">
+        <joint frictionloss="50" damping="10" armature="0.1" />
+        <default class="base_yaw_pos">
+          <position forcerange="-200 200" />
+        </default>
+      </default>
+      <default class="lemi2lift">
+        <joint frictionloss="553.97" damping="2411" armature="0.1" />
+        <default class="lemi2lift_pos">
+          <position forcerange="-6000 6000" />
+        </default>
+      </default>
+      <default class="myactuator_rh25">
+        <joint frictionloss="6.552" damping="19.15" armature="0.1" />
+        <default class="myactuator_rh25_pos">
+          <position forcerange="-2000 2000" />
+        </default>
+      </default>
+      <default class="dm3507">
+        <joint frictionloss="0.02625" damping="0.08678" armature="0.0003593" />
+        <default class="dm3507_pos">
+          <position forcerange="-100 100" />
+        </default>
+      </default>
+      <default class="dm6248p">
+        <joint frictionloss="0.8086" damping="0.7952" armature="0.1344" />
+        <default class="dm6248p_pos">
+          <position forcerange="-100 100" />
+        </default>
+      </default>
+      <default class="dm4340p">
+        <joint frictionloss="0.4861" damping="0.2558" armature="0.02784" />
+        <default class="dm4340p_pos">
+          <position forcerange="-100 100" />
+        </default>
+      </default>
+      <default class="bdcp">
+        <joint frictionloss="0.05" damping="0.005" armature="0.01762" />
+        <default class="bdcp_pos">
+          <position forcerange="-10 10" />
+        </default>
+      </default>
+      <default class="bdcd">
+        <joint frictionloss="0.05" damping="0.005" armature="0.009041" />
+        <default class="bdcd_pos">
+          <position forcerange="-10 10" />
+        </default>
+      </default>
+      <default class="dummy">
+        <joint frictionloss="0" damping="0" armature="0.001" />
+        <default class="dummy_pos">
+          <position dampratio="1" forcerange="-10 10" />
+        </default>
+      </default>
+    </default>
+  </default>
+  <worldbody>
+    <body name="odom_frame" childclass="robot" gravcomp="1">
+      <inertial pos="0 0 0" mass="1e-09" fullinertia="1e-09 1e-09 1e-09 0 0 0" />
+      <body name="odom_x_link" gravcomp="1">
+        <joint name="basex" class="base_xy" type="slide" axis="1 0 0" frictionloss="150" damping="50" armature="0.1" />
+        <inertial pos="0 0 0" mass="1e-09" fullinertia="1e-09 1e-09 1e-09 0 0 0" />
+        <body name="odom_y_link" gravcomp="1">
+          <joint name="basey" class="base_xy" type="slide" axis="0 1 0" frictionloss="150" damping="50" armature="0.1" />
+          <inertial pos="0 0 0" mass="1e-09" fullinertia="1e-09 1e-09 1e-09 0 0 0" />
+          <body name="mobile_base" gravcomp="1">
+            <joint name="baseth" class="base_yaw" type="hinge" axis="0 0 1" frictionloss="50" damping="10" armature="0.1" />
+            <inertial pos="-0.163664 0.000572138 0.0947652" mass="74.9705" fullinertia="1.77436 1.66629 2.407 0.00200752 -0.107796 0.0170466" />
+            <geom class="visual" pos="-0.163664 0.000572138 0.0947652" mesh="mobile_base" material="default_material" contype="0" conaffinity="0" />
+            <site name="base_jt128" pos="-0.369653 -3.8441e-09 0.286847" quat="0.865985 -0.0999407 -0.450803 0.191984" />
+            <body name="lift_link" pos="-0.0445 0 -0.066" gravcomp="1">
+              <joint name="lift" class="lemi2lift" type="slide" axis="0 0 1" range="0.66 1.259" frictionloss="553.97" damping="2411" armature="0.1" />
+              <inertial pos="0.0032561 -0.000495364 -0.088392" mass="5.84691" fullinertia="0.138066 0.139454 0.00890946 -0.00011498 -0.00319066 0.000295126" />
+              <geom class="visual" pos="0.0032561 -0.000495364 -0.088392" mesh="lift_link" material="default_material" contype="0" conaffinity="0" />
+              <body name="torso" pos="0.012 -0.0285 0.066" quat="0.707107 -0.707107 0 0" gravcomp="1">
+                <joint name="TP" class="myactuator_rh25" type="hinge" axis="0 0 1" range="-0.174533 1.309" frictionloss="6.552" damping="19.15" armature="0.1" />
+                <inertial pos="0.0036546 -0.146742 0.0238382" mass="5.62608" fullinertia="0.0626211 0.0300662 0.0536118 0.00160866 -0.00126285 0.00671864" />
+                <geom class="visual" pos="0.0036546 -0.146742 0.0238382" quat="0.707107 0.707107 0 0" mesh="torso" material="default_material" contype="0" conaffinity="0" />
+                <site name="torso_jt128" pos="0.103189 -0.223438 0.0851143" quat="0.707107 0 0.707107 0" />
+                <body name="neck" pos="0 -0.2715 0.0285" quat="0.707107 0.707107 0 0" gravcomp="1">
+                  <joint name="NY" class="dm3507" type="hinge" axis="0 0 1" range="-1.5708 1.5708" frictionloss="0.02625" damping="0.08678" armature="0.0003593" />
+                  <inertial pos="-0.0002445 0.00335043 0.03988" mass="0.225528" fullinertia="0.00047297 0.000467891 7.95245e-05 1.34127e-06 -6.15631e-06 2.80097e-05" />
+                  <geom class="visual" pos="-0.0002445 0.00335043 0.03988" mesh="neck" material="default_material" contype="0" conaffinity="0" />
+                  <body name="head" pos="0 0.00055 0.053" quat="0.707107 0.707107 0 0" gravcomp="1">
+                    <joint name="NP" class="dm3507" type="hinge" axis="0 0 1" range="-0.523599 0.959931" frictionloss="0.02625" damping="0.08678" armature="0.0003593" />
+                    <inertial pos="0.0526662 0.13793 0.00311114" mass="0.628152" fullinertia="0.00236772 0.00239131 0.00322508 -0.000318351 3.98411e-05 7.07084e-05" />
+                    <geom class="visual" pos="0.0257663 0.10903 0.00311114" quat="0.707107 -0.707107 0 0" mesh="head" material="default_material" contype="0" conaffinity="0" />
+                    <site name="right_teleop_camera" pos="0.143098 0.14728 0.032051" quat="0.183013 0.683013 -0.183013 0.683013" />
+                    <site name="left_teleop_camera" pos="0.143098 0.14728 -0.030951" quat="0.183013 0.683013 -0.183013 0.683013" />
+                    <body name="head_camera_link" pos="0.1195 0.1228 0.00055" quat="0.270598 0.653281 -0.270598 0.653281" gravcomp="1">
+                      <joint name="head_camera_dof" class="dummy" type="hinge" axis="0 0 -1" frictionloss="0" damping="0" armature="0.001" />
+                      <inertial pos="0 0 0" mass="1e-09" fullinertia="1e-09 1e-09 1e-09 0 0 0" />
+                      <site name="head_camera" />
+                    </body>
+                    <geom name="head" type="sphere" size="0.107" pos="0.037 0.088 0" rgba="1 0 0 0.2" group="1" class="collision" contype="1" conaffinity="1" />
+                    <geom name="teleop_cameras" type="capsule" size="0.025 0.035" pos="0.13 0.155 0" rgba="1 0 0 0.2" group="1" class="collision" contype="1" conaffinity="1" />
+                  </body>
+                </body>
+                <body name="l1" pos="0 -0.190259 -0.04819" quat="0.130526 0.991445 0 0" gravcomp="1">
+                  <joint name="RJ1" class="dm6248p" type="hinge" axis="0 0 1" range="-2.35619 2.35619" frictionloss="0.8086" damping="0.7952" armature="0.1344" />
+                  <inertial pos="0.0035862 -0.0296838 0.0912775" mass="1.06265" fullinertia="0.002259 0.00174407 0.0010571 3.21879e-05 -6.32956e-05 0.000571868" />
+                  <geom class="visual" pos="0.0035862 -0.0296838 0.0912775" quat="0.793353 -0.608761 0 0" mesh="l1" material="default_material" contype="0" conaffinity="0" />
+                  <body name="right_l2" pos="0.0185 -0.0412378 0.110149" quat="0.560986 -0.430459 0.560986 -0.430459" gravcomp="1">
+                    <joint name="RJ2" class="dm6248p" type="hinge" axis="0 0 1" range="-2.35619 0.305433" frictionloss="0.8086" damping="0.7952" armature="0.1344" />
+                    <inertial pos="0.085822 -9.8e-05 -0.0167886" mass="1.08544" fullinertia="0.00128335 0.00254093 0.002225 -2.19968e-06 0.000103247 3.91432e-07" />
+                    <geom class="visual" pos="0.085822 -9.8e-05 -0.0167886" quat="0.707107 0 -0.707107 0" mesh="right_l2" material="default_material" contype="0" conaffinity="0" />
+                    <body name="l3" pos="0.11475 0 -0.0185" quat="0 0.707107 0 0.707107" gravcomp="1">
+                      <joint name="RJ3" class="dm6248p" type="hinge" axis="0 0 1" range="-2.35619 2.35619" frictionloss="0.8086" damping="0.7952" armature="0.1344" />
+                      <inertial pos="0.0223859 0.002995 0.15231" mass="1.21641" fullinertia="0.00570865 0.00631178 0.0013606 -4.42277e-05 -0.00116476 -0.000162049" />
+                      <geom class="visual" pos="0.0223859 0.002995 0.15231" quat="0 1 0 0" mesh="l3" material="default_material" contype="0" conaffinity="0" />
+                      <body name="l4" pos="0.036 0.0185 0.19525" quat="0.707107 -0.707107 0 0" gravcomp="1">
+                        <joint name="RJ4" class="dm6248p" type="hinge" axis="0 0 1" range="-1.5708 1.09083" frictionloss="0.8086" damping="0.7952" armature="0.1344" />
+                        <inertial pos="0.0583548 -0.028593 -0.01654" mass="0.731419" fullinertia="0.00089245 0.00147699 0.00144856 0.000317689 8.23083e-05 -3.45645e-05" />
+                        <geom class="visual" pos="0.0583548 -0.028593 -0.01654" quat="0.707107 -0.707107 0 0" mesh="l4" material="default_material" contype="0" conaffinity="0" />
+                        <body name="right_l5" pos="0.085 -0.036 -0.0185" quat="0.5 0.5 0.5 0.5" gravcomp="1">
+                          <joint name="RJ5" class="dm4340p" type="hinge" axis="0 0 1" range="-1.0472 3.66519" frictionloss="0.4861" damping="0.2558" armature="0.02784" />
+                          <inertial pos="-0.000794 -0.000347 0.09234" mass="0.963733" fullinertia="0.00257635 0.00241294 0.000757832 -1.89227e-05 3.0584e-05 7.50212e-05" />
+                          <geom class="visual" pos="-0.000794 -0.000347 0.09234" quat="0 0.707107 0 0.707107" mesh="right_l5" material="default_material" contype="0" conaffinity="0" />
+                          <body name="right_l6" pos="0 -0.0375 0.215" quat="0.5 0.5 -0.5 0.5" gravcomp="1">
+                            <joint name="RJ6" class="dm4340p" type="hinge" axis="0 0 1" range="-1.0472 1.5708" frictionloss="0.4861" damping="0.2558" armature="0.02784" />
+                            <inertial pos="8.2e-05 0.00278 -0.037547" mass="0.460089" fullinertia="0.000260199 0.000250868 0.000237757 2.11732e-06 1.64015e-07 -9.19688e-07" />
+                            <geom class="visual" pos="8.2e-05 0.00278 -0.037547" quat="0.707107 0.707107 0 0" mesh="right_l6" material="default_material" contype="0" conaffinity="0" />
+                            <body name="right_hand_chassis" pos="0 -0.007 -0.0375" quat="0.707107 0.707107 0 0" gravcomp="1">
+                              <joint name="RJ7" class="dm4340p" type="hinge" axis="0 0 1" range="-1.5708 1.5708" frictionloss="0.4861" damping="0.2558" armature="0.02784" />
+                              <inertial pos="0.064152 0.005247 0.005353" mass="0.372473" fullinertia="0.000458644 0.000682868 0.000773339 -7.3415e-05 0.000116793 -1.13199e-05" />
+                              <geom class="visual" pos="0.064152 0.005247 0.005353" mesh="right_hand_chassis" material="default_material" contype="0" conaffinity="0" />
+                              <site name="right_wrist_axis_center" pos="0 0 -0.007" />
+                              <site name="right_thumb" pos="0.165325 0.054828 -0.005964" quat="0.866025 -0.5 0 0" />
+                              <body name="index_distal" pos="0.091032 0.019668 0.043584" quat="0.482963 0.836516 0.224144 -0.12941" gravcomp="1">
+                                <joint name="RH_PI" class="bdcp" type="hinge" axis="0 0 1" range="0 1.65806" frictionloss="0.05" damping="0.005" armature="0.01762" />
+                                <inertial pos="0.0277662 -0.00133244 0.00834908" mass="0.06126" fullinertia="4.64698e-06 2.72378e-05 2.65544e-05 1.08106e-06 -4.80596e-07 0" />
+                                <geom class="visual" pos="0.0277662 -0.00133244 0.00834908" quat="0.482963 -0.836516 -0.224144 0.12941" mesh="index_distal" material="default_material" contype="0" conaffinity="0" />
+                                <body name="index_fingertip" pos="0.0575003 -0.00299933 -0.000675715" quat="0.766045 -1.43018e-07 -9.42426e-08 -0.642787" gravcomp="1">
+                                  <joint name="RH_DI" class="bdcd" type="hinge" axis="0 0 1" range="0 1.39626" frictionloss="0.05" damping="0.005" armature="0.009041" />
+                                  <inertial pos="0.0119323 -0.00183989 0.00813104" mass="0.0220483" fullinertia="2.0251e-06 4.29717e-06 3.94747e-06 8.10251e-07 -4.19003e-07 7.13135e-08" />
+                                  <geom class="visual" pos="0.0119323 -0.00183989 0.00813104" quat="0.286788 -0.496732 -0.709406 0.409576" mesh="index_fingertip" material="default_material" contype="0" conaffinity="0" />
+                                  <geom name="right_index_fingertip" type="box" size="0.0226 0.013 0.0125" pos="0.0144 -0.001 0.0095" group="4" rgba="1 0 0 0.2" class="collision" contype="1" conaffinity="1" />
+                                </body>
+                                <geom name="right_index_distal" type="box" size="0.0393 0.0123 0.0125" pos="0.0282 -0.0012 0.0088" group="4" rgba="1 0 0 0.2" class="collision" contype="1" conaffinity="1" />
+                              </body>
+                              <body name="3f_distal" pos="0.091032 -0.00536 0.029134" quat="0.462356 0.800824 0.329667 -0.190334" gravcomp="1">
+                                <joint name="RH_P3F" class="bdcp" type="hinge" axis="0 0 1" range="0 1.9155" frictionloss="0.05" damping="0.005" armature="0.01762" />
+                                <inertial pos="0.0303682 -0.00137221 0.0164754" mass="0.085304" fullinertia="3.15481e-05 6.70408e-05 4.2664e-05 1.74276e-06 -3.43494e-06 2.68878e-07" />
+                                <geom class="visual" pos="0.0303682 -0.00137221 0.0164754" quat="0.462356 -0.800824 -0.329667 0.190334" mesh="3f_distal" material="default_material" contype="0" conaffinity="0" />
+                                <body name="right_3f_fingertip" pos="0.0600006 -0.00299924 -0.00257541" quat="0.766044 -5.2208e-08 -5.97372e-08 -0.642788" gravcomp="1">
+                                  <joint name="RH_D3F" class="bdcd" type="hinge" axis="0 0 1" range="0 1.39626" frictionloss="0.05" damping="0.005" armature="0.009041" />
+                                  <inertial pos="0.0171649 -0.00154208 0.0207664" mass="0.0386698" fullinertia="1.54328e-05 2.14487e-05 1.00715e-05 1.54882e-06 -6.73395e-07 -2.49343e-07" />
+                                  <geom class="visual" pos="0.0171649 -0.00154208 0.0207664" quat="0.231841 -0.401561 -0.7673 0.443001" mesh="right_3f_fingertip" material="default_material" contype="0" conaffinity="0" />
+                                  <geom name="right_3f_fingertip" type="box" size="0.0271 0.0125 0.031" pos="0.0189 -0.0006 0.028" group="4" rgba="1 0 0 0.2" class="collision" contype="1" conaffinity="1" />
+                                </body>
+                                <geom name="right_3f_distal" type="box" size="0.0406 0.0123 0.031" pos="0.0294 -0.0012 0.0254" group="4" rgba="1 0 0 0.2" class="collision" contype="1" conaffinity="1" />
+                              </body>
+                              <geom name="right_palm" type="box" size="0.04 0.075 0.052" pos="0.08 0.0097 -0.0035" axisangle="1 0 0 0.5" group="4" rgba="1 0 0 0.2" class="collision" contype="1" conaffinity="1" />
+                              <geom name="right_thumb_box" type="box" size="0.0301 0.016 0.018" pos="0.1352 0.048 -0.02" axisangle="1 0 0 0.5" group="4" rgba="1 0 0 0.2" class="collision" contype="1" conaffinity="1" />
+                            </body>
+                          </body>
+                        </body>
+                        <geom name="right_l4" type="capsule" size="0.06 0.135" pos="0.130815 -0.0318198 -0.0200001" quat="0.500001 -0.5 -0.5 0.499999" rgba="1 0 0 0.2" group="1" class="collision" contype="1" conaffinity="1" />
+                      </body>
+                      <geom name="right_l3" type="capsule" size="0.06 0.145" pos="0 -4.95722e-08 0.025" quat="9.91445e-07 -1 0 0" rgba="1 0 0 0.2" group="1" class="collision" contype="1" conaffinity="1" />
+                    </body>
+                  </body>
+                </body>
+                <body name="l1_2" pos="0 -0.190259 0.10519" quat="0 0 0.130526 -0.991445" gravcomp="1">
+                  <joint name="LJ1" class="dm6248p" type="hinge" axis="0 0 1" range="-2.35619 2.35619" frictionloss="0.8086" damping="0.7952" armature="0.1344" />
+                  <inertial pos="0.0035861 -0.0296838 0.0912775" mass="1.06265" fullinertia="0.002259 0.00174407 0.0010571 3.21879e-05 -6.32956e-05 0.000571868" />
+                  <geom class="visual" pos="0.0035861 -0.0296838 0.0912775" quat="0 0 0.608761 0.793353" mesh="l1_2" material="default_material" contype="0" conaffinity="0" />
+                  <body name="left_l2" pos="0.0185 -0.0412378 0.110149" quat="0.560986 -0.430459 0.560986 -0.430459" gravcomp="1">
+                    <joint name="LJ2" class="dm6248p" type="hinge" axis="0 0 1" range="-2.35619 0.305433" frictionloss="0.8086" damping="0.7952" armature="0.1344" />
+                    <inertial pos="0.085724 -3.2e-05 -0.0174498" mass="1.08531" fullinertia="0.00128526 0.00253709 0.00221985 -3.8371e-06 0.000137002 5.01719e-07" />
+                    <geom class="visual" pos="0.085724 -3.2e-05 -0.0174498" quat="0 0.707107 0 -0.707107" mesh="left_l2" material="default_material" contype="0" conaffinity="0" />
+                    <body name="l3_2" pos="0.11475 0 -0.0185" quat="0.707107 0 0.707107 0" gravcomp="1">
+                      <joint name="LJ3" class="dm6248p" type="hinge" axis="0 0 1" range="-2.35619 2.35619" frictionloss="0.8086" damping="0.7952" armature="0.1344" />
+                      <inertial pos="0.0223859 0.002996 0.15231" mass="1.21641" fullinertia="0.00570865 0.00631178 0.0013606 -4.42277e-05 -0.00116476 -0.000162049" />
+                      <geom class="visual" pos="0.0223859 0.002996 0.15231" quat="0 1 0 0" mesh="l3_2" material="default_material" contype="0" conaffinity="0" />
+                      <body name="l4_2" pos="0.036 0.0185 0.19525" quat="0.707107 -0.707107 0 0" gravcomp="1">
+                        <joint name="LJ4" class="dm6248p" type="hinge" axis="0 0 1" range="-1.5708 1.09083" frictionloss="0.8086" damping="0.7952" armature="0.1344" />
+                        <inertial pos="0.0583574 -0.028593 -0.01654" mass="0.731419" fullinertia="0.000892449 0.00147709 0.00144866 0.000317648 8.23184e-05 -3.4559e-05" />
+                        <geom class="visual" pos="0.0583574 -0.028593 -0.01654" quat="0.707107 -0.707107 0 0" mesh="l4_2" material="default_material" contype="0" conaffinity="0" />
+                        <body name="left_l5" pos="0.085 -0.036 -0.0185" quat="0.5 0.5 0.5 0.5" gravcomp="1">
+                          <joint name="LJ5" class="dm4340p" type="hinge" axis="0 0 1" range="-3.66519 1.0472" frictionloss="0.4861" damping="0.2558" armature="0.02784" />
+                          <inertial pos="-0.000814 8.3e-05 0.092333" mass="0.96385" fullinertia="0.00257669 0.00241337 0.000757762 2.08114e-05 2.71736e-05 -9.75295e-05" />
+                          <geom class="visual" pos="-0.000814 8.3e-05 0.092333" quat="0 0.707107 0 0.707107" mesh="left_l5" material="default_material" contype="0" conaffinity="0" />
+                          <body name="left_l6" pos="0 0.0377 0.215" quat="0.5 -0.5 -0.5 -0.5" gravcomp="1">
+                            <joint name="LJ6" class="dm4340p" type="hinge" axis="0 0 1" range="-1.5708 1.0472" frictionloss="0.4861" damping="0.2558" armature="0.02784" />
+                            <inertial pos="8.4e-05 -0.00278 -0.037748" mass="0.460088" fullinertia="0.000260319 0.000250867 0.000237612 -2.1152e-06 1.61599e-07 9.10382e-07" />
+                            <geom class="visual" pos="8.4e-05 -0.00278 -0.037748" quat="0.707107 -0.707107 0 0" mesh="left_l6" material="default_material" contype="0" conaffinity="0" />
+                            <body name="left_hand_chassis" pos="0 0.007 -0.0377" quat="0.707107 -0.707107 0 0" gravcomp="1">
+                              <joint name="LJ7" class="dm4340p" type="hinge" axis="0 0 1" range="-1.5708 1.5708" frictionloss="0.4861" damping="0.2558" armature="0.02784" />
+                              <inertial pos="0.064156 -0.001535 0.003116" mass="0.37389" fullinertia="0.000515375 0.000695603 0.000817389 5.35574e-05 0.000128455 3.39127e-05" />
+                              <geom class="visual" pos="0.064156 -0.001535 0.003116" mesh="left_hand_chassis" material="default_material" contype="0" conaffinity="0" />
+                              <site name="left_wrist_axis_center" pos="0 0 -0.007" />
+                              <site name="left_thumb" pos="0.165325 -0.054828 -0.005964" quat="0.866025 0.5 0 0" />
+                              <body name="index_distal_2" pos="0.091032 -0.004383 0.034759" quat="0.836516 0.482963 0.12941 -0.224144" gravcomp="1">
+                                <joint name="LH_PI" class="bdcp" type="hinge" axis="0 0 1" range="0 1.65806" frictionloss="0.05" damping="0.005" armature="0.01762" />
+                                <inertial pos="0.0277658 -0.00133174 0.00834952" mass="0.06126" fullinertia="4.64699e-06 2.72378e-05 2.65544e-05 1.08105e-06 -4.80604e-07 0" />
+                                <geom class="visual" pos="0.0277658 -0.00133174 0.00834952" quat="0.836516 -0.482963 -0.12941 0.224144" mesh="index_distal_2" material="default_material" contype="0" conaffinity="0" />
+                                <body name="index_fingertip_2" pos="0.0575 -0.00299895 -0.000675035" quat="0.766045 1.43018e-07 9.42426e-08 -0.642787" gravcomp="1">
+                                  <joint name="LH_DI" class="bdcd" type="hinge" axis="0 0 1" range="0 1.39626" frictionloss="0.05" damping="0.005" armature="0.009041" />
+                                  <inertial pos="0.0119329 -0.00183964 0.0081302" mass="0.0220483" fullinertia="2.0251e-06 4.29717e-06 3.94746e-06 8.10251e-07 -4.19e-07 7.13127e-08" />
+                                  <geom class="visual" pos="0.0119329 -0.00183964 0.0081302" quat="0.496732 -0.286788 -0.409576 0.709406" mesh="index_fingertip_2" material="default_material" contype="0" conaffinity="0" />
+                                  <geom name="left_index_fingertip" type="box" size="0.0226 0.013 0.0125" pos="0.0144 -0.001 0.0095" group="4" rgba="1 0 0 0.2" class="collision" contype="1" conaffinity="1" />
+                                </body>
+                                <geom name="left_index_distal" type="box" size="0.0393 0.0123 0.0125" pos="0.0282 -0.0012 0.0088" group="4" rgba="1 0 0 0.2" class="collision" contype="1" conaffinity="1" />
+                              </body>
+                              <body name="3f_distal_2" pos="0.091032 0.049397 0.003709" quat="0.800824 0.462356 0.190334 -0.329667" gravcomp="1">
+                                <joint name="LH_P3F" class="bdcp" type="hinge" axis="0 0 1" range="0 1.9155" frictionloss="0.05" damping="0.005" armature="0.01762" />
+                                <inertial pos="0.0303678 -0.00137176 0.0164755" mass="0.085304" fullinertia="3.15481e-05 6.70409e-05 4.26641e-05 1.74274e-06 -3.43487e-06 2.6893e-07" />
+                                <geom class="visual" pos="0.0303678 -0.00137176 0.0164755" quat="0.800824 -0.462356 -0.190334 0.329667" mesh="3f_distal_2" material="default_material" contype="0" conaffinity="0" />
+                                <body name="left_3f_fingertip" pos="0.0600002 -0.0029989 -0.00257543" quat="0.766044 5.2208e-08 5.97372e-08 -0.642788" gravcomp="1">
+                                  <joint name="LH_D3F" class="bdcd" type="hinge" axis="0 0 1" range="0 1.39626" frictionloss="0.05" damping="0.005" armature="0.009041" />
+                                  <inertial pos="0.017145 -0.00152061 0.0272184" mass="0.0388632" fullinertia="1.73964e-05 2.34065e-05 1.01045e-05 1.55502e-06 -4.43118e-06 7.24457e-07" />
+                                  <geom class="visual" pos="0.017145 -0.00152061 0.0272184" quat="0.401561 -0.231841 -0.443001 0.7673" mesh="left_3f_fingertip" material="default_material" contype="0" conaffinity="0" />
+                                  <geom name="left_3f_fingertip" type="box" size="0.0271 0.0125 0.031" pos="0.0189 -0.0006 0.028" group="4" rgba="1 0 0 0.2" class="collision" contype="1" conaffinity="1" />
+                                </body>
+                                <geom name="left_3f_distal" type="box" size="0.0406 0.0124 0.031" pos="0.0294 -0.0012 0.0254" group="4" rgba="1 0 0 0.2" class="collision" contype="1" conaffinity="1" />
+                              </body>
+                              <geom name="left_palm" type="box" size="0.04 0.075 0.052" pos="0.08 -0.0097 -0.0035" axisangle="1 0 0 -0.5" group="4" rgba="1 0 0 0.2" class="collision" contype="1" conaffinity="1" />
+                              <geom name="left_thumb_box" type="box" size="0.0301 0.016 0.018" pos="0.1352 -0.048 -0.02" axisangle="1 0 0 -0.5" group="4" rgba="1 0 0 0.2" class="collision" contype="1" conaffinity="1" />
+                            </body>
+                          </body>
+                        </body>
+                        <geom name="left_l4" type="capsule" size="0.06 0.135" pos="0.130815 -0.0318199 -0.02" quat="0.5 -0.5 -0.5 0.5" rgba="1 0 0 0.2" group="1" class="collision" contype="1" conaffinity="1" />
+                      </body>
+                      <geom name="left_l3" type="capsule" size="0.06 0.145" pos="0 -7.8647e-09 0.025" quat="1.57294e-07 -1 0 0" rgba="1 0 0 0.2" group="1" class="collision" contype="1" conaffinity="1" />
+                    </body>
+                  </body>
+                </body>
+                <geom name="torso1" type="capsule" size="0.11 0.08" pos="0 -0.13 0.065" quat="0.707107 0.707107 0 0" rgba="1 0 0 0.2" group="1" class="collision" contype="1" conaffinity="1" />
+                <geom name="torso2" type="capsule" size="0.11 0.08" pos="0 -0.13 -0.008" quat="0.707107 0.707107 0 0" rgba="1 0 0 0.2" group="1" class="collision" contype="1" conaffinity="1" />
+                <geom name="torso_lidar" type="sphere" size="0.05" pos="0.1 -0.225 0.085" rgba="1 0 0 0.2" group="1" class="collision" contype="1" conaffinity="1" />
+              </body>
+              <geom name="lift" type="capsule" size="0.075 0.4" pos="-0.01 0 -0.2" rgba="1 0 0 0.2" group="1" class="collision" contype="0" conaffinity="0" />
+            </body>
+            <geom name="mobile_base_box" type="box" size="0.25 0.25 0.14" pos="-0.158 0 0.16" rgba="1 0 0 0.2" group="1" class="collision" contype="0" conaffinity="0" />
+            <geom name="mobile_base_lidar" type="sphere" size="0.05" pos="-0.38 0 0.3" rgba="1 0 0 0.2" group="1" class="collision" contype="0" conaffinity="0" />
+          </body>
+        </body>
+      </body>
+    </body>
+  </worldbody>
+  <asset>
+    <mesh file="mobile_base.stl" />
+    <mesh file="lift_link.stl" />
+    <mesh file="torso.stl" />
+    <mesh file="neck.stl" />
+    <mesh file="head.stl" />
+    <mesh file="l1.stl" />
+    <mesh file="right_l2.stl" />
+    <mesh file="l3.stl" />
+    <mesh file="l4.stl" />
+    <mesh file="right_l5.stl" />
+    <mesh file="right_l6.stl" />
+    <mesh file="right_hand_chassis.stl" />
+    <mesh file="index_distal.stl" />
+    <mesh file="index_fingertip.stl" />
+    <mesh file="3f_distal.stl" />
+    <mesh file="right_3f_fingertip.stl" />
+    <mesh file="l1_2.stl" />
+    <mesh file="left_l2.stl" />
+    <mesh file="l3_2.stl" />
+    <mesh file="l4_2.stl" />
+    <mesh file="left_l5.stl" />
+    <mesh file="left_l6.stl" />
+    <mesh file="left_hand_chassis.stl" />
+    <mesh file="index_distal_2.stl" />
+    <mesh file="index_fingertip_2.stl" />
+    <mesh file="3f_distal_2.stl" />
+    <mesh file="left_3f_fingertip.stl" />
+    <material name="default_material" rgba="0.917647 0.917647 0.917647 1" />
+  </asset>
+  <actuator>
+    <position class="base_xy_pos" name="basex" joint="basex" kp="20000" kv="2000" />
+    <position class="base_xy_pos" name="basey" joint="basey" kp="20000" kv="2000" />
+    <position class="base_yaw_pos" name="baseth" joint="baseth" kp="2000" kv="200" />
+    <position class="lemi2lift_pos" name="lift" joint="lift" inheritrange="1" kp="80000" kv="20000" />
+    <position class="myactuator_rh25_pos" name="TP" joint="TP" inheritrange="1" kp="2500" kv="200" />
+    <position class="dm3507_pos" name="NY" joint="NY" inheritrange="1" kp="7" kv="0.8" />
+    <position class="dm3507_pos" name="NP" joint="NP" inheritrange="1" kp="7" kv="0.8" />
+    <position class="dummy_pos" name="head_camera_dof" joint="head_camera_dof" kp="10" kv="1" />
+    <position class="dm6248p_pos" name="RJ1" joint="RJ1" inheritrange="1" kp="750" kv="35" />
+    <position class="dm6248p_pos" name="RJ2" joint="RJ2" inheritrange="1" kp="750" kv="35" />
+    <position class="dm6248p_pos" name="RJ3" joint="RJ3" inheritrange="1" kp="750" kv="35" />
+    <position class="dm6248p_pos" name="RJ4" joint="RJ4" inheritrange="1" kp="750" kv="35" />
+    <position class="dm4340p_pos" name="RJ5" joint="RJ5" inheritrange="1" kp="100" kv="1.2" />
+    <position class="dm4340p_pos" name="RJ6" joint="RJ6" inheritrange="1" kp="100" kv="1.2" />
+    <position class="dm4340p_pos" name="RJ7" joint="RJ7" inheritrange="1" kp="80" kv="0.8" />
+    <position class="bdcp_pos" name="RH_PI" joint="RH_PI" inheritrange="1" kp="100" kv="0.1" />
+    <position class="bdcd_pos" name="RH_DI" joint="RH_DI" inheritrange="1" kp="100" kv="0.1" />
+    <position class="bdcp_pos" name="RH_P3F" joint="RH_P3F" inheritrange="1" kp="100" kv="0.1" />
+    <position class="bdcd_pos" name="RH_D3F" joint="RH_D3F" inheritrange="1" kp="100" kv="0.1" />
+    <position class="dm6248p_pos" name="LJ1" joint="LJ1" inheritrange="1" kp="750" kv="35" />
+    <position class="dm6248p_pos" name="LJ2" joint="LJ2" inheritrange="1" kp="750" kv="35" />
+    <position class="dm6248p_pos" name="LJ3" joint="LJ3" inheritrange="1" kp="750" kv="35" />
+    <position class="dm6248p_pos" name="LJ4" joint="LJ4" inheritrange="1" kp="750" kv="35" />
+    <position class="dm4340p_pos" name="LJ5" joint="LJ5" inheritrange="1" kp="100" kv="1.2" />
+    <position class="dm4340p_pos" name="LJ6" joint="LJ6" inheritrange="1" kp="100" kv="1.2" />
+    <position class="dm4340p_pos" name="LJ7" joint="LJ7" inheritrange="1" kp="80" kv="0.8" />
+    <position class="bdcp_pos" name="LH_PI" joint="LH_PI" inheritrange="1" kp="100" kv="0.1" />
+    <position class="bdcd_pos" name="LH_DI" joint="LH_DI" inheritrange="1" kp="100" kv="0.1" />
+    <position class="bdcp_pos" name="LH_P3F" joint="LH_P3F" inheritrange="1" kp="100" kv="0.1" />
+    <position class="bdcd_pos" name="LH_D3F" joint="LH_D3F" inheritrange="1" kp="100" kv="0.1" />
+  </actuator>
+  <keyframe>
+    <key name="home" qpos="0 0 0 0.85 0 0 0 0 0.78539816 -1.2 -0.6 1.9 1.5707963 0 0 0 0 0 0 -0.78539816 1.2 0.6 -1.9 -1.5707963 0 0 0 0 0 0" ctrl="0 0 0 0.85 0 0 0 0 0.78539816 -1.2 -0.6 1.9 1.5707963 0 0 0 0 0 0 -0.78539816 1.2 0.6 -1.9 -1.5707963 0 0 0 0 0 0" />
+  </keyframe>
+</mujoco>
