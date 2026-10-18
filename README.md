@@ -11,7 +11,7 @@ robot manipulation tasks in simulation, by hand or with a coding agent.
 
 ## Quick start
 
-We provide comprehensive examples in [`examples/`](https://github.com/robosimstudio/robosimstudio/tree/main/examples) to help you get started quickly. Alternatively, you can use a coding agent such as Codex or Claude Code to create a simulation environment by simply providing the following prompt:
+We provide an [installation guide](https://github.com/robosimstudio/robosimstudio/blob/main/examples/install.md) and comprehensive examples in [`examples/`](https://github.com/robosimstudio/robosimstudio/tree/main/examples) to help you get started quickly. Alternatively, you can use a coding agent such as Codex or Claude Code to create a simulation environment by simply providing the following prompt:
 
 ```
 Set up environment for https://github.com/robosimstudio/robosimstudio
