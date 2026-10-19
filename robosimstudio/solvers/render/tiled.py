@@ -260,7 +260,9 @@ class RendererTiled(RendererBase):
                     "rays": rays,
                     "transforms": wp.zeros((n, model.world_count), dtype=wp.transformf, device=model.device),
                     "host": np.zeros((n, model.world_count, 7), dtype=np.float32),
-                    "color": utils.create_color_image_output(width, height, n) if "rgb" in wanted and not self._refined_rgb else None,
+                    "color": utils.create_color_image_output(width, height, n)
+                    if "rgb" in wanted and not self._refined_rgb
+                    else None,
                     "depth": utils.create_forward_depth_image_output(width, height, n) if "depth" in wanted else None,
                     "shape": utils.create_shape_index_image_output(width, height, n) if "seg" in wanted else None,
                 }
@@ -320,8 +322,13 @@ class RendererTiled(RendererBase):
         linear[shape == _NO_SHAPE] = background
         if self.sample_scale > 1:
             linear = linear.reshape(
-                self.num_worlds, len(pass_["members"]), pass_["height"], self.sample_scale,
-                pass_["width"], self.sample_scale, 3,
+                self.num_worlds,
+                len(pass_["members"]),
+                pass_["height"],
+                self.sample_scale,
+                pass_["width"],
+                self.sample_scale,
+                3,
             ).mean(axis=(3, 5))
         linear *= self.exposure
         if self.sensor.default_render_config.output_color_space == ColorSpace.SRGB:
@@ -412,7 +419,11 @@ class RendererTiled(RendererBase):
             shapes = pass_["shape"].numpy() if pass_["shape"] is not None else None
 
             for world in chosen:
-                rgb = detail_colors[world] if detail_colors is not None else (colors[world] if colors is not None else None)
+                rgb = (
+                    detail_colors[world]
+                    if detail_colors is not None
+                    else (colors[world] if colors is not None else None)
+                )
                 depth = depths[world] if depths is not None else None
                 shape = shapes[world] if shapes is not None else None
                 for slot, index in enumerate(pass_["members"]):
@@ -423,7 +434,9 @@ class RendererTiled(RendererBase):
                         if detail_colors is not None:
                             frame["rgb"] = np.ascontiguousarray(rgb[slot])
                         else:
-                            frame["rgb"] = np.ascontiguousarray(rgb[slot].view(np.uint8).reshape(height, width, 4)[..., :3])
+                            frame["rgb"] = np.ascontiguousarray(
+                                rgb[slot].view(np.uint8).reshape(height, width, 4)[..., :3]
+                            )
                     if "depth" in wanted:
                         # A miss is already cleared to 0; nan_to_num only guards against
                         # a degenerate ray, which a zero-aperture camera can produce.

@@ -6,9 +6,13 @@ from __future__ import annotations
 import types
 
 import numpy as np
+
 import robosimstudio as rss
 from robosimstudio.robots.registry import get_embodiment, get_gripper
 from robosimstudio_real2sim_agent import checks
+
+TIER = "medium"
+"""Builds a scene and steps it on a GPU."""
 
 
 def test_lemi2b_registry_and_hands() -> None:
@@ -27,7 +31,9 @@ def test_lemi2b_registry_and_hands() -> None:
 def test_lemi2b_scene_builds_and_settles_with_zero_penetration() -> None:
     scene = rss.Scene()
     scene.add(rss.robot("lemi2b"))
-    scene.add(rss.CameraSpec(name="hat", width=640, height=480, fov_y=90.0, eye=(0.1, 0.0, 1.3), look_at=(0.6, 0.0, 0.7)))
+    scene.add(
+        rss.CameraSpec(name="hat", width=640, height=480, fov_y=90.0, eye=(0.1, 0.0, 1.3), look_at=(0.6, 0.0, 0.7))
+    )
     scene.add(rss.slab(name="target_box", half=(0.06, 0.06, 0.04), at=(0.75, 0.0, 0.045)))
     sim = scene.build(control_mode="joint_position")
 
