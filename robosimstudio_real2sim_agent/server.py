@@ -93,6 +93,8 @@ REFRESH_SECONDS = 0.5
 """How often the ``Live`` folder's readouts are rewritten."""
 BOARD_LIMIT = 8
 """Pictures kept on the board; the oldest goes when another comes. The run directory keeps every one."""
+RECENT = 32
+"""Routines ended and takes written that ``status`` keeps, by serial and by name, for a client waiting on one."""
 IDLE_LIMIT = 300
 """Passes in a row a routine that drives the scene itself may yield without stepping it before it is stopped."""
 SPEED_WINDOW = 5.0
@@ -197,6 +199,12 @@ class LiveServer:
         self.snap_n = 0
         self.cmp_n = 0
         self.last_take: dict = {}
+        self.ended: dict[int, dict] = {}
+        """How each of the last :data:`RECENT` scripts ended, by serial: a client waits on its own, not the newest."""
+        self.takes_written: list[str] = []
+        """The last :data:`RECENT` takes written, by name."""
+        self.busy_routine = False
+        """Whether :attr:`busy` is one step of a routine, which is the page at work, not the page held up."""
         self.last_keys: list[str] = []
         """The keys of the last still comparison; a take that ends outlines its things with them."""
         self._loaded_stamp = None
@@ -495,18 +503,22 @@ class LiveServer:
         """End every queued script, the head first, each reported ``how``."""
         while self.script:
             gen = self.script.pop(0)
-            error = ""
-            close = getattr(gen, "close", None)  # a generator; a plain iterator has nothing to close
-            if close is not None:
-                try:
-                    close()
-                except Exception:
-                    # its own `finally` raised or stepped: the rest still ends, and the rebuild or reset still happens
-                    error = traceback.format_exc()[-3000:]
-                    self.last_error = error
-                    print(f"[live] a script raised as it was stopped:\n{error}", file=sys.stderr, flush=True)
-            self._ended(gen, how, error)
+            self._ended(gen, how, self._close(gen))
         self._next_script()
+
+    def _close(self, gen) -> str:
+        """Close a script, returning what its own ``finally`` raised, if anything; whatever it raises, it is gone."""
+        close = getattr(gen, "close", None)  # a generator; a plain iterator has nothing to close
+        if close is None:
+            return ""
+        try:
+            close()
+        except Exception:
+            error = traceback.format_exc()[-3000:]
+            self.last_error = error
+            print(f"[live] a script raised as it was stopped:\n{error}", file=sys.stderr, flush=True)
+            return error
+        return ""
 
     def _ended(self, gen, how: str, error: str = "") -> None:
         meta = self.script_meta.pop(id(gen), None) or {"serial": 0, "name": "", "steps": 0, "wall": time.perf_counter()}
@@ -518,6 +530,9 @@ class LiveServer:
             "steps": int(meta["steps"]),
             "wall_seconds": round(time.perf_counter() - meta["wall"], 1),
         }
+        self.ended[meta["serial"]] = self.last_script
+        while len(self.ended) > RECENT:
+            del self.ended[min(self.ended)]
 
     def _next_script(self) -> None:
         """The head script is gone: give the arms back, and let the next one set them as it needs."""
@@ -529,8 +544,8 @@ class LiveServer:
         meta = self.script_meta.get(id(gen))
         if meta is not None:
             meta["steps"] += steps
-        elif self.last_script.get("serial") == serial:
-            self.last_script["steps"] += steps  # it ended this pass, with these steps in it
+        elif serial in self.ended:
+            self.ended[serial]["steps"] += steps  # it ended this pass, with these steps in it
 
     def _play(self) -> None:
         """One step of the script at the head of the queue.
@@ -550,7 +565,7 @@ class LiveServer:
                 self._suspend_arms()
         before, mark = int(self.sim.step_count), checks.reset_mark(self.sim)
         try:
-            with self._busy("playing one step of a routine"):
+            with self._busy("playing one step of a routine", routine=True):
                 next(gen)
         except StopIteration:
             self.script.pop(0)
@@ -559,29 +574,29 @@ class LiveServer:
             print("[live] script finished", flush=True)
         except Exception:
             self.script.pop(0)
-            gen.close()
-            self.last_error = traceback.format_exc()[-3000:]
-            self._ended(gen, "failed", self.last_error)
+            failure = traceback.format_exc()[-3000:]
+            self._close(gen)
+            self.last_error = failure
+            self._ended(gen, "failed", failure)
             self._next_script()
-            print(f"[live] script failed:\n{self.last_error}", file=sys.stderr, flush=True)
+            print(f"[live] script failed:\n{failure}", file=sys.stderr, flush=True)
         else:
             self.head_stepped = checks.steps_since(self.sim, before, mark) > 0
             if not meta.get("drives_page"):
                 meta["idle"] = 0 if self.head_stepped else meta.get("idle", 0) + 1
-                if meta["idle"] >= IDLE_LIMIT:
-                    self.script.pop(0)
-                    gen.close()
-                    self.last_error = (
-                        f"{meta.get('name') or 'the routine'} yielded {IDLE_LIMIT} times running without stepping the "
-                        "scene, and the page does not step a routine that drives the scene itself: step it between "
-                        "yields (sim.run(1)), or give the routine a `session` parameter and play it so the page "
-                        "steps it through the arm panels"
-                    )
-                    self._ended(gen, "failed", self.last_error)
-                    self._next_script()
-                    print(f"[live] script stopped: {self.last_error}", file=sys.stderr, flush=True)
-                    return
-            if self.recorder is not None:
+            if meta.get("idle", 0) >= IDLE_LIMIT:
+                self.script.pop(0)
+                self._close(gen)
+                self.last_error = (
+                    f"{meta.get('name') or 'the routine'} yielded {IDLE_LIMIT} times running without stepping the "
+                    "scene, and the page does not step a routine that drives the scene itself: step it between "
+                    "yields (sim.run(1)), or give the routine a `session` parameter and play it so the page "
+                    "steps it through the arm panels"
+                )
+                self._ended(gen, "failed", self.last_error)
+                self._next_script()
+                print(f"[live] script stopped: {self.last_error}", file=sys.stderr, flush=True)
+            elif self.recorder is not None:
                 try:
                     self.recorder.maybe()
                 except Exception:
@@ -591,7 +606,8 @@ class LiveServer:
                     print(
                         f"[live] the recording failed:\n{traceback.format_exc()[-3000:]}", file=sys.stderr, flush=True
                     )
-            return
+            if self.script and self.script[0] is gen:
+                return
         if not self.script:
             self._finish_recorder("the script ended")
 
@@ -624,6 +640,8 @@ class LiveServer:
         try:
             summary = recorder.finish()
             self.last_take = summary
+            self.takes_written = [t for t in self.takes_written if t != summary["take"]][-(RECENT - 1) :]
+            self.takes_written.append(summary["take"])
             moved = checks.motion_line(checks.take_motion(recorder.frames))
             checks.log_append(
                 self.run_dir,
@@ -815,10 +833,13 @@ class LiveServer:
             "pending_save": self._pending_save(),
             "log": _log_path(),
             "generation": self.generation,
+            "busy_routine": self.busy_routine,
             "playing": len(self.script),
             "last_script": self.last_script,
+            "ended": {str(k): v for k, v in self.ended.items()},
             "recording": self.recorder.name if self.recorder is not None else "",
             "last_take": self.last_take.get("take", ""),
+            "takes_written": list(self.takes_written),
             "last_error": self.last_error,
         }
 
@@ -828,15 +849,15 @@ class LiveServer:
         return bool(self.watch_enabled) and current is not None and current != self._loaded_stamp
 
     @contextmanager
-    def _busy(self, what: str):
+    def _busy(self, what: str, routine: bool = False):
         outer = self.busy
         if not outer:
-            self.busy, self.busy_since = what, time.perf_counter()
+            self.busy, self.busy_since, self.busy_routine = what, time.perf_counter(), routine
         try:
             yield
         finally:
             if not outer:
-                self.busy = ""
+                self.busy, self.busy_routine = "", False
 
     def dispatch(self, request: dict) -> dict:
         """Run one command on the main thread, between two loop iterations."""
@@ -894,6 +915,8 @@ class LiveServer:
             "paused": bool(self.session.paused),
             "playing": len(self.script),
             "last_script": self.last_script,
+            "ended": {str(k): v for k, v in self.ended.items()},
+            "takes_written": list(self.takes_written),
             "speed": self.speed(),
             "busy": "",
             "log": _log_path(),
@@ -1139,6 +1162,8 @@ class LiveServer:
                     "error": "no timeline: `ref frames <clip> --at 0,end` writes ref/timeline.json, or give --timeline",
                 }
             try:
+                # the last still compare's keys when none are given, as at the end of a take
+                parsed = parsed or self._keys(self.last_keys)
                 result = checks.compare_take(self.run_dir, take, line, parsed, self._timeline_dir(timeline))
             except Exception as exc:
                 return {"ok": False, "error": f"{type(exc).__name__}: {exc}"}
@@ -1289,7 +1314,7 @@ class LiveServer:
         if not inspect.isgenerator(gen):
             return {
                 "ok": False,
-                "error": f"routine {name!r} returned {type(gen).__name__}, not a generator: it must yield once per control step",
+                "error": f"routine {name!r} returned {type(gen).__name__}, not a generator: it yields as it goes (REFERENCE, Acting)",
             }
         serial = self.start_script(gen, name=name, drives_page=wants_session, record=record, every=every, camera=camera)
         reply = {"ok": True, "playing": name, "serial": serial}

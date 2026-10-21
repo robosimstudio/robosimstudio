@@ -142,6 +142,42 @@ class GateSeesDeformables(unittest.TestCase):
         self.assertIn("SKIP  objects", result["report"], "no names given: a line that looked at nothing")
 
 
+class RestOfAHeap(unittest.TestCase):
+    def test_one_jittering_grain_does_not_fail_a_heap(self) -> None:
+        points = np.zeros((100, 3))
+        heap = types.SimpleNamespace(
+            particles=np.arange(100), triangles=np.zeros((0, 3)), tube_radius=0.0, point_radius=0.002
+        )
+
+        class Sim:
+            cameras = ()
+            scene = _deformable_sim(points, {"rice": heap}).scene
+            state = types.SimpleNamespace(particle_q=types.SimpleNamespace(numpy=points.copy))
+
+            def state_is_finite(self) -> bool:
+                return True
+
+            def names(self) -> list[str]:
+                return ["rice"]
+
+            def run(self, steps: int) -> None:
+                points[7, 2] += 0.01  # one grain bounces 10 mm
+
+            def sync(self) -> None:
+                pass
+
+            def __getitem__(self, name):
+                raise KeyError(name)
+
+        with mock.patch.object(checks, "_penetration", return_value=(0.0, [])):
+            rest = next(
+                c
+                for c in checks.gate(types.SimpleNamespace(sim=Sim(), build_error=""), steps=1)["checks"]
+                if c["name"] == "rest"
+            )
+        self.assertTrue(rest["ok"], rest["detail"])
+
+
 class TakeAccounting(unittest.TestCase):
     def test_a_reset_under_the_take_does_not_stop_the_count(self) -> None:
         rec = checks.Recorder.__new__(checks.Recorder)
@@ -312,6 +348,7 @@ def _server() -> LiveServer:
     live.path = Path("/nonexistent/scene.py")
     live.script, live.recorder, live.run_budget, live.last_error = [], None, 0, ""
     live.head_stepped, live._head_ready, live._suspended_arms, live.last_take = False, None, [], {}
+    live.ended, live.takes_written, live.busy_routine = {}, [], False
     live.build_error, live._tick_error = "", ""
     live.busy, live.busy_since = "", 0.0
     live._status_lock, live._status_pending = threading.Lock(), None
@@ -404,6 +441,24 @@ class RoutineStepping(unittest.TestCase):
         self.assertEqual(live.script, [])
         self.assertEqual(live.last_script["how"], "failed")
         self.assertIn("give the routine a `session` parameter", live.last_script["error"])
+
+    def test_one_stopped_idle_whose_finally_raises_still_ends_and_gives_the_arms_back(self) -> None:
+        live = _server()
+
+        def stubborn():
+            try:
+                while True:
+                    yield
+            finally:
+                raise RuntimeError("cleanup failed")
+
+        serial = live.start_script(stubborn(), name="lid")
+        live.start_script(iter(range(3)), name="next")
+        for _ in range(server_mod.IDLE_LIMIT):
+            _pass(live)
+        self.assertEqual(live.ended[serial]["how"], "failed")
+        self.assertIn("without stepping", live.ended[serial]["error"])
+        self.assertEqual(live.session.arms["left"].calls, ["suspend", "resume"], "given back, then the next takes them")
 
     def test_a_routine_queued_behind_another_is_not_stepped_for_before_it_plays(self) -> None:
         live = _server()
@@ -560,7 +615,7 @@ class CtlWaits(unittest.TestCase):
 
     def test_a_routine_is_waited_for_with_its_output_streamed(self) -> None:
         playing = {"ok": True, "step": 10, "time": 0.2, "last_script": {}, "busy": ""}
-        done = {"ok": True, "step": 30, "time": 0.5, "busy": "", "speed": 0.4, "last_take": "take1"}
+        done = {"ok": True, "step": 30, "time": 0.5, "busy": "", "speed": 0.4, "takes_written": ["take1"]}
         done["last_script"] = {"serial": 7, "name": "tidy", "how": "finished", "steps": 20, "wall_seconds": 1.2}
         fake = _FakeStatus(self.sock, [playing, done])
         self.addCleanup(fake.close)
@@ -572,6 +627,30 @@ class CtlWaits(unittest.TestCase):
         self.assertTrue(reply["ok"])
         self.assertEqual(reply["take"], "take1")
         self.assertIn("[tidy] lid open", printed)
+
+    def test_a_routine_is_told_its_own_ending_not_the_newest(self) -> None:
+        mine = {"serial": 1, "name": "a", "how": "failed", "error": "RoutineError: a broke"}
+        newer = {"serial": 2, "name": "b", "how": "finished"}
+        fake = _FakeStatus(
+            self.sock, [{"ok": True, "busy": "", "last_script": newer, "ended": {"1": mine, "2": newer}}]
+        )
+        self.addCleanup(fake.close)
+        reply = ctl.wait_for_script(self.sock, {"serial": 1}, self.log, 0, 30.0)
+        self.assertFalse(reply["ok"])
+        self.assertEqual(reply["routine"], "a")
+
+    def test_a_take_written_and_then_another_started_counts_as_written(self) -> None:
+        done = {"ok": True, "busy": "", "ended": {"3": {"serial": 3, "name": "a", "how": "finished"}}}
+        fake = _FakeStatus(self.sock, [{**done, "recording": "take2", "last_take": "", "takes_written": ["take1"]}])
+        self.addCleanup(fake.close)
+        reply = ctl.wait_for_script(self.sock, {"serial": 3, "take": "take1"}, self.log, 0, 30.0)
+        self.assertEqual(reply["take"], "take1")
+
+    def test_status_wait_does_not_wait_out_a_playing_routine(self) -> None:
+        stepping = {"ok": True, "busy": "playing one step of a routine", "busy_routine": True}
+        fake = _FakeStatus(self.sock, [stepping])
+        self.addCleanup(fake.close)
+        self.assertTrue(ctl.wait_until_free(self.sock, 5.0)["busy_routine"])
 
     def test_a_failed_routine_is_an_error_with_its_traceback(self) -> None:
         ended = {"serial": 2, "name": "eval", "how": "failed", "error": "RoutineError: stopped 364 mm short"}

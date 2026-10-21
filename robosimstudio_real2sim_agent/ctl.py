@@ -531,7 +531,9 @@ def wait_until_free(sock: Path, limit: float) -> dict:
         status = request(sock, {"cmd": "status"}, DEFAULT_TIMEOUT)
         if not status.get("ok"):
             return status
-        doing = status.get("busy") or ("a save not built yet" if status.get("pending_save") else "")
+        # a routine's step is the page at work, not held up: free, as far as a save or a render goes
+        busy = "" if status.get("busy_routine") else status.get("busy")
+        doing = busy or ("a save not built yet" if status.get("pending_save") else "")
         if not doing:
             return status
         now = time.monotonic()
@@ -580,10 +582,13 @@ def wait_for_script(sock: Path, reply: dict, log: Path, offset: int, limit: floa
         status = request(sock, {"cmd": "status"}, DEFAULT_TIMEOUT)
         if not status.get("ok"):
             return status
-        ended = status.get("last_script") or {}
+        # this routine's own ending, not the newest one's: another may have ended after it
+        ended = (status.get("ended") or {}).get(str(serial)) or {}
+        if not ended and int((status.get("last_script") or {}).get("serial") or 0) == serial:
+            ended = status["last_script"]
         # ended; and a take it filmed is no longer filming, nor being written and put beside the clip
         filming = take and (status.get("busy") or status.get("recording") == take)
-        if int(ended.get("serial") or 0) >= serial and not filming:
+        if ended and not filming:
             break
         now = time.monotonic()
         if now - start > limit:
@@ -602,7 +607,7 @@ def wait_for_script(sock: Path, reply: dict, log: Path, offset: int, limit: floa
         "steps": ended.get("steps"),
         "wall_seconds": ended.get("wall_seconds"),
         "speed": status.get("speed"),
-        "take": (status.get("last_take") if status.get("last_take") == take else f"{take} (not written; see the log)")
+        "take": (take if take in (status.get("takes_written") or []) else f"{take} (not written; see the log)")
         if take
         else "",
         "recording": reply.get("recording", ""),

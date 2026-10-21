@@ -191,7 +191,9 @@ def seg_names(sim: Any) -> tuple[dict[int, str], dict[str, int]]:
     return names, labels
 
 
-def name_deformables(sim: Any, cam: Any, seg: np.ndarray, labels: dict[str, int]) -> np.ndarray:
+def name_deformables(
+    sim: Any, cam: Any, seg: np.ndarray, labels: dict[str, int], q: np.ndarray | None = None
+) -> np.ndarray:
     """``seg`` with each particle or deformable-mesh hit given the label of the deformable it belongs to.
 
     The ray tracer reports such a hit by kind -- a particle, or the one
@@ -199,7 +201,7 @@ def name_deformables(sim: Any, cam: Any, seg: np.ndarray, labels: dict[str, int]
     of that kind in the scene, the hit is its. With several, each is projected
     into the picture by its particles and a hit goes to the deformable whose
     particles are drawn nearest that pixel. A hit no deformable can claim stays
-    unnamed (0).
+    unnamed (0). ``q`` is the particles' positions when the caller has read them.
     """
     from robosimstudio.solvers.render.tiled import SEG_PARTICLES, SEG_SOFT_MESH
 
@@ -219,27 +221,42 @@ def name_deformables(sim: Any, cam: Any, seg: np.ndarray, labels: dict[str, int]
         if len(owners) == 1:
             out[hit] = labels[owners[0]]
             continue
-        nearest = _nearest_owner(sim, cam, seg.shape, {n: labels[n] for n in owners}, handles)
+        if q is None:
+            q = _particles(sim)
+        nearest = _nearest_owner(sim, cam, hit, {n: labels[n] for n in owners}, handles, q)
         if nearest is not None:
-            out[hit] = nearest[hit]
+            out[hit] = nearest
     return out
 
 
-def _nearest_owner(
-    sim: Any, cam: Any, shape: tuple[int, int], labels: dict[str, int], handles: dict
-) -> np.ndarray | None:
-    """Per pixel, the label of the deformable whose projected particle is nearest; None when none projects."""
-    from scipy import ndimage
+def _particles(sim: Any) -> np.ndarray:
+    """Every particle's position, ``(n, 3)``, read once; empty for a scene with none."""
+    try:
+        return np.asarray(sim.state.particle_q.numpy(), dtype=np.float64)
+    except Exception:
+        return np.zeros((0, 3))
 
-    h, w = shape
-    q = np.asarray(sim.state.particle_q.numpy(), dtype=np.float64)
+
+def _indices(handle: Any, count: int) -> np.ndarray:
+    """A deformable's particle indices that are in range."""
+    idx = np.asarray(getattr(handle, "particles", ()), dtype=np.int64)
+    return idx[(idx >= 0) & (idx < count)]
+
+
+def _nearest_owner(
+    sim: Any, cam: Any, hit: np.ndarray, labels: dict[str, int], handles: dict, q: np.ndarray
+) -> np.ndarray | None:
+    """For each pixel in ``hit``, the label of the deformable whose projected particle is nearest; None when none
+    projects. Looked up over the hit pixels alone, so a frame costs what its deformables cover."""
+    from scipy.spatial import cKDTree
+
+    h, w = hit.shape
     pose = None
     if getattr(cam, "parent_body", -1) >= 0 and getattr(sim.state, "body_q", None) is not None:
         pose = cam.pose_on_body(sim.state.body_q.numpy())
     xs, ys, zs, ls = [], [], [], []
     for name, label in labels.items():
-        idx = np.asarray(getattr(handles[name], "particles", ()), dtype=np.int64)
-        idx = idx[(idx >= 0) & (idx < len(q))]
+        idx = _indices(handles[name], len(q))
         if not len(idx):
             continue
         uv, z = cam.project(q[idx], camera_to_world=pose)
@@ -256,11 +273,10 @@ def _nearest_owner(
     pixel = y * w + x
     order = np.lexsort((z, pixel))  # by pixel, nearest first within one
     first = np.unique(pixel[order], return_index=True)[1]  # the nearest particle at each pixel drawn on
-    splat = np.zeros(h * w, np.int32)
-    splat[pixel[order][first]] = lab[order][first]
-    splat = splat.reshape(h, w)
-    _, (iy, ix) = ndimage.distance_transform_edt(splat == 0, return_indices=True)
-    return splat[iy, ix]
+    drawn, owner = pixel[order][first], lab[order][first]
+    hy, hx = np.nonzero(hit)
+    _, nearest = cKDTree(np.stack([drawn % w, drawn // w], axis=1)).query(np.stack([hx, hy], axis=1))
+    return owner[nearest]
 
 
 # ------------------------------------------------------------------ one still
@@ -383,10 +399,11 @@ class Recorder:
         """Control steps the take has seen, counted across a reset the routine makes under it."""
         self._raw = int(self.sim.step_count)
         self._mark = reset_mark(self.sim)
-        try:  # read once: a body's centre of mass does not move in it
+        try:  # read once: a body's centre of mass does not move in it, nor does a thing change its bodies
             self.com = np.asarray(self.sim.model.body_com.numpy(), dtype=np.float64)
         except Exception:
             self.com = None
+        self.bodies = take_bodies(self.sim)
         self.last_capture = -1
 
     def close(self) -> None:
@@ -413,18 +430,10 @@ class Recorder:
         sim.sync()
         frame = self.renderer.render(sim.state)[self.cam.name]
         rgb = stills.render_still(sim, self.cam)
-        seg = name_deformables(sim, self.cam, np.asarray(frame["seg"]).astype(np.int32), self.deformable_labels)
+        q = _particles(sim) if self.deformable_labels else None  # once a frame, for the ids and the samples both
+        seg = name_deformables(sim, self.cam, np.asarray(frame["seg"]).astype(np.int32), self.deformable_labels, q)
         self.writer.append(rgb)
         self.segs.append(seg[::SEG_SCALE, ::SEG_SCALE].astype(np.uint8 if len(self.names) < 255 else np.int32))
-        objects = {}
-        for label, name in self.names.items():
-            stats = C.mask_stats(seg == label)
-            if stats is not None:
-                objects[name] = {
-                    "bbox": stats["bbox"],
-                    "centre": stats["centre"],
-                    "pixels": stats["pixels"],
-                }
         positions = {}
         for name in sim.names():
             try:
@@ -437,9 +446,8 @@ class Recorder:
                 "i": len(self.frames),
                 "step": self.steps,
                 "t": round(self.steps / self.control_hz, 4),
-                "objects": objects,
                 "positions": positions,
-                "parts": _part_positions(sim, self.com),
+                "parts": _part_positions(sim, self.com, self.bodies, q),
             }
         )
 
@@ -494,22 +502,11 @@ def steps_since(sim: Any, step: int, mark: int) -> int:
     return now - step
 
 
-def _part_positions(sim: Any, com: np.ndarray | None = None) -> dict[str, list[list[float]]]:
-    """Every body of every thing -- a case and its lid, a lock and its key -- where its centre of mass is now.
-
-    A thing's position is its first body's origin, so a jointed thing whose
-    base stays put reads as still while its key turns, and a lid whose origin
-    is its hinge reads as still while it opens. A centre of mass moves with
-    either. A chain of many links keeps :data:`PARTS_KEPT` of them, evenly
-    along it; each deformable, as many of its particles. Best effort: a take
-    is never lost for want of these.
-    """
+def take_bodies(sim: Any) -> dict[str, list[int]]:
+    """The bodies a take follows per thing, every one or :data:`PARTS_KEPT` of a long chain: read once a take."""
     handles = getattr(getattr(sim, "scene", None), "handles", None)
-    if handles is None:
-        return {}
-    out = _deformable_samples(sim, handles)
-    jointed = {}
-    for name in [*getattr(handles, "objects", {}), *getattr(handles, "statics", {})]:
+    out: dict[str, list[int]] = {}
+    for name in [*getattr(handles, "objects", {}), *getattr(handles, "statics", {})] if handles is not None else []:
         try:
             handle = handles.entity(name)
             bodies = tuple(getattr(handle, "bodies", ())) or (
@@ -519,50 +516,63 @@ def _part_positions(sim: Any, com: np.ndarray | None = None) -> dict[str, list[l
             continue
         if bodies:
             keep = np.unique(np.linspace(0, len(bodies) - 1, min(len(bodies), PARTS_KEPT)).round().astype(int))
-            jointed[name] = [bodies[i] for i in keep]
-    if not jointed:
+            out[name] = [bodies[i] for i in keep]
+    return out
+
+
+def _part_positions(
+    sim: Any, com: np.ndarray | None = None, bodies: dict[str, list[int]] | None = None, q: np.ndarray | None = None
+) -> dict[str, list[list[float]]]:
+    """Every body of every thing -- a case and its lid, a lock and its key -- where its centre of mass is now.
+
+    A thing's position is its first body's origin, so a jointed thing whose
+    base stays put reads as still while its key turns, and a lid whose origin
+    is its hinge reads as still while it opens. A centre of mass moves with
+    either. A chain of many links keeps :data:`PARTS_KEPT` of them, evenly
+    along it; each deformable, as many of its particles. ``com``, ``bodies``
+    (:func:`take_bodies`) and the particles ``q`` are what a take reads once;
+    left out, they are read here. Best effort: a take is never lost for want
+    of these.
+    """
+    from robosimstudio.engines.pose import compose_many
+
+    handles = getattr(getattr(sim, "scene", None), "handles", None)
+    if handles is None:
+        return {}
+    out = _deformable_samples(sim, handles, q)
+    bodies = take_bodies(sim) if bodies is None else bodies
+    if not bodies:
         return out
     try:
-        q = np.asarray(sim.state.body_q.numpy(), dtype=np.float64)
-        com = np.asarray(sim.model.body_com.numpy() if com is None else com, dtype=np.float64)
+        body_q = np.asarray(sim.state.body_q.numpy(), dtype=np.float64)
+        com = np.asarray(sim.model.body_com.numpy() if com is None else com, dtype=np.float64)[: len(body_q)]
         # each body's centre of mass, not its origin: a lid's origin sits on its hinge and does not move as it opens
-        where = q[:, :3] + _rotate(q[:, 3:7], com[: len(q)])
+        where = compose_many(body_q, np.hstack([com, np.tile([0.0, 0.0, 0.0, 1.0], (len(com), 1))]))[:, :3]
     except Exception:
         return out
     out.update(
         {
-            name: [[round(float(v), 4) for v in where[b]] for b in bodies if 0 <= b < len(q)]
-            for name, bodies in jointed.items()
+            name: [[round(float(v), 4) for v in where[b]] for b in idx if 0 <= b < len(where)]
+            for name, idx in bodies.items()
         }
     )
     return out
 
 
-def _deformable_samples(sim: Any, handles: Any) -> dict[str, list[list[float]]]:
+def _deformable_samples(sim: Any, handles: Any, q: np.ndarray | None = None) -> dict[str, list[list[float]]]:
     """:data:`PARTS_KEPT` particles of each deformable, evenly through it: a knot tied or a bag opened in place
     leaves its centre where it was."""
     deformables = getattr(handles, "deformables", None) or {}
     if not deformables:
         return {}
-    try:
-        q = np.asarray(sim.state.particle_q.numpy())
-    except Exception:
-        return {}
+    q = _particles(sim) if q is None else q
     out = {}
     for name, handle in deformables.items():
-        idx = np.asarray(getattr(handle, "particles", ()), dtype=np.int64)
-        idx = idx[(idx >= 0) & (idx < len(q))]
+        idx = _indices(handle, len(q))
         if len(idx):
             pick = idx[np.unique(np.linspace(0, len(idx) - 1, min(len(idx), PARTS_KEPT)).round().astype(int))]
             out[name] = [[round(float(v), 4) for v in q[i, :3]] for i in pick]
     return out
-
-
-def _rotate(quat: np.ndarray, v: np.ndarray) -> np.ndarray:
-    """Rotate each ``v`` by its ``(x, y, z, w)`` quaternion."""
-    xyz, w = quat[:, :3], quat[:, 3:4]
-    t = 2.0 * np.cross(xyz, v)
-    return v + w * t + np.cross(xyz, t)
 
 
 def load_take(run_dir: str | Path, name: str) -> tuple[dict, np.ndarray | None]:
@@ -841,9 +851,16 @@ def gate(
     drift = {
         n: 1000.0 * float(np.linalg.norm(np.asarray(after[n]) - np.asarray(before[n]))) for n in before if n in after
     }
+    handles = getattr(getattr(getattr(sim, "scene", None), "handles", None), "deformables", None) or {}
     for name, points in _deformable_points(sim, list(shapes_before)).items():
         moved = np.linalg.norm(points - shapes_before[name], axis=1)
-        drift[name] = 1000.0 * float(moved.max()) if len(moved) else 0.0
+        if not len(moved):
+            drift[name] = 0.0
+            continue
+        # a cloth or a rope by the particle that moved most; a heap or a pool, whose grains never all come to
+        # rest, by the 95th percentile, so one jittering grain does not fail it
+        point_body = _is_point_body(handles.get(name))
+        drift[name] = 1000.0 * float(np.percentile(moved, 95) if point_body else moved.max())
     unmeasured = [n for n in looked_at if n in have and n not in drift]
     worst = max(drift.items(), key=lambda kv: kv[1]) if drift else ("", 0.0)
     add(
@@ -880,19 +897,24 @@ def _positions(sim: Any, names: list[str]) -> dict[str, list[float]]:
     return out
 
 
+def _is_point_body(handle: Any) -> bool:
+    """A heap, a pool, a lump: particles with no triangles and no tube, drawn as points."""
+    return (
+        handle is not None
+        and not len(getattr(handle, "triangles", ()))
+        and not getattr(handle, "tube_radius", 0.0)
+        and bool(getattr(handle, "point_radius", 0.0))
+    )
+
+
 def _deformable_points(sim: Any, names: list[str]) -> dict[str, np.ndarray]:
     """Each named deformable's particles where they are now, ``(n, 3)`` [m]."""
     handles = getattr(getattr(getattr(sim, "scene", None), "handles", None), "deformables", None) or {}
     wanted = [n for n in names if n in handles]
     if not wanted:
         return {}
-    q = np.asarray(sim.state.particle_q.numpy(), dtype=np.float64)
-    out = {}
-    for name in wanted:
-        idx = np.asarray(getattr(handles[name], "particles", ()), dtype=np.int64)
-        idx = idx[(idx >= 0) & (idx < len(q))]
-        out[name] = q[idx].copy()
-    return out
+    q = _particles(sim)
+    return {name: q[_indices(handles[name], len(q))].copy() for name in wanted}
 
 
 def _penetration(sim: Any) -> tuple[float, list[str]]:

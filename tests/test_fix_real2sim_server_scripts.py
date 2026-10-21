@@ -54,6 +54,7 @@ def _bare_server(root: Path) -> LiveServer:
     live = LiveServer.__new__(LiveServer)
     live.path = root / "scene.py"
     live.head_stepped, live._head_ready = False, None
+    live.ended, live.takes_written, live.busy_routine = {}, [], False
     live.build_error, live._tick_error = "", ""
     live.busy, live.busy_since = "", 0.0
     live._suspended_arms = []
