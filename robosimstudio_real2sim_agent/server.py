@@ -70,7 +70,7 @@ import threading
 import time
 import traceback
 from collections import deque
-from contextlib import contextmanager, redirect_stdout
+from contextlib import contextmanager, nullcontext, redirect_stdout
 from pathlib import Path
 from typing import Any
 
@@ -94,6 +94,8 @@ BOARD_LIMIT = 8
 """Pictures kept on the board; the oldest goes when another comes. The run directory keeps every one."""
 RECENT = 32
 """Routines ended and takes written that ``status`` keeps, by serial and by name, for a client waiting on one."""
+ROUTINE_PLAYING = "a routine is playing (`status` lists it under `playing`); let it end, or `reset` to stop it"
+"""What ``run`` and ``check`` answer while a routine plays."""
 IDLE_LIMIT = 300
 """Passes in a row a routine that drives the scene itself may yield without stepping it before it is stopped."""
 SPEED_WINDOW = 5.0
@@ -140,8 +142,8 @@ class LiveServer:
         self.url = f"http://localhost:{config.port}"
         """The page, on the port viser actually bound -- rewritten once the server is up."""
         self.share_url: str | None = None
-        # As long as the client's longest wait (ctl.TIMEOUTS).
-        self.bus = SimBus(timeout=600.0)
+        # As long as the client's longest wait (ctl.TIMEOUTS): a reply the bus gave up on is lost to the client.
+        self.bus = SimBus(timeout=900.0)
         self.socket = ControlSocket(self.sock_path, self._on_request)
         self.session: LiveSession | None = None
         self.ns: dict = {}
@@ -177,6 +179,12 @@ class LiveServer:
         """What the file, its helpers and ``eval`` registered since the last rebuild; taken back before the next."""
         self.busy = ""
         """What the main thread is doing that a ``status`` would otherwise wait out; empty between commands."""
+        self.log_path = _log_path()
+        """The file this process's output goes to, read once: it does not change."""
+        self._watched: list[Path] = []
+        """The scene's own helper modules as the last run imported them; a save to one rebuilds too."""
+        self._motions: dict[str, dict] = {}
+        """A take's motion, worked out as it was written, for the comparison that follows it."""
         self._status_lock = threading.Lock()
         self._status_pending: dict | None = None
         """The one ``status`` queued for the main thread, which every caller meanwhile waits on."""
@@ -244,8 +252,6 @@ class LiveServer:
         """
         gone = []
         for name, module in list(sys.modules.items()):
-            if name in self._baseline_modules or name.partition(".")[0] in self._baseline_modules:
-                continue
             file = getattr(module, "__file__", None)
             if not file or not self.scene_paths.is_scene(file, name):
                 continue
@@ -300,10 +306,13 @@ class LiveServer:
 
     def reload(self, why: str = "requested") -> dict:
         """Rebuild from the file; the page is touched only when the build succeeded."""
-        self._loaded_stamp, self._pending = stamp(self.path), None
+        before, self._pending = self._stamps(), None
         try:
             loaded = self.load()
         except (Exception, SystemExit) as exc:
+            self._note_helpers()
+            current = self._stamps()
+            self._loaded_stamp = None if current is None or before is None else before[:1] + current[1:]
             self.last_error = self.build_error = traceback.format_exc()[-3000:]
             self.session.status = f"reload failed: {type(exc).__name__}: {exc}"
             print(
@@ -313,6 +322,11 @@ class LiveServer:
             )
             self.refresh_live(force=True)
             return {"ok": False, "error": self.last_error}
+        # stamped before the build for the scene file (a save made meanwhile is seen), after it for the helpers
+        # it imported, which a rebuild may have changed
+        self._note_helpers()
+        current = self._stamps()
+        self._loaded_stamp = None if current is None or before is None else before[:1] + current[1:]
         if not self.swap(loaded):
             return {"ok": False, "error": self.last_error}
         self.session.status = f"loaded {self.path.name} in {loaded.seconds:.1f} s"
@@ -323,8 +337,25 @@ class LiveServer:
         )
         return {"ok": True, "seconds": round(loaded.seconds, 2), "names": names}
 
+    def _stamps(self) -> tuple | None:
+        """The scene file's stamp and its helpers': a save to either is a rebuild. None when the scene file is gone."""
+        first = stamp(self.path)
+        if first is None:
+            return None
+        return (first, *(stamp(f) for f in self._watched))
+
+    def _note_helpers(self) -> None:
+        """The scene's own modules as the last run imported them: the files a save to which also rebuilds."""
+        self._watched = sorted(
+            {
+                Path(file)
+                for name, module in list(sys.modules.items())
+                if (file := getattr(module, "__file__", None)) and self.scene_paths.is_scene(file, name)
+            }
+        )
+
     def watch(self) -> None:
-        cur = stamp(self.path)
+        cur = self._stamps()
         if cur is None or cur == self._loaded_stamp:
             return
         now = time.perf_counter()
@@ -609,7 +640,7 @@ class LiveServer:
             self._finish_recorder("the script ended")
         return took
 
-    def _show_take(self, take: str, moved: str) -> None:
+    def _show_take(self, take: str, moved: str, motion: dict | None = None) -> None:
         """Every take is put beside the clip as it ends, on the board and in the log, and what moved in it is said.
 
         The strip -- the clip's anchors above, the take's frames at the same
@@ -621,6 +652,8 @@ class LiveServer:
         if not self._timeline().get("anchors"):
             print(f"[live] take {take!r} (no ref/timeline.json to put it beside): {moved}", flush=True)
             return
+        if motion is not None:
+            self._motions[take] = motion
         reply = self.cmd_compare(keys=self.last_keys, take=take, note="the take beside the clip as it ended")
         if reply.get("ok"):
             print(f"[live] take {take!r} beside the clip: {reply['strip']}\n{reply['report']}", flush=True)
@@ -640,7 +673,8 @@ class LiveServer:
             self.last_take = summary
             self.takes_written = [t for t in self.takes_written if t != summary["take"]][-(RECENT - 1) :]
             self.takes_written.append(summary["take"])
-            moved = checks.motion_line(checks.take_motion(recorder.frames))
+            motion = checks.take_motion(recorder.frames)
+            moved = checks.motion_line(motion)
             checks.log_append(
                 self.run_dir,
                 {"cmd": "record", "scene": checks.scene_hash(self.path), "note": moved, **summary},
@@ -649,7 +683,7 @@ class LiveServer:
                 f"[live] take {summary['take']!r} written ({why}): {summary['frames']} frames, {summary['seconds']:.1f} s",
                 flush=True,
             )
-            self._show_take(summary["take"], moved)
+            self._show_take(summary["take"], moved, motion)
         except Exception:
             self.last_error = traceback.format_exc()[-3000:]
             print(
@@ -745,7 +779,7 @@ class LiveServer:
         registry.watch(self.registrations)
         # Stamped before the build, not after: a save made while the first
         # build runs is a change the watcher must still see.
-        self._loaded_stamp = stamp(self.path)
+        first = stamp(self.path)
         try:
             loaded = self.load()
             error = ""
@@ -762,6 +796,9 @@ class LiveServer:
                 sim=scene.build(control_mode="joint_position"),
                 seconds=0.0,
             )
+        # stamped before the build for the scene file (a save made meanwhile is seen), after it for its helpers
+        self._note_helpers()
+        self._loaded_stamp = None if first is None else (first, *(stamp(f) for f in self._watched))
         self.ns, self.scene, self.sim = loaded.ns, loaded.scene, loaded.sim
         self.session = LiveSession(loaded.sim, config=self.config, host=self)
         # viser takes the next port up when the one asked for is busy
@@ -816,7 +853,7 @@ class LiveServer:
 
                 threading.Thread(target=ask, name="live-status", daemon=True).start()
         while not pending["done"].wait(0.25):
-            if self.busy:
+            if self.busy and not self.busy_routine:  # a routine's step is the page at work: wait it out
                 return self.busy_status()
         return pending["reply"]
 
@@ -839,7 +876,7 @@ class LiveServer:
             "file": str(self.path),
             "run_dir": str(self.run_dir),
             "pending_save": self._pending_save(),
-            "log": _log_path(),
+            "log": self.log_path,
             "generation": self.generation,
             "resets": self.resets,
             "playing": len(self.script),
@@ -863,8 +900,9 @@ class LiveServer:
         }
 
     def _pending_save(self) -> bool:
-        """A save the watcher will build: never on a page that does not watch, or for a file that is gone."""
-        current = stamp(self.path)
+        """A save the watcher will build -- to the scene file or a helper it imported -- never on a page that does
+        not watch, or for a scene file that is gone."""
+        current = self._stamps()
         return bool(self.watch_enabled) and current is not None and current != self._loaded_stamp
 
     @contextmanager
@@ -894,7 +932,7 @@ class LiveServer:
         if what and renders and not self.rendered:
             what += FIRST_RENDER
         try:
-            with self._busy(what) if what else _nothing():
+            with self._busy(what) if what else nullcontext():
                 reply = handler(**{k: v for k, v in request.items() if k != "cmd"})
         except Exception:
             reply = {"ok": False, "error": traceback.format_exc()[-3000:]}
@@ -941,7 +979,7 @@ class LiveServer:
         if self.script:
             return {
                 "ok": False,
-                "error": "a routine is playing (`status` lists it under `playing`); let it end, or `reset` to stop it",
+                "error": ROUTINE_PLAYING,
             }
         self.run_budget = max(1, int(steps))
         self.session.set_paused(False)
@@ -1167,7 +1205,9 @@ class LiveServer:
             try:
                 # the last still compare's keys when none are given, as at the end of a take
                 parsed = parsed or self._keys(self.last_keys)
-                result = checks.compare_take(self.run_dir, take, line, parsed, self._timeline_dir(timeline))
+                result = checks.compare_take(
+                    self.run_dir, take, line, parsed, self._timeline_dir(timeline), moved=self._motions.pop(take, None)
+                )
             except Exception as exc:
                 return {"ok": False, "error": f"{type(exc).__name__}: {exc}"}
             strip = checks.write_strip(base, result.pop("tiles"))
@@ -1248,7 +1288,7 @@ class LiveServer:
         if self.script:
             return {
                 "ok": False,
-                "error": "a routine is playing (`status` lists it under `playing`); let it end, or `reset` to stop it",
+                "error": ROUTINE_PLAYING,
             }
         parsed = self._keys(keys)
         line = self._timeline(timeline)
@@ -1386,11 +1426,6 @@ class LiveServer:
         for kind in wanted:
             reply[kind] = sorted(str(name) for name in listers[kind]())
         return reply
-
-
-@contextmanager
-def _nothing():
-    yield
 
 
 def _log_path() -> str:

@@ -56,6 +56,7 @@ def _bare_server(root: Path) -> LiveServer:
     live.head_stepped, live._head_ready = False, None
     live.ended, live.takes_written, live.busy_routine = {}, [], False
     live._arms_before, live.resets = {}, 0
+    live.log_path, live._watched, live._motions = "", [], {}
     live.scene_paths = ScenePaths(root)
     live.build_error, live._tick_error = "", ""
     live.busy, live.busy_since = "", 0.0

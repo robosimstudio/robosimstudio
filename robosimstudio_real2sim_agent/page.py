@@ -52,8 +52,8 @@ class LiveSession(StudioSession):
         return bool(self.host.script) and not self.host.page_steps_script()
 
     def steps_forced(self) -> bool:
-        """A routine the page steps is stepped whatever Pause says; a reset this pass ends it, and stays paused."""
-        return self.host.page_steps_script() and not self.reset_requested
+        """A routine the page steps is stepped whatever Pause says (a reset ends it, and the page stays paused)."""
+        return self.host.page_steps_script()
 
     def reset_now(self) -> bool:
         """A reset ends whatever routine is playing and the take filming it, then resets."""

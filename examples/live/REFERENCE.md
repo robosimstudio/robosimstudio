@@ -16,7 +16,8 @@ is that folder's. `twins/` is not committed.
 - The tab never reloads, and the camera stays where you left it.
 - A file that does not build leaves the previous scene up. `./ctl status`
   prints the traceback.
-- A save also re-imports the helper modules beside `scene.py` (a module or a
+- A save to `scene.py` or to a helper module it imports rebuilds. A
+  save also re-imports the helper modules beside `scene.py` (a module or a
   package in its directory) and takes back what the file and its helpers
   registered (an entity class, a cell, a gripper, a scenery), so an edit to a
   helper lands with the next save: no new name per save, no restart.
@@ -80,7 +81,7 @@ scene.add(rss.robot("yam_bimanual"))  # a scene needs something that moves befor
 | `run N` | Step N control steps, then hold. Refused while a routine plays; ends with an error if the scene is rebuilt or reset during the run. |
 | `pause`, `resume` | Pause or resume stepping. |
 | `reset` | Reset the scene. It also stops a playing routine and finishes its take; Pause is left as it was. |
-| `eval "CODE"` or `eval -` (stdin) `[--record NAME --every K --camera N] [--wait [--wait-limit S]]` | Run Python on the sim thread in `scene.py`'s namespace (`sim`, `scene`, `session`, `np`, `rss`, `live` -- the page's server -- and every name the file bound). What it binds, routines and `play` see until the next save starts the namespace over. A generator plays on the page step by step; `--record` films it; `--wait` waits for it as `play --wait` does. |
+| `eval "CODE"` or `eval -` (stdin) `[--record NAME --every K --camera N] [--wait [--wait-limit S]]` | Run Python on the sim thread in `scene.py`'s namespace (`sim`, `scene`, `session`, `np`, `rss`, `live` -- the page's own `LiveServer` --, `server` -- its viser server --, and every name the file bound). What it binds, routines and `play` see until the next save starts the namespace over. A generator plays on the page step by step; `--record` films it; `--wait` waits for it as `play --wait` does. |
 | `catalog [robots\|grippers\|cells\|assets]` | The names the registries know. |
 | `ref show PATH`, `ref hide` | A picture in the page's sidebar. |
 | `quit` | Stop the server. |

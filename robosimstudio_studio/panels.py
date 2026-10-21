@@ -357,9 +357,10 @@ class PanelArm(Panel):
             self._take_hand()
         # A move is held while paused rather than consumed: the law would walk
         # its setpoint away from an arm that is not moving, and the whole lead
-        # would be spent the moment you unpaused. A pass the page steps though
-        # paused (a routine driving through this panel) drives it as unpaused.
-        elif (not self.session.paused or _steps_forced(self.session)) and not self.suspended:
+        # would be spent the moment you unpaused -- and so is one on any pass the
+        # page does not step (held for a routine stepping the scene itself);
+        # one it steps though paused (a routine driving through this panel) drives.
+        elif getattr(self.session, "stepping_this_pass", not self.session.paused) and not self.suspended:
             self._drive(env)
         # The fingers go with the arm: a suspended panel is not driving, and a
         # slider that kept writing the hand while a policy (or a leader arm)
@@ -1554,10 +1555,3 @@ class PanelCloth(Panel):
         if self._held is not None:
             self._held.value = "nothing"
         self.contribute()
-
-
-def _steps_forced(session) -> bool:
-    """Whether the page steps this pass though it is paused (``StudioSession.steps_forced``); False for a session
-    that has no such hook."""
-    forced = getattr(session, "steps_forced", None)
-    return bool(forced()) if callable(forced) else False

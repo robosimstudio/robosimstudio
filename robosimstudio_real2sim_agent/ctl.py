@@ -28,10 +28,11 @@ running and the log is named.
 
 A command that outlasts its timeout does not leave the agent guessing: the
 page answers ``status`` at once even while it is busy, so the timeout says
-what it is doing and for how long. ``--wait`` on ``play``, ``eval`` and
-``status`` blocks until the routine ends or the page is free, printing the
-page's log as it goes and a line every ten seconds, so an agent whose shell
-returns only when a command does never has to poll.
+what it is doing and for how long. ``--wait`` on ``play`` and ``eval`` blocks
+until the routine ends, printing the page's log as it goes; on ``status``,
+until the page is not building or rendering, with a line every ten seconds,
+then the full status. An agent whose shell returns only when a command does
+never has to poll.
 """
 
 from __future__ import annotations
@@ -620,8 +621,6 @@ def wait_for_script(sock: Path, reply: dict, log: Path, offset: int, limit: floa
             return status
         # this routine's own ending, not the newest one's: another may have ended after it
         ended = (status.get("ended") or {}).get(str(serial)) or {}
-        if not ended and int((status.get("last_script") or {}).get("serial") or 0) == serial:
-            ended = status["last_script"]
         # ended; and a take it filmed is no longer filming, nor being written and put beside the clip
         filming = take and (status.get("busy") or status.get("recording") == take)
         if ended and not filming:
@@ -846,9 +845,14 @@ TWIN_REPORT = """# {name}
 
 TWIN_CTL = """#!/usr/bin/env bash
 # This twin's command line: the live page's ctl with run/ pinned here, so `./ctl up` serves the scene.py beside it.
+# In a checkout it goes through the checkout's ctl (and its .venv); unzipped anywhere else, through $PYTHON or
+# python3, which needs robosimstudio installed.
 here="$(cd "$(dirname "$0")" && pwd)"
-exec {target} --run-dir "$here/run" "$@"
+live={live}
+if [ -x "$live" ]; then exec "$live" --run-dir "$here/run" "$@"; fi
+exec "${{PYTHON:-python3}}" -m robosimstudio_real2sim_agent --run-dir "$here/run" "$@"
 """
+TWIN_MARK = "This twin's command line"
 
 
 def cmd_new(args: argparse.Namespace) -> int:
@@ -857,7 +861,8 @@ def cmd_new(args: argparse.Namespace) -> int:
         print(f"ctl: {args.name!r} is not a folder name: letters, digits, - and _", file=sys.stderr)
         return 2
     live = Path(os.path.abspath(args.run_dir)).parent
-    if live.parent.name == "twins" and (live / "REPORT.md").is_file():
+    own = live / "ctl"
+    if own.is_file() and TWIN_MARK in own.read_text(errors="replace"):
         print(
             f"ctl: this is already a twin's folder ({live}); work in it, or run `new` from examples/live",
             file=sys.stderr,
@@ -872,20 +877,23 @@ def cmd_new(args: argparse.Namespace) -> int:
     if missing:
         print(f"ctl: no file at {', '.join(missing)}", file=sys.stderr)
         return 2
+    names = [r.name for r in refs]
+    clashes = sorted({n for n in names if names.count(n) > 1})
+    if clashes:
+        print(f"ctl: two references would both be ref/{', ref/'.join(clashes)}; rename one first", file=sys.stderr)
+        return 2
     (folder / "ref").mkdir(parents=True)
     (folder / "scene.py").write_text(TWIN_SCENE.format(name=args.name))
     (folder / "REPORT.md").write_text(TWIN_REPORT.format(name=args.name))
     for ref in refs:
         shutil.copy2(ref, folder / "ref" / ref.name)
     shim = live / "ctl"
-    if shim.is_file() and folder.is_relative_to(live):  # the checkout's, and the folder moves with the checkout
+    if folder.is_relative_to(live):  # the checkout's, found again wherever the checkout moves
         target = f'"$here/{os.path.relpath(shim, folder)}"'
-    elif shim.is_file():
-        target = f'"{shim}"'
     else:
-        target = f'"{sys.executable}" -m robosimstudio_real2sim_agent'
+        target = f'"{shim}"'
     ctl_path = folder / "ctl"
-    ctl_path.write_text(TWIN_CTL.format(target=target))
+    ctl_path.write_text(TWIN_CTL.format(live=target))
     ctl_path.chmod(0o755)
     reply = {
         "ok": True,
@@ -914,6 +922,8 @@ def main(argv=None) -> int:
     try:
         if args.cmd == "status" and waiting:
             reply = wait_until_free(sock, args.wait_limit)
+            if reply.get("ok"):
+                reply = request(sock, req, timeout)  # the full status, now that it can be had
         else:
             reply = request(sock, req, timeout)
         if args.cmd == "run" and reply.get("ok") and not args.no_wait:

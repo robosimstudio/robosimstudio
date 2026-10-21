@@ -11,6 +11,7 @@ from __future__ import annotations
 
 import json
 import os
+import shutil
 import sys
 import tempfile
 import threading
@@ -213,6 +214,43 @@ class SceneCode(unittest.TestCase):
         registry.unwatch(a)
 
 
+class GateSeesJointedThings(unittest.TestCase):
+    def test_a_lid_that_swings_while_its_base_stays_fails_rest(self) -> None:
+        body_q = np.zeros((3, 7))
+        body_q[:, 6] = 1.0
+        com = np.array([[0.0, 0.0, 0.0], [0.0, 0.0, 0.0], [0.1, 0.0, 0.0]])
+        handles = types.SimpleNamespace(
+            objects={"case": None}, statics={}, deformables={}, entity=lambda name: types.SimpleNamespace(bodies=(1, 2))
+        )
+
+        class Sim:
+            cameras = ()
+            scene = types.SimpleNamespace(handles=handles)
+            state = types.SimpleNamespace(body_q=types.SimpleNamespace(numpy=body_q.copy))
+            model = types.SimpleNamespace(body_com=types.SimpleNamespace(numpy=lambda: com))
+
+            def state_is_finite(self) -> bool:
+                return True
+
+            def names(self) -> list[str]:
+                return ["case"]
+
+            def run(self, steps: int) -> None:
+                body_q[2, 3:7] = (0.0, 0.0, np.sin(np.pi / 8), np.cos(np.pi / 8))  # the lid swings 45 degrees
+
+            def sync(self) -> None:
+                pass
+
+            def __getitem__(self, name):
+                return types.SimpleNamespace(position=body_q[1, :3].copy())  # the base, which stays
+
+        with mock.patch.object(checks, "_penetration", return_value=(0.0, [])):
+            result = checks.gate(types.SimpleNamespace(sim=Sim(), build_error=""), steps=1)
+        rest = next(c for c in result["checks"] if c["name"] == "rest")
+        self.assertFalse(rest["ok"], rest["detail"])
+        self.assertIn("case drifted", rest["detail"])
+
+
 class TakeAccounting(unittest.TestCase):
     def test_a_reset_under_the_take_does_not_stop_the_count(self) -> None:
         rec = checks.Recorder.__new__(checks.Recorder)
@@ -385,6 +423,7 @@ def _server() -> LiveServer:
     live.head_stepped, live._head_ready, live._suspended_arms, live.last_take = False, None, [], {}
     live.ended, live.takes_written, live.busy_routine = {}, [], False
     live._arms_before, live.resets = {}, 0
+    live.log_path, live._watched, live._motions = "", [], {}
     live.build_error, live._tick_error = "", ""
     live.busy, live.busy_since = "", 0.0
     live._status_lock, live._status_pending = threading.Lock(), None
@@ -531,12 +570,13 @@ class RoutineStepping(unittest.TestCase):
             live.start_script(iter(range(3)), name="again", record="take1")
         self.assertEqual(live.takes_written, ["take0"])
 
-    def test_the_page_steps_a_session_routine_while_paused_but_not_through_a_reset(self) -> None:
+    def test_the_page_steps_a_session_routine_while_paused(self) -> None:
         from robosimstudio_real2sim_agent.page import LiveSession
 
-        page = types.SimpleNamespace(host=types.SimpleNamespace(page_steps_script=lambda: True), reset_requested=False)
+        stepped = {"now": True}
+        page = types.SimpleNamespace(host=types.SimpleNamespace(page_steps_script=lambda: stepped["now"]))
         self.assertTrue(LiveSession.steps_forced(page))
-        page.reset_requested = True
+        stepped["now"] = False
         self.assertFalse(LiveSession.steps_forced(page))
 
     def test_a_routine_queued_behind_another_is_not_stepped_for_before_it_plays(self) -> None:
@@ -640,6 +680,19 @@ class BusyStatus(unittest.TestCase):
             self.assertEqual(live._on_request({"cmd": "status"})["busy"], "rendering a still")
         self.assertEqual(self.queued, 1)
 
+    def test_a_save_to_a_helper_the_scene_imported_is_pending_too(self) -> None:
+        live = self._busy_server()
+        folder = Path(tempfile.mkdtemp())
+        live.path, live.watch_enabled = folder / "scene.py", True
+        live.path.write_text("x = 1\n")
+        helper = folder / "lidlib.py"
+        helper.write_text("A = 1\n")
+        live._watched = [helper]
+        live._loaded_stamp = live._stamps()
+        self.assertFalse(live._pending_save())
+        helper.write_text("A = 22\n")
+        self.assertTrue(live._pending_save())
+
     def test_no_save_is_pending_on_a_page_that_does_not_watch(self) -> None:
         live = self._busy_server()
         live.path = Path(tempfile.mkdtemp()) / "scene.py"
@@ -715,7 +768,7 @@ class CtlWaits(unittest.TestCase):
     def test_a_routine_is_waited_for_with_its_output_streamed(self) -> None:
         playing = {"ok": True, "step": 10, "time": 0.2, "last_script": {}, "busy": ""}
         done = {"ok": True, "step": 30, "time": 0.5, "busy": "", "speed": 0.4, "takes_written": ["take1"]}
-        done["last_script"] = {"serial": 7, "name": "tidy", "how": "finished", "steps": 20, "wall_seconds": 1.2}
+        done["ended"] = {"7": {"serial": 7, "name": "tidy", "how": "finished", "steps": 20, "wall_seconds": 1.2}}
         fake = _FakeStatus(self.sock, [playing, done])
         self.addCleanup(fake.close)
         with open(self.log, "a") as f:
@@ -753,7 +806,7 @@ class CtlWaits(unittest.TestCase):
 
     def test_a_failed_routine_is_an_error_with_its_traceback(self) -> None:
         ended = {"serial": 2, "name": "eval", "how": "failed", "error": "RoutineError: stopped 364 mm short"}
-        fake = _FakeStatus(self.sock, [{"ok": True, "busy": "", "last_script": ended}])
+        fake = _FakeStatus(self.sock, [{"ok": True, "busy": "", "ended": {"2": ended}}])
         self.addCleanup(fake.close)
         reply = ctl.wait_for_script(self.sock, {"serial": 2}, self.log, 0, 30.0)
         self.assertFalse(reply["ok"])
@@ -802,6 +855,34 @@ class TwinFolder(unittest.TestCase):
             ctl.main(["--run-dir", str(self.run_dir), "new", "lid"]), 1, "an existing twin is not overwritten"
         )
         self.assertEqual(ctl.main(["--run-dir", str(self.run_dir), "new", "../escape"]), 2)
+
+    def test_new_from_inside_a_twin_made_anywhere_is_refused(self) -> None:
+        elsewhere = self.live / "work" / "lid"
+        ctl.main(["--run-dir", str(self.run_dir), "new", "lid", "--dir", str(elsewhere)])
+        self.assertEqual(ctl.main(["--run-dir", str(elsewhere / "run"), "new", "nested"]), 1)
+
+    def test_two_references_of_one_name_are_refused(self) -> None:
+        (self.live / "a").mkdir()
+        (self.live / "b").mkdir()
+        for d in ("a", "b"):
+            (self.live / d / "IMG_0001.MOV").write_bytes(b"x")
+        argv = ["--run-dir", str(self.run_dir), "new", "lid"]
+        argv += ["--ref", str(self.live / "a" / "IMG_0001.MOV"), "--ref", str(self.live / "b" / "IMG_0001.MOV")]
+        self.assertEqual(ctl.main(argv), 2)
+        self.assertFalse((self.live / "twins" / "lid").exists())
+
+    def test_a_twin_unzipped_away_from_a_checkout_runs_on_python(self) -> None:
+        import subprocess
+
+        ctl.main(["--run-dir", str(self.run_dir), "new", "lid"])
+        moved = Path(tempfile.mkdtemp()) / "lid"
+        shutil.copytree(self.live / "twins" / "lid", moved)
+        env = {**os.environ, "PYTHON": sys.executable}
+        done = subprocess.run(
+            [str(moved / "ctl"), "status"], capture_output=True, text=True, timeout=60, check=False, env=env
+        )
+        self.assertEqual(done.returncode, 2)
+        self.assertIn(str(moved / "run" / "ctl.sock"), done.stderr)
 
     def test_new_from_inside_a_twin_is_refused(self) -> None:
         ctl.main(["--run-dir", str(self.run_dir), "new", "lid"])

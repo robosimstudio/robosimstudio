@@ -21,7 +21,9 @@ What is here:
   keeps its own `run/` in its folder.
 - `twins/`: one folder per twin, made by `./ctl new`, and not committed. Each
   is a twin on its own -- its `scene.py`, helpers, assets, `ref/`, `run/`,
-  `REPORT.md` and its own `ctl` -- so zip one to hand it on.
+  `REPORT.md` and its own `ctl` -- so zip one to hand it on. Unzipped outside
+  a checkout, its `./ctl` runs on `$PYTHON` or `python3` with robosimstudio
+  installed.
 
 ## Start
 

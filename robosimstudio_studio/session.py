@@ -600,6 +600,9 @@ class StudioSession:
 
         # --- state the loop reads, written only by callbacks -------------------
         self.paused = False
+        self.stepping_this_pass = False
+        """Whether the current pass of :meth:`tick` steps the scene: not paused (or :meth:`steps_forced`) and not
+        :meth:`steps_held`. A panel drives an arm only on such a pass."""
         self.pause_box: Any = None
         """The page's Pause checkbox, once :meth:`build_gui` has made it; :meth:`set_paused` keeps it truthful."""
         self.reset_requested = False
@@ -1779,6 +1782,7 @@ class StudioSession:
         paused returns without advancing anything.
         """
         prof = self.profile
+        self.stepping_this_pass = not self.paused  # until the pass decides; a fleet's and a load's keep this
         with prof.phase("iter"):
             with prof.phase("iter.requests"):
                 if self.load_request is not None:
@@ -1835,7 +1839,10 @@ class StudioSession:
                 self.release_all_requested = False
                 self.release_all()
 
-            if (self.paused and not self.steps_forced()) or self.steps_held():
+            held = (self.paused and not self.steps_forced()) or self.steps_held()
+            # what a panel asks before it moves anything: whether this pass steps the scene
+            self.stepping_this_pass = not held
+            if held:
                 # The interaction panels are drained while paused: lining a
                 # grasp up on a held scene is exactly when you want to, and
                 # aiming costs an IK solve rather than a step. The others

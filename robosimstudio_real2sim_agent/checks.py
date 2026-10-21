@@ -557,16 +557,15 @@ def _part_positions(
         return out
     try:
         body_q = np.asarray(sim.state.body_q.numpy() if body_q is None else body_q, dtype=np.float64)
-        com = np.asarray(sim.model.body_com.numpy() if com is None else com, dtype=np.float64)[: len(body_q)]
+        com = np.asarray(sim.model.body_com.numpy() if com is None else com, dtype=np.float64)
+        needed = sorted({b for idx in bodies.values() for b in idx if 0 <= b < min(len(body_q), len(com))})
         # each body's centre of mass, not its origin: a lid's origin sits on its hinge and does not move as it opens
-        where = compose_many(body_q, np.hstack([com, np.tile([0.0, 0.0, 0.0, 1.0], (len(com), 1))]))[:, :3]
+        local = np.hstack([com[needed], np.tile([0.0, 0.0, 0.0, 1.0], (len(needed), 1))])
+        where = dict(zip(needed, compose_many(body_q[needed], local)[:, :3], strict=True))
     except Exception:
         return out
     out.update(
-        {
-            name: [[round(float(v), 4) for v in where[b]] for b in idx if 0 <= b < len(where)]
-            for name, idx in bodies.items()
-        }
+        {name: [[round(float(v), 4) for v in where[b]] for b in idx if b in where] for name, idx in bodies.items()}
     )
     return out
 
@@ -660,6 +659,8 @@ def compare_take(
     timeline: dict,
     keys: list[C.Key],
     ref_dir: str | Path,
+    *,
+    moved: dict | None = None,
 ) -> dict:
     """A recorded take beside the clip: each anchor's still above the take's frame at the same point of the action.
 
@@ -747,7 +748,7 @@ def compare_take(
             )
     finally:
         reader.close()
-    moved = take_motion(frames)
+    moved = take_motion(frames) if moved is None else moved  # worked out already as the take was written
     lines.append(motion_line(moved))
     return {"take": name, "anchors": rows, "moved": moved, "lines": lines, "tiles": tiles}
 
@@ -857,12 +858,21 @@ def gate(
     looked_at = wanted or list(have)
     before = _positions(sim, looked_at)
     shapes_before = _deformable_points(sim, looked_at)
+    bodies = {n: b for n, b in take_bodies(sim).items() if n in looked_at}
+    parts_before = _part_positions(sim, bodies=bodies, q=np.zeros((0, 3))) if bodies else {}
     sim.run(int(steps))
     sim.sync()
     after = _positions(sim, list(before))
     drift = {
         n: 1000.0 * float(np.linalg.norm(np.asarray(after[n]) - np.asarray(before[n]))) for n in before if n in after
     }
+    # a jointed thing by its body that moved most, at each body's centre of mass: a loose lid or a key slipping
+    # in its lock leaves the base's origin where it was
+    for name, now in (_part_positions(sim, bodies=bodies, q=np.zeros((0, 3))) if bodies else {}).items():
+        was = parts_before.get(name)
+        if was and len(was) == len(now):
+            moved = float(np.linalg.norm(np.asarray(now) - np.asarray(was), axis=1).max())
+            drift[name] = max(drift.get(name, 0.0), 1000.0 * moved)
     from robosimstudio.core.render.particles import draws_points
 
     handles = getattr(getattr(getattr(sim, "scene", None), "handles", None), "deformables", None) or {}
