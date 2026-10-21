@@ -24,7 +24,8 @@ than guessing a constructor or a name.
   `REPORT.md` and the folder's own `ctl`. Work from it: `cd twins/<name>`, and
   every `./ctl` below is that folder's, its readings landing in its `run/`.
   Everything the twin needs goes in that folder -- `scene.py`, its helper
-  modules, `assets/`, `ref/` -- and the report in its `REPORT.md`. Nothing goes
+  modules, `assets/`, `ref/` -- and the report in its `REPORT.md`; a scratch
+  script goes in its `run/` (a save to any other `.py` there rebuilds). Nothing goes
   in this folder's own files, the library, `tests/`, the repository root or
   `/tmp`: the twin's folder is what the person zips and hands on.
 - `./ctl status --wait` first: a page is up, or `./ctl up` starts one on the

@@ -20,9 +20,13 @@ modules the file imports from its own directory are imported afresh on every
 rebuild, and what they and the file registered is taken back first
 (:class:`.scenefile.SceneRegistrations`), so an edit to a helper beside it --
 an entity class, a cell -- lands with the next save.
-Saves are noticed by polling the file's stamp once per loop pass and waiting
-for it to hold still for :data:`STABLE_SECONDS`, because editors write in two
-steps and the compile step catches whatever slips through.
+Saves are noticed by polling the stamps of the file and of every ``.py``
+beside it (:meth:`LiveServer.helpers`) every :data:`SCAN_SECONDS`, taken
+before each build, and waiting for them to hold still for
+:data:`STABLE_SECONDS`, because editors write in two steps and the compile
+step catches whatever slips through. The page writes no bytecode, and drops a
+helper's before importing it again, so an edit within the second of the last
+one is read from the source.
 
 The loop is the studio's own ``tick``, driven here rather than by
 ``StudioSession.run`` because ``run`` closes the page when it returns and
@@ -57,8 +61,10 @@ the next one up when the one asked for is busy.
 
 from __future__ import annotations
 
+import ast
 import gc
 import importlib
+import importlib.util
 import inspect
 import io
 import json
@@ -84,10 +90,21 @@ from .page import LiveSession
 from .scenefile import Loaded, ScenePaths, SceneRegistrations, fallback_scene, run_scene_file, stamp
 from .wire import ControlSocket, ready_line
 
-__all__ = ["REFRESH_SECONDS", "STABLE_SECONDS", "LiveServer"]
+__all__ = ["REFRESH_SECONDS", "SCAN_SECONDS", "STABLE_SECONDS", "LiveServer"]
 
 STABLE_SECONDS = 0.3
 """How long a saved file has to stop changing before it is executed."""
+SCAN_SECONDS = 0.2
+"""How often the loop looks for a save."""
+WATCH_SKIP = frozenset({"run", "ref", "assets", "twins", "__pycache__"})
+"""Folders beside the scene file whose ``.py`` files are not the scene's: its readings and scratch scripts, its
+references, its assets, the twins under it. Hidden folders and this library's packages are skipped too."""
+WATCH_DEPTH = 2
+"""How many folders down from the scene file's a helper module is watched."""
+WATCH_LIMIT = 500
+"""The most ``.py`` files watched: a scene file at the top of a large tree watches the first this many."""
+ROUTINE_WAIT = 5.0
+"""Seconds a ``status`` waits out one step of a routine before it answers with the busy status instead."""
 REFRESH_SECONDS = 0.5
 """How often the ``Live`` folder's readouts are rewritten."""
 BOARD_LIMIT = 8
@@ -171,24 +188,21 @@ class LiveServer:
         """Which arm panels were suspended when the head script started: they are put back so when it ends."""
         self.recorder: checks.Recorder | None = None
         """Records the script playing, when ``eval --record`` asked for it; finished when the queue empties."""
-        self._baseline_modules: set[str] = set()
-        """What was imported before the scene file first ran; never evicted on a rebuild."""
         self.scene_paths = ScenePaths(self.path.parent)
         """What the scene's own code is, for the modules a rebuild imports afresh and the registrations it takes back."""
         self.registrations = SceneRegistrations(self.scene_paths)
         """What the file, its helpers and ``eval`` registered since the last rebuild; taken back before the next."""
-        self.busy = ""
-        """What the main thread is doing that a ``status`` would otherwise wait out; empty between commands."""
+        self.busy_state: tuple[str, float, bool] = ("", 0.0, False)
+        """What the main thread is doing that a ``status`` would otherwise wait out (empty between commands), since
+        when, and whether it is one step of a routine -- the page at work, not held up. One tuple, written whole,
+        because the socket thread reads it while the main thread changes it."""
         self.log_path = _log_path()
         """The file this process's output goes to, read once: it does not change."""
-        self._watched: list[Path] = []
-        """The scene's own helper modules as the last run imported them; a save to one rebuilds too."""
         self._motions: dict[str, dict] = {}
         """A take's motion, worked out as it was written, for the comparison that follows it."""
         self._status_lock = threading.Lock()
         self._status_pending: dict | None = None
         """The one ``status`` queued for the main thread, which every caller meanwhile waits on."""
-        self.busy_since = 0.0
         self.rendered = False
         """Whether a still has been rendered in this process; the first one compiles the path tracer."""
         self.script_meta: dict[int, dict] = {}
@@ -212,13 +226,15 @@ class LiveServer:
         """How each of the last :data:`RECENT` scripts ended, by serial: a client waits on its own, not the newest."""
         self.takes_written: list[str] = []
         """The last :data:`RECENT` takes written, by name."""
-        self.busy_routine = False
-        """Whether :attr:`busy` is one step of a routine, which is the page at work, not the page held up."""
         self.last_keys: list[str] = []
         """The keys of the last still comparison; a take that ends outlines its things with them."""
+        self.stand_in = False
+        """Whether the page shows the bare scene standing in for one that did not build or would not go in."""
         self._loaded_stamp = None
+        """The stamps the scene now up was built from, taken before its build: a save meanwhile is still seen."""
         self._pending = None
         self._pending_at = 0.0
+        self._scanned = 0.0
         self._refreshed = 0.0
         self._shown: dict[str, str] = {}
 
@@ -257,6 +273,10 @@ class LiveServer:
                 continue
             del sys.modules[name]
             gone.append(name)
+            if file.endswith(".py"):
+                # bytecode is trusted on the source's whole-second mtime and size: an edit within the second of the
+                # last one, to the same length, would import the old code
+                Path(importlib.util.cache_from_source(file)).unlink(missing_ok=True)
         if gone:
             importlib.invalidate_caches()
         return gone
@@ -270,6 +290,7 @@ class LiveServer:
         self.run_budget = 0
         try:
             self._adopt(loaded)
+            self.stand_in = False
             ok = True
         except Exception as exc:
             # adopt() gave the old scene back before it failed, so there is no
@@ -281,6 +302,7 @@ class LiveServer:
             try:
                 scene = fallback_scene()
                 self._adopt(Loaded(ns={}, scene=scene, sim=scene.build(control_mode="joint_position"), seconds=0.0))
+                self.stand_in = True
             except Exception:
                 error += (
                     "\n\nand the bare scene that should have replaced it failed too:\n" + traceback.format_exc()[-2000:]
@@ -306,13 +328,11 @@ class LiveServer:
 
     def reload(self, why: str = "requested") -> dict:
         """Rebuild from the file; the page is touched only when the build succeeded."""
-        before, self._pending = self._stamps(), None
+        # stamped before the build: a save made while it runs, to the file or a helper, is a change still to build
+        self._loaded_stamp, self._pending = self._stamps(), None
         try:
             loaded = self.load()
         except (Exception, SystemExit) as exc:
-            self._note_helpers()
-            current = self._stamps()
-            self._loaded_stamp = None if current is None or before is None else before[:1] + current[1:]
             self.last_error = self.build_error = traceback.format_exc()[-3000:]
             self.session.status = f"reload failed: {type(exc).__name__}: {exc}"
             print(
@@ -322,11 +342,6 @@ class LiveServer:
             )
             self.refresh_live(force=True)
             return {"ok": False, "error": self.last_error}
-        # stamped before the build for the scene file (a save made meanwhile is seen), after it for the helpers
-        # it imported, which a rebuild may have changed
-        self._note_helpers()
-        current = self._stamps()
-        self._loaded_stamp = None if current is None or before is None else before[:1] + current[1:]
         if not self.swap(loaded):
             return {"ok": False, "error": self.last_error}
         self.session.status = f"loaded {self.path.name} in {loaded.seconds:.1f} s"
@@ -338,27 +353,49 @@ class LiveServer:
         return {"ok": True, "seconds": round(loaded.seconds, 2), "names": names}
 
     def _stamps(self) -> tuple | None:
-        """The scene file's stamp and its helpers': a save to either is a rebuild. None when the scene file is gone."""
+        """The scene file's stamp, then each helper's with its path: a save to any, a helper made or one deleted, is
+        a rebuild. None when the scene file is gone."""
         first = stamp(self.path)
         if first is None:
             return None
-        return (first, *(stamp(f) for f in self._watched))
+        return (first, tuple((str(f), stamp(f)) for f in self.helpers()))
 
-    def _note_helpers(self) -> None:
-        """The scene's own modules as the last run imported them: the files a save to which also rebuilds."""
-        self._watched = sorted(
-            {
-                Path(file)
-                for name, module in list(sys.modules.items())
-                if (file := getattr(module, "__file__", None)) and self.scene_paths.is_scene(file, name)
-            }
-        )
+    def helpers(self) -> list[Path]:
+        """The ``.py`` files a save to which rebuilds besides the scene file: every one under its folder, down
+        :data:`WATCH_DEPTH` folders, but in :data:`WATCH_SKIP`, hidden or this library's; at most
+        :data:`WATCH_LIMIT`. Every one, imported or not: one that failed to import, or that the file imports later,
+        is watched all the same."""
+        found: list[Path] = []
+        level = [self.path.parent]
+        for _ in range(WATCH_DEPTH + 1):
+            below = []
+            for folder in level:
+                try:
+                    entries = sorted(os.scandir(folder), key=lambda e: e.name)
+                except OSError:
+                    continue
+                for entry in entries:
+                    name = entry.name
+                    if name.startswith("."):
+                        continue
+                    if entry.is_dir(follow_symlinks=False):
+                        if name not in WATCH_SKIP and not name.startswith("robosimstudio"):
+                            below.append(Path(entry.path))
+                    elif name.endswith(".py") and Path(entry.path) != self.path:
+                        found.append(Path(entry.path))
+                        if len(found) >= WATCH_LIMIT:
+                            return found
+            level = below
+        return found
 
     def watch(self) -> None:
+        now = time.perf_counter()
+        if now - self._scanned < SCAN_SECONDS:
+            return
+        self._scanned = now
         cur = self._stamps()
         if cur is None or cur == self._loaded_stamp:
             return
-        now = time.perf_counter()
         if cur != self._pending:
             self._pending, self._pending_at = cur, now
             return
@@ -456,8 +493,8 @@ class LiveServer:
         """
         # an earlier routine's failure is in its last_script; this one starts clean -- what ending or
         # finishing the ones before it raises below is new, and stays
-        if self.last_error and self.last_error not in (self.build_error, self._tick_error):
-            self.last_error = ""
+        if self.last_error not in (self.build_error, self._tick_error):
+            self.last_error = self.build_error or self._tick_error
         if record:
             # the new take films the new routine alone: what was queued ahead of it is dropped, not filmed into it
             self._end_scripts("dropped: another recording started")
@@ -772,14 +809,13 @@ class LiveServer:
         # The scene file's own directory, so what it imports by name beside
         # itself resolves -- and so `eval` can import it back the same way.
         sys.path.insert(0, str(self.path.parent))
-        self._baseline_modules = set(sys.modules)
-        self.scene_paths.set_baseline(self._baseline_modules)
+        self.scene_paths.set_baseline(set(sys.modules))
         from robosimstudio import registry
 
         registry.watch(self.registrations)
         # Stamped before the build, not after: a save made while the first
         # build runs is a change the watcher must still see.
-        first = stamp(self.path)
+        self._loaded_stamp = self._stamps()
         try:
             loaded = self.load()
             error = ""
@@ -796,9 +832,7 @@ class LiveServer:
                 sim=scene.build(control_mode="joint_position"),
                 seconds=0.0,
             )
-        # stamped before the build for the scene file (a save made meanwhile is seen), after it for its helpers
-        self._note_helpers()
-        self._loaded_stamp = None if first is None else (first, *(stamp(f) for f in self._watched))
+        self.stand_in = bool(error)
         self.ns, self.scene, self.sim = loaded.ns, loaded.scene, loaded.sim
         self.session = LiveSession(loaded.sim, config=self.config, host=self)
         # viser takes the next port up when the one asked for is busy
@@ -852,8 +886,11 @@ class LiveServer:
                         box["done"].set()
 
                 threading.Thread(target=ask, name="live-status", daemon=True).start()
+        started = time.perf_counter()
         while not pending["done"].wait(0.25):
-            if self.busy and not self.busy_routine:  # a routine's step is the page at work: wait it out
+            busy, _since, routine = self.busy_state
+            # a routine's step is the page at work: waited out, but not past what a client waits for its reply
+            if busy and (not routine or time.perf_counter() - started > ROUTINE_WAIT):
                 return self.busy_status()
         return pending["reply"]
 
@@ -865,18 +902,19 @@ class LiveServer:
         GIL), the recorder taken into a local before it is asked its name.
         """
         ended, recorder, take = self.ended.copy(), self.recorder, self.last_take
+        busy, since, routine = self.busy_state
         return {
             "ok": True,
-            "busy": self.busy,
-            "busy_seconds": round(time.perf_counter() - self.busy_since, 1) if self.busy else 0.0,
-            "busy_routine": self.busy_routine,
+            "busy": busy,
+            "busy_seconds": round(time.perf_counter() - since, 1) if busy else 0.0,
+            "busy_routine": routine,
             "url": self.url,
             "share_url": self.share_url,
             "pid": os.getpid(),
             "file": str(self.path),
             "run_dir": str(self.run_dir),
             "pending_save": self._pending_save(),
-            "log": self.log_path,
+            "server_log": self.log_path,
             "generation": self.generation,
             "resets": self.resets,
             "playing": len(self.script),
@@ -900,21 +938,21 @@ class LiveServer:
         }
 
     def _pending_save(self) -> bool:
-        """A save the watcher will build -- to the scene file or a helper it imported -- never on a page that does
-        not watch, or for a scene file that is gone."""
+        """A save the watcher will build -- to the scene file or a helper beside it -- never on a page that does not
+        watch, or for a scene file that is gone."""
         current = self._stamps()
         return bool(self.watch_enabled) and current is not None and current != self._loaded_stamp
 
     @contextmanager
     def _busy(self, what: str, routine: bool = False):
-        outer = self.busy
+        outer = self.busy_state[0]
         if not outer:
-            self.busy, self.busy_since, self.busy_routine = what, time.perf_counter(), routine
+            self.busy_state = (what, time.perf_counter(), routine)
         try:
             yield
         finally:
             if not outer:
-                self.busy, self.busy_routine = "", False
+                self.busy_state = ("", 0.0, False)
 
     def dispatch(self, request: dict) -> dict:
         """Run one command on the main thread, between two loop iterations."""
@@ -941,10 +979,16 @@ class LiveServer:
         if self.build_error and name in ("snapshot", "compare", "check", "eval", "play"):
             # the page still shows the scene before the save that failed: say so, beside whatever this answered
             last = self.build_error.strip().splitlines()[-1]
-            reply["stale"] = (
-                f"the last save of {self.path.name} did not build ({last}); "
-                "this is the scene before it -- `./ctl status` has the traceback"
-            )
+            if self.stand_in:
+                reply["stale"] = (
+                    f"{self.path.name} is not up ({last}); a bare scene stands in for it, not your scene -- "
+                    "`./ctl status` has the traceback"
+                )
+            else:
+                reply["stale"] = (
+                    f"the last save of {self.path.name} did not build ({last}); "
+                    "this is the scene before it -- `./ctl status` has the traceback"
+                )
         return reply
 
     # ------------------------------------------------------------ commands
@@ -1032,13 +1076,15 @@ class LiveServer:
             ns.setdefault(name, value)
         out = io.StringIO()
         value = None
+        # the value is the last line's, when that line is an expression: a heredoc that defines a routine and
+        # ends by calling it plays it, as one line calling it does
+        tree = ast.parse(code, "<eval>")
+        last = tree.body.pop() if tree.body and isinstance(tree.body[-1], ast.Expr) else None
         with redirect_stdout(out):
-            try:
-                expression = compile(code, "<eval>", "eval")
-            except SyntaxError:
-                exec(compile(code, "<eval>", "exec"), ns)
-            else:
-                value = eval(expression, ns)
+            if tree.body:
+                exec(compile(tree, "<eval>", "exec"), ns)
+            if last is not None:
+                value = eval(compile(ast.Expression(last.value), "<eval>", "eval"), ns)
         playing = False
         serial = 0
         if inspect.isgenerator(value):

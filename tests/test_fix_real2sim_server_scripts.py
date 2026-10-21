@@ -3,6 +3,7 @@
 
 from __future__ import annotations
 
+import importlib.util
 import sys
 import tempfile
 import types
@@ -54,19 +55,17 @@ def _bare_server(root: Path) -> LiveServer:
     live = LiveServer.__new__(LiveServer)
     live.path = root / "scene.py"
     live.head_stepped, live._head_ready = False, None
-    live.ended, live.takes_written, live.busy_routine = {}, [], False
+    live.ended, live.takes_written, live.stand_in = {}, [], False
     live._arms_before, live.resets = {}, 0
-    live.log_path, live._watched, live._motions = "", [], {}
+    live.log_path, live._motions = "", {}
     live.scene_paths = ScenePaths(root)
     live.build_error, live._tick_error = "", ""
-    live.busy, live.busy_since = "", 0.0
-    live._suspended_arms = []
+    live.busy_state = ("", 0.0, False)
     live.script_meta = {}
     live.scripts_started = 0
     live.last_script = {}
     live.sim = mock.MagicMock(step_count=0)
     live.session = types.SimpleNamespace(arms={})
-    live._baseline_modules = set()
     live.script = []
     live.recorder = None
     live.run_budget = 0
@@ -93,6 +92,20 @@ class EvictHelpers(unittest.TestCase):
                 gone = _bare_server(root).evict_helpers()
                 self.assertIn("fix_r35_pkgx", sys.modules)
             self.assertEqual(gone, ["fix_r35_helper"])
+
+    def test_an_evicted_helper_is_read_from_its_source_again(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp).resolve()
+            helper = root / "lidlib.py"
+            helper.write_text("K = 0.1\n")
+            cached = Path(importlib.util.cache_from_source(str(helper)))
+            cached.parent.mkdir()
+            cached.write_bytes(b"stale")  # trusted over a same-second, same-length edit
+            module = types.ModuleType("fix_r4_lidlib")
+            module.__file__ = str(helper)
+            with mock.patch.dict(sys.modules, {"fix_r4_lidlib": module}):
+                _bare_server(root).evict_helpers()
+            self.assertFalse(cached.exists())
 
 
 class FakeRecorder:

@@ -101,7 +101,7 @@ VERBOSE = (
     "takes_written",
     "busy_routine",
     "pending_save",
-    "log",
+    "server_log",
 )
 """Reply fields printed only under ``--json``: the raw numbers behind a ``report``."""
 
@@ -481,7 +481,7 @@ def wait_for_steps(sock: Path, reply: dict, steps: int) -> dict:
     start = int(reply["step"])
     target = start + int(steps)
     deadline = time.time() + 30.0 + steps / 5.0
-    busy = ""
+    busy, at = "", start
     while time.time() < deadline:
         time.sleep(0.2)
         status = request(sock, {"cmd": "status", "light": True}, DEFAULT_TIMEOUT)
@@ -494,6 +494,7 @@ def wait_for_steps(sock: Path, reply: dict, steps: int) -> dict:
             return {"ok": False, "error": "the scene was rebuilt during the run; the run ended", "step": status["step"]}
         if status.get("resets", reply.get("resets")) != reply.get("resets") or status["step"] < start:
             return {"ok": False, "error": "the scene was reset during the run; the run ended", "step": status["step"]}
+        at = status["step"]
         if status["step"] >= target or (status["paused"] and status["playing"] == 0):
             full = request(sock, {"cmd": "status"}, DEFAULT_TIMEOUT)  # once, at the end: is the state still finite
             return {
@@ -504,7 +505,11 @@ def wait_for_steps(sock: Path, reply: dict, steps: int) -> dict:
             }
     if busy:
         return {"ok": False, "error": f"the page was still {busy} when the wait ran out; how the run went is unknown"}
-    return reply
+    return {
+        "ok": False,
+        "error": f"the run had not reached step {target} when the wait ran out (at step {at}); the page carries on",
+        "step": at,
+    }
 
 
 def _say(text: str) -> None:
@@ -551,7 +556,7 @@ def server_log(sock: Path, run_dir: Path) -> Path:
         status = request(sock, {"cmd": "status", "light": True}, 5.0)
     except (NoServer, NoReply):
         status = {}
-    named = status.get("log") or ""
+    named = status.get("server_log") or ""
     if not named:
         try:  # "<pid> <path>", trusted only for the page that pid still is
             pid, _, path = (run_dir / "serve.log.path").read_text().strip().partition(" ")
@@ -942,9 +947,12 @@ def main(argv=None) -> int:
             if out is None:
                 print("ctl: no page and no scene.py beside the run directory or here; give --out", file=sys.stderr)
                 return 2
-            return show(
-                frames.cut(req["path"], at=req["at"], every=req["every"], out_dir=out, width=req["width"]), args.json
-            )
+            try:
+                cut = frames.cut(req["path"], at=req["at"], every=req["every"], out_dir=out, width=req["width"])
+            except Exception as exc:  # a bad --at or a clip that will not open: one line, as the page would answer
+                print(f"ctl: {exc}", file=sys.stderr)
+                return 1
+            return show(cut, args.json)
         print(f"ctl: no server at {sock}\nstart one with:  {START_HINT}", file=sys.stderr)
         return 2
     except NoReply as exc:

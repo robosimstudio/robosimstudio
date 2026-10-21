@@ -420,12 +420,12 @@ def _server() -> LiveServer:
     live = LiveServer.__new__(LiveServer)
     live.path = Path("/nonexistent/scene.py")
     live.script, live.recorder, live.run_budget, live.last_error = [], None, 0, ""
-    live.head_stepped, live._head_ready, live._suspended_arms, live.last_take = False, None, [], {}
-    live.ended, live.takes_written, live.busy_routine = {}, [], False
+    live.head_stepped, live._head_ready, live.last_take = False, None, {}
+    live.ended, live.takes_written, live.stand_in = {}, [], False
     live._arms_before, live.resets = {}, 0
-    live.log_path, live._watched, live._motions = "", [], {}
+    live.log_path, live._motions = "", {}
     live.build_error, live._tick_error = "", ""
-    live.busy, live.busy_since = "", 0.0
+    live.busy_state = ("", 0.0, False)
     live._status_lock, live._status_pending = threading.Lock(), None
     live.script_meta, live.scripts_started, live.last_script = {}, 0, {}
     live.sim = types.SimpleNamespace(step_count=0)
@@ -675,23 +675,79 @@ class BusyStatus(unittest.TestCase):
 
     def test_a_client_polling_through_a_long_render_queues_one_status(self) -> None:
         live = self._busy_server()
-        live.busy, live.busy_since = "rendering a still", time.perf_counter()
+        live.busy_state = ("rendering a still", time.perf_counter(), False)
         for _ in range(5):
             self.assertEqual(live._on_request({"cmd": "status"})["busy"], "rendering a still")
         self.assertEqual(self.queued, 1)
 
-    def test_a_save_to_a_helper_the_scene_imported_is_pending_too(self) -> None:
+    def test_a_save_to_a_helper_beside_the_scene_is_pending_too(self) -> None:
         live = self._busy_server()
         folder = Path(tempfile.mkdtemp())
         live.path, live.watch_enabled = folder / "scene.py", True
         live.path.write_text("x = 1\n")
         helper = folder / "lidlib.py"
         helper.write_text("A = 1\n")
-        live._watched = [helper]
         live._loaded_stamp = live._stamps()
         self.assertFalse(live._pending_save())
         helper.write_text("A = 22\n")
         self.assertTrue(live._pending_save())
+
+    def _reloading(self, build) -> tuple[LiveServer, Path]:
+        """A server over a folder whose rebuild runs ``build(helper)`` in place of the scene file."""
+        live = self._busy_server()
+        folder = Path(tempfile.mkdtemp())
+        live.path, live.watch_enabled = folder / "scene.py", True
+        live.path.write_text("import lidlib\n")
+        helper = folder / "lidlib.py"
+        helper.write_text("A = 1\n")
+        live.session.status = ""
+        live.refresh_live = lambda force=False: None  # type: ignore[method-assign]
+        live.swap = lambda loaded: True  # type: ignore[method-assign]
+        live.load = lambda: build(helper)  # type: ignore[method-assign]
+        return live, helper
+
+    def test_a_helper_saved_while_the_scene_builds_is_built_next(self) -> None:
+        def build(helper: Path):
+            helper.write_text("A = 2222\n")  # saved ten seconds into a minute-long build
+            return types.SimpleNamespace(seconds=60.0, sim=types.SimpleNamespace(names=lambda: []))
+
+        live, _ = self._reloading(build)
+        self.assertTrue(live.reload("saved")["ok"])
+        self.assertTrue(live._pending_save(), "the helper changed after the build read it")
+
+    def test_fixing_a_helper_that_did_not_import_rebuilds(self) -> None:
+        def build(helper: Path):
+            raise SyntaxError("lidlib.py: invalid syntax")  # and Python drops lidlib from sys.modules
+
+        live, helper = self._reloading(build)
+        live.build_error = live.last_error = ""
+        self.assertFalse(live.reload("saved")["ok"])
+        self.assertFalse(live._pending_save())
+        helper.write_text("A = 33\n")  # a length of its own: two writes in one clock tick share an mtime
+        self.assertTrue(live._pending_save(), "a helper is watched whether its import worked or not")
+
+    def test_the_files_watched_are_the_scenes_folder_but_its_readings_and_references(self) -> None:
+        live = self._busy_server()
+        folder = Path(tempfile.mkdtemp())
+        live.path = folder / "scene.py"
+        for rel in (
+            "scene.py",
+            "lidlib.py",
+            "parts/__init__.py",
+            "parts/hinge/latch.py",
+            "parts/hinge/deep/too_deep.py",
+            "run/probe.py",
+            "ref/fit.py",
+            "assets/gen.py",
+            "twins/other/scene.py",
+            ".hidden/x.py",
+            "robosimstudio_materials/cloth.py",
+            "notes.txt",
+        ):
+            (folder / rel).parent.mkdir(parents=True, exist_ok=True)
+            (folder / rel).write_text("")
+        watched = sorted(str(p.relative_to(folder)) for p in live.helpers())
+        self.assertEqual(watched, ["lidlib.py", "parts/__init__.py", "parts/hinge/latch.py"])
 
     def test_no_save_is_pending_on_a_page_that_does_not_watch(self) -> None:
         live = self._busy_server()
@@ -706,7 +762,7 @@ class BusyStatus(unittest.TestCase):
 
     def test_status_is_answered_at_once_while_the_main_thread_builds(self) -> None:
         live = self._busy_server()
-        live.busy, live.busy_since = "rebuilding the scene file", time.perf_counter() - 41
+        live.busy_state = ("rebuilding the scene file", time.perf_counter() - 41, False)
         started = time.perf_counter()
         reply = live._on_request({"cmd": "status"})
         self.assertLess(time.perf_counter() - started, 2.0)
@@ -724,7 +780,7 @@ class BusyStatus(unittest.TestCase):
 
     def test_only_a_path_traced_picture_counts_as_the_first_render(self) -> None:
         live = _server()
-        live.busy, live.busy_since, live.rendered, live.build_error = "", 0.0, False, ""
+        live.rendered, live.build_error = False, ""
         live.cmd_compare = lambda **kw: {"ok": True}  # type: ignore[method-assign]
         live.cmd_snapshot = lambda **kw: {"ok": True}  # type: ignore[method-assign]
         live.dispatch({"cmd": "compare", "take": "take1"})
@@ -733,9 +789,44 @@ class BusyStatus(unittest.TestCase):
         live.dispatch({"cmd": "snapshot", "camera": "phone"})
         self.assertTrue(live.rendered)
 
+    def test_a_status_waits_out_a_routine_step_only_so_long(self) -> None:
+        live = self._busy_server()
+        live.busy_state = ("playing one step of a routine", time.perf_counter(), True)
+        started = time.perf_counter()
+        with mock.patch.object(server_mod, "ROUTINE_WAIT", 0.5):
+            reply = live._on_request({"cmd": "status"})
+        self.assertLess(time.perf_counter() - started, 3.0)
+        self.assertTrue(reply["busy_routine"])
+
+    def test_a_routine_started_after_a_failed_save_keeps_its_traceback(self) -> None:
+        live = _server()
+        live.build_error, live.last_error = "Traceback ...\nNameError: lid", "RoutineError: a broke"
+        live.start_script(iter(()))
+        self.assertEqual(live.last_error, live.build_error)
+
+    def test_an_eval_that_defines_a_routine_and_ends_calling_it_plays_it(self) -> None:
+        live = _server()
+        live.ns, live.scene = {}, None
+        live.session = types.SimpleNamespace(arms={}, server=None)
+        code = "def lift():\n    yield\n\nlift()\n"
+        reply = live.cmd_eval(code=code)
+        self.assertTrue(reply["playing"])
+        self.assertEqual(reply["serial"], 1)
+        self.assertEqual(live.cmd_eval(code="x = 2\nx * 21")["value"], "42")
+        self.assertIsNone(live.cmd_eval(code="y = 1")["value"])
+
+    def test_a_command_on_the_stand_in_scene_says_it_is_not_the_users(self) -> None:
+        live = _server()
+        live.rendered, live.stand_in = True, True
+        live.build_error = "Traceback ...\nRuntimeError: adopt failed"
+        live.cmd_eval = lambda **kw: {"ok": True}  # type: ignore[method-assign]
+        reply = live.dispatch({"cmd": "eval", "code": "1"})
+        self.assertIn("a bare scene stands in for it", reply["stale"])
+        self.assertNotIn("the scene before it", reply["stale"])
+
     def test_a_command_after_a_failed_save_says_the_scene_is_the_one_before(self) -> None:
         live = _server()
-        live.busy, live.busy_since, live.rendered = "", 0.0, True
+        live.rendered = True
         live.build_error = "Traceback ...\nNameError: name 'lid' is not defined"
         live.cmd_status = lambda: {"ok": True}  # type: ignore[method-assign]
         live.cmd_eval = lambda **kw: {"ok": True}  # type: ignore[method-assign]
@@ -825,6 +916,34 @@ class CtlWaits(unittest.TestCase):
         self.addCleanup(fake.close)
         reply = ctl.wait_for_steps(self.sock, {"step": 40, "generation": 1, "resets": 0}, 120)
         self.assertEqual(reply["step"], 160)
+
+    def test_a_run_the_wait_gave_up_on_is_not_a_success(self) -> None:
+        crawling = {"ok": True, "busy": "", "step": 45, "time": 0.1, "paused": False, "playing": 0}
+        fake = _FakeStatus(self.sock, [{**crawling, "generation": 1, "resets": 0}])
+        self.addCleanup(fake.close)
+        clock = iter(range(0, 10_000, 20))
+        fake_time = types.SimpleNamespace(time=lambda: float(next(clock)), sleep=lambda s: None)
+        with mock.patch.object(ctl, "time", fake_time):
+            reply = ctl.wait_for_steps(self.sock, {"step": 40, "generation": 1, "resets": 0}, 1000)
+        self.assertFalse(reply["ok"])
+        self.assertIn("had not reached step 1040", reply["error"])
+        self.assertEqual(reply["step"], 45)
+
+    def test_ref_frames_without_a_page_says_what_was_wrong_in_one_line(self) -> None:
+        clip = _clip(self.tmp / "c.mp4", 2, "red")
+        (self.tmp / "scene.py").write_text("")
+        printed: list[str] = []
+        with mock.patch("builtins.print", lambda *a, **k: printed.append(" ".join(map(str, a)))):
+            code = ctl.main(["--run-dir", str(self.tmp / "run"), "ref", "frames", str(clip), "--at", "0:a,x:b"])
+        self.assertEqual(code, 1)
+        self.assertTrue(printed and printed[-1].startswith("ctl: "), printed)
+
+    def test_up_prints_its_log_and_status_does_not(self) -> None:
+        printed: list[str] = []
+        with mock.patch("builtins.print", lambda *a, **k: printed.append(" ".join(map(str, a)))):
+            ctl.show({"ok": True, "url": "http://x", "log": "/x/serve.log"}, False)
+            ctl.show({"ok": True, "busy": "", "server_log": "/x/serve.log"}, False)
+        self.assertEqual(sum("/x/serve.log" in line for line in printed), 1)
 
     def test_ref_frames_needs_no_page(self) -> None:
         clip = _clip(self.tmp / "c.mp4", 2, "red")

@@ -15,12 +15,15 @@ is that folder's. `twins/` is not committed.
 
 - The tab never reloads, and the camera stays where you left it.
 - A file that does not build leaves the previous scene up. `./ctl status`
-  prints the traceback.
-- A save to `scene.py` or to a helper module it imports rebuilds. A
-  save also re-imports the helper modules beside `scene.py` (a module or a
-  package in its directory) and takes back what the file and its helpers
-  registered (an entity class, a cell, a gripper, a scenery), so an edit to a
-  helper lands with the next save: no new name per save, no restart.
+  prints the traceback. One that builds but will not go into the page leaves
+  a bare scene (one YAM) standing in, and every reply says so.
+- A save to `scene.py` or to any `.py` in its folder, two folders down,
+  rebuilds -- but not under `run/`, `ref/`, `assets/` or `twins/`: a scratch
+  script goes in `run/`. A rebuild re-imports the helper modules beside
+  `scene.py` (a module or a package in its directory) and takes back what the
+  file and its helpers registered (an entity class, a cell, a gripper, a
+  scenery), so an edit to a helper lands with the next save: no new name per
+  save, no restart.
 - The page works in `scene.py`'s directory: a file the scene or `eval` reads
   or writes by a relative path is beside `scene.py`.
 - A rebuild of a starter scene -- one YAM here, two on a bench in a twin's
@@ -68,7 +71,7 @@ scene.add(rss.robot("yam_bimanual"))  # a scene needs something that moves befor
 | --- | --- |
 | `new NAME [--ref FILE ...] [--dir D]` | Make a twin's folder, `twins/NAME/` beside the run directory (or `D`): a starter `scene.py`, the files copied into `ref/`, `REPORT.md` with its four headings, and the folder's own `ctl`. Needs no page. |
 | `up [--port N] [--scene F] [--share]` | Start a server on the file (default: the `scene.py` beside the run directory), wait for the page, and print its URL (the next free port if N is busy). With a page already up, names it; refuses if that page is on another scene file or lacks a requested `--share`. |
-| `status [--wait [--wait-limit S]]` | What is loaded, the names in it and where they are, the last error, the page's address, how the last routine ended (`last_script`), and `speed`: simulated seconds per wall second. While the page is building or rendering it answers at once with `busy` and for how long. `--wait` returns once the page is not building or rendering and every save is built (a routine may still be playing: `play --wait` waits on one), giving up after `--wait-limit` seconds (3600). |
+| `status [--wait [--wait-limit S]]` | What is loaded, the names in it and where they are, the last error, the page's address, how the last routine ended (`last_script`), and `speed`: simulated seconds per wall second. While the page is building or rendering it answers at once with `busy` and for how long; during a routine's step, within 5 s. `--wait` returns once the page is not building or rendering and every save is built (a routine may still be playing: `play --wait` waits on one), giving up after `--wait-limit` seconds (3600). |
 | `reload` | Rebuild now. Saving the file does this too. |
 | `snapshot [--camera N] [--beside REF] [--eye x,y,z --look-at x,y,z] [--size WxH] [--note TEXT]` | A path-traced PNG of the current state, with a reference picture beside it. A snapshot draws the room, the mat and the textures; the page draws only the bench and what you added. |
 | `ref frames CLIP [--at 0:closed,4.5:lid_open,end] [--every S] [--out D] [--width W]` | Stills out of a clip at those seconds, a contact sheet with the seconds burnt in, and `ref/timeline.json` anchoring them, in `ref/` beside the scene file or `--out`, at the clip's width or `--width`. Needs no page. |
@@ -81,7 +84,7 @@ scene.add(rss.robot("yam_bimanual"))  # a scene needs something that moves befor
 | `run N` | Step N control steps, then hold. Refused while a routine plays; ends with an error if the scene is rebuilt or reset during the run. |
 | `pause`, `resume` | Pause or resume stepping. |
 | `reset` | Reset the scene. It also stops a playing routine and finishes its take; Pause is left as it was. |
-| `eval "CODE"` or `eval -` (stdin) `[--record NAME --every K --camera N] [--wait [--wait-limit S]]` | Run Python on the sim thread in `scene.py`'s namespace (`sim`, `scene`, `session`, `np`, `rss`, `live` -- the page's own `LiveServer` --, `server` -- its viser server --, and every name the file bound). What it binds, routines and `play` see until the next save starts the namespace over. A generator plays on the page step by step; `--record` films it; `--wait` waits for it as `play --wait` does. |
+| `eval "CODE"` or `eval -` (stdin) `[--record NAME --every K --camera N] [--wait [--wait-limit S]]` | Run Python on the sim thread in `scene.py`'s namespace (`sim`, `scene`, `session`, `np`, `rss`, `live` -- the page's own `LiveServer` --, `server` -- its viser server --, and every name the file bound). What it binds, routines and `play` see until the next save starts the namespace over. Its value is its last line's, when that line is an expression; a generator plays on the page step by step; `--record` films it; `--wait` waits for it as `play --wait` does. |
 | `catalog [robots\|grippers\|cells\|assets]` | The names the registries know. |
 | `ref show PATH`, `ref hide` | A picture in the page's sidebar. |
 | `quit` | Stop the server. |
