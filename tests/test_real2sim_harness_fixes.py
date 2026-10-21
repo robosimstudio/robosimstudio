@@ -200,6 +200,28 @@ class TakeAccounting(unittest.TestCase):
         np.testing.assert_allclose(checks._part_positions(sim)["case"][1], [0.1, 0.3, 0.3], atol=1e-4)
 
 
+class MaskKeys(unittest.TestCase):
+    def test_any_pixel_not_black_is_the_thing_and_an_empty_mask_says_so(self) -> None:
+        from PIL import Image
+
+        from robosimstudio_real2sim_agent import compare
+
+        tmp = Path(tempfile.mkdtemp())
+        mask = np.zeros((4, 4, 3), np.uint8)
+        mask[1, 1] = (0, 0, 1)  # nearly black, and not black
+        Image.fromarray(mask).save(tmp / "m.png")
+        key = compare.parse_key(f"lid=mask:{tmp / 'm.png'}")
+        self.assertEqual(int(compare.photo_mask(np.zeros((4, 4, 3), np.uint8), key).sum()), 1)
+        reading = compare.compare_masks(None, np.ones((4, 4), bool))
+        self.assertIn("the mask holds nothing at this size", compare.advice("lid", reading, 4, key))
+
+    def test_a_deformable_is_sampled_for_the_take(self) -> None:
+        points = np.arange(300, dtype=float).reshape(100, 3)
+        sim = _deformable_sim(points, {"rope": _handle(list(range(100)))})
+        sim.scene.handles.objects, sim.scene.handles.statics = {}, {}
+        self.assertEqual(len(checks._part_positions(sim)["rope"]), checks.PARTS_KEPT)
+
+
 class RegistryWrites(unittest.TestCase):
     def test_forget_restore_and_watch(self) -> None:
         reg: Registry[int] = Registry("thing")

@@ -20,6 +20,13 @@ the scene every time the file is saved.
 - A rebuild of the starter scene, with or without a box added, takes about 6
   to 7 s; about 4.8 s of it is CoACD decomposing the YAM fingertip colliders.
   The first build in a process also compiles kernels and takes about 10 s.
+  Materials cost more, measured on twins: a heap or a liquid on the MPM about
+  20 to 30 s, cloth leaves on rope stalks 30 to 50 s, a SuperDex rope about
+  50 s, a SuperDex bag 60 to 90 s. `./ctl status` says `busy` meanwhile, and
+  `./ctl status --wait` returns when it is done.
+- The first path-traced picture in a process (a snapshot, a compare, a take's
+  first frame) compiles the renderer's shaders and can take minutes; later
+  ones take seconds.
 - The page listens on all interfaces (`0.0.0.0`, viser's default), so on a
   shared network firewall its port or use an SSH tunnel.
 
@@ -57,10 +64,10 @@ scene.add(rss.robot("yam_i2rt"))  # a scene needs something that moves before it
 | `reload` | Rebuild now. Saving the file does this too. |
 | `snapshot [--camera N] [--beside REF] [--eye x,y,z --look-at x,y,z] [--size WxH] [--note TEXT]` | A path-traced PNG of the current state, with a reference picture beside it. A snapshot draws the room, the mat and the textures; the page draws only the bench and what you added. |
 | `ref frames CLIP [--at 0:closed,4.5:lid_open,end] [--every S]` | Stills out of a clip at those seconds, a contact sheet with the seconds burnt in, and `ref/timeline.json` anchoring them. Needs no page. |
-| `compare [--ref PHOTO] [--camera N] --key NAME=HOW ... [--note TEXT]` | The scene against the photograph: the pair at full size, per keyed thing its size, offset and overlap, and a look sheet. |
-| `compare --take NAME --key ...` | A recorded take against the clip's timeline: each anchor, and what moved in each. |
-| `check [--camera N] --key ... [--object NAME ...]` | The gate: builds, finite state, camera at the clip's aspect, every named thing present, penetration and drift at rest under their bars. |
-| `log [--last N]` | Every snapshot, compare and check so far, with its score and the `scene.py` it measured. |
+| `compare [--ref PHOTO] [--camera N] [--key NAME=HOW ...] [--note TEXT]` | The scene beside the photograph: the pair at full size and a look sheet; per keyed thing, its size, offset and overlap. |
+| `compare --take NAME [--key ...]` | A recorded take beside the clip's timeline: the clip's anchors above, the take's frames at the same point below, and what moved in the take. |
+| `check [--camera N] [--key ...] [--object NAME ...]` | The gate: builds, finite state, camera at the clip's aspect, every named thing present, penetration and drift at rest under their bars. |
+| `log [--last N]` | Every compare, check, take and `snapshot --note` so far: what it left (PASS/FAIL, the picture: a snapshot's pair when it made one) and the `scene.py` it measured. |
 | `play [NAME] [--record TAKE --camera N] [--wait]` | Play a routine the scene file binds, as its button on the page does. `--wait` returns when it ends, printing the page's log as it goes, and exits 1 with the traceback if it failed. |
 | `show PATH [--label TEXT]`, `show --clear` | A picture on the page's board for the person watching. |
 | `run N` | Step N control steps, then hold. Refused while a routine plays; ends with an error if the scene is rebuilt or reset during the run. |
@@ -91,9 +98,17 @@ is played one `next()` per loop pass, so a routine that steps the sim between
 `yield`s is drawn step by step:
 
 ```bash
-./ctl eval "$(printf 'def go():\n    for _ in range(120):\n        sim.run(1)\n        yield\n')"
-./ctl eval "go()"
+./ctl eval - <<'PY'
+def go():
+    for _ in range(120):
+        sim.run(1)
+        yield
+PY
+./ctl eval "go()" --wait
 ```
+
+`eval -` reads the code from stdin, so a heredoc carries several lines without
+quoting; what it defines stays in the namespace until the next save.
 
 Rebuilds land running. A routine (from `eval`, `play` or **Run**) plays
 whatever **Pause** says, one `next()` per pass, by the studio's rule:
@@ -117,11 +132,11 @@ page returns to its previous state when the routine ends.
 
 ## Readings
 
-`compare` measures each keyed thing in the render against the photograph:
-size ratio, centre offset in pixels, and overlap (IoU). Re-run it after each
-edit to see whether the edit helped. The method and the finished-twin
-criteria are in the
-[`real-to-sim` skill](../../.claude/skills/real-to-sim/SKILL.md).
+`compare` puts the render beside the photograph and writes the look sheet;
+for each keyed thing it also measures size ratio, centre offset in pixels, and
+overlap (IoU). Keys are optional: key a thing that keys cleanly, typically the
+one the robot handles. The method and what a finished twin is are in
+[`AGENTS.md`](AGENTS.md) beside this file.
 
 ### Keys
 
@@ -134,9 +149,12 @@ included; the photograph needs a `--key` saying how to find it:
 | `socket=@1240,410` | the patch of the colour at that pixel of the photograph |
 | `case=red@980,640` | the patch of that colour containing that pixel |
 | `case=#d01a10~0.1` | a hex colour, with a tolerance |
+| `gasket=mask:ref/gasket.png` | a mask drawn some other way: every pixel of the PNG that is not black |
 
 The name is the thing's scene name; pixels are in the photograph's own
-resolution.
+resolution. A colour key on a black, many-coloured, shiny or thin thing finds
+a fragment of it: look at its yellow outline on the look sheet before you
+trust its number, and use a mask instead.
 
 ### What `compare` says
 
@@ -145,17 +163,20 @@ case: sim is 0.70x the photo's size (w 0.77x, h 0.60x), centre 5 px left, 78 px 
 socket: sim is 0.81x the photo's size (w 0.44x, h 0.87x), centre 122 px left, 20 px low (9.7% of the frame), IoU 0.00
 ```
 
-`score` is the mean IoU.
-
 `snapshot --beside ref/<still>` and `compare` (as `cmp_NNN_beside.png`) put
-the render beside the still at full size; open it first after each save. The
-**look sheet** (`cmp_NNN_look.png`) shows the pair; the photograph with each
-thing outlined twice (the photo's outline yellow, the render's cyan); each
-keyed thing cropped from both pictures at one scale; and both pictures with
-the things painted out, which shows what stands behind them. Write down what
+the render beside the still at full size, render on the left, photo on the
+right, as every pair here; open it first after each save. The **look sheet**
+(`cmp_NNN_look.png`) shows the pair; with keys, the photograph with each thing
+outlined twice (the photo's outline yellow, the render's cyan) and each keyed
+thing cropped from both pictures at one scale; and both pictures with the
+things painted out, which shows what stands behind them. Write down what
 the photograph has that the render lacks, per thing and behind them (a lid
 seam, latch tabs, a label, the table top, the couch); that list is the next
 edit.
+
+The render's outlines come off the collider ray tracer, the picture off the
+path tracer: a thing drawn with a skin of its own (grains over a heap's
+particles, a mesh over a simple collider) is outlined by what collides.
 
 ### The gate
 
@@ -175,41 +196,56 @@ off its particle that moved most, so a sagging cloth or a sinking rope fails it;
 a named thing with nothing to read is listed as not measured. It steps the
 scene, then resets it to its start: a pose set with
 `eval` or reached with `run N` is not kept. `check` is refused while a routine
-plays. `--steps`, `--settle-mm` and `--penetration-mm` set the bars. The bars
-are defaults and `check` blocks nothing.
+plays. `--steps` (60), `--settle-mm` (2) and `--penetration-mm` (1) set the
+bars; the penetration and rest lines print the bar they were held to, and the
+camera line holds the aspect within 2%. A line given nothing to look at
+(`objects` with no `--key` or `--object`) is a SKIP. The bars are defaults
+and `check` blocks nothing. The camera line holds the camera to the clip's aspect
+from `ref/timeline.json`; against a photo, `compare` says when it had to
+stretch the photo to the camera's aspect.
 
 ### The take
 
 `--record NAME` films a routine as the page plays it (the video, every
-frame's segmentation at quarter size, every thing's position).
-`compare --take NAME --key ...` holds it against the clip's
-`ref/timeline.json`: each anchor's still beside the take's frame at the same
-point of the action, the keyed things' IoU there, and whether, and by how
-much, each thing moved in the clip and in the take. The clip and the take
-need not run the same length. An anchor is matched by proportion, or pinned
-with `"sim_t"` or `"sim_step"` in the timeline. A seed is a pixel of one
-still, so key the things that move by colour. The strip has the clip's
-anchors above and the take's frames below.
+frame's segmentation at quarter size, every thing's position). When it ends,
+the page puts it beside the clip's `ref/timeline.json` by itself, as
+`compare --take NAME` does: a strip (`cmp_NNN_strip.png`) with the clip's
+anchors above and the take's frames at the same point of the action below,
+posted to the board and logged, and one line on what moved in the take, read
+off its recorded positions (a jointed thing's moving bodies and a
+deformable's particles included). With no `ref/timeline.json` there is no
+strip: the line is printed and logged with the take.
 
-When a take ends, the page runs this compare itself with the last
-`compare`'s keys, logs it like any other reading, and puts the strip on the
-board under a one-line verdict: `2 of 3 did what the clip did; lid stayed
-(clip moved)`. Without a timeline or a prior `compare --key`, it prints one
-line saying which is missing and does nothing else.
+```
+in the take: case_lid went 118 mm and ended 4 mm from its start; case went 3 mm; 5 other things stayed within 2 mm
+```
+
+Nothing says whether the take did what the clip did: read that off the strip.
+Each thing is read at the centre of mass of each of its bodies, or a sample of
+a deformable's particles: "went" is the most any of them went, "ended" the
+most any of them ended from where it started, so a key turning in a case
+whose base stays put, or a lid swinging on its hinge, is seen. An anchor pinned past the take's end is held
+against its last frame, and a line says so.
+The clip and the take need not run the same length. An anchor is matched by
+proportion, or pinned with `"sim_t"` or `"sim_step"` in the timeline. Keys,
+if the last `compare` had any or `--key` gives some, only outline the things:
+a colour key in both rows; a seed or a mask, which keys one still, in the
+take's row alone.
 
 ### The board
 
 The `Live` folder at the top of the sidebar is a board for the person
 watching: `./ctl show <png> --label "<what it is>"` adds a picture (the same
 label replaces it), and `--clear` removes them all. `compare` posts its pair
-and look sheet, and a take its strip under its verdict, by themselves. The
+and look sheet, and a take its strip, by themselves. The
 board survives a rebuild. Below it are the **Run** and **Reset** buttons.
 
 ### The log
 
-`compare`, `check` and `snapshot --note` append to `run/log.jsonl` with the
-hash of the `scene.py` they measured; `./ctl log` prints it. Use `--note` to
-say what each edit changed.
+`compare`, `check`, a take and `snapshot --note` append to `run/log.jsonl`
+with the hash of the `scene.py` they measured and the picture they left;
+`./ctl log` prints it. Use `--note` to say what each edit changed. A session
+that picks up where another stopped starts here, with the last look sheet.
 
 ## Frames and units
 

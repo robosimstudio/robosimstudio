@@ -33,6 +33,9 @@ RoboSimStudio is a Newton-native simulation toolkit. Packages:
 
 ## Checks
 
+These gate a change to the library. A twin built in `examples/live/` is not one:
+do not run the tiers for it, and do not add its tests to `tests/`.
+
 - `uv run python scripts/testrun.py --tier fast`: no GPU, gates every commit.
 - `uv run --extra cpu --no-group rtx python scripts/testrun.py --tier cpu`: no
   GPU; builds and steps scenes on a CPU (MuJoCo's C library, SuperDex).
@@ -49,27 +52,27 @@ When asked to rebuild a real scene from a photo or video, match a reference,
 twin a real cell, or build a scene interactively, use the live page in
 [`examples/live/`](examples/live/README.md) instead of writing a script and
 running it blind: edit `scene.py`, and the page rebuilds it on every save.
-From `examples/live/`:
+**Read [`examples/live/AGENTS.md`](examples/live/AGENTS.md) before the first
+edit**: the method, what a finished twin is (among other things: the robot
+moves things only through its fingers' contact), and what the report says.
+Every command and reading is in
+[`examples/live/REFERENCE.md`](examples/live/REFERENCE.md). From
+`examples/live/`:
 
 ```bash
-./ctl status                          # a page is up (names, positions, last error), or it exits 2
-./ctl up                              # if not: start one; prints the URL (--share for a public one)
+./ctl status --wait                   # the page, once it is free: names, positions, last error, how the last routine ended
+./ctl up                              # if there is none: start one; prints the URL (--share for a public one)
 ./ctl ref frames <clip> --at 0:start,4.5:lid_open,end:end   # stills named by their second, a contact sheet, ref/timeline.json
 ./ctl snapshot --camera <cam> --beside ref/<still>          # the render beside the still, full size
-./ctl compare --camera <cam> --key case=red --key socket=@1240,410 --note "<why>"   # size, offset, overlap per thing, and a look sheet
-./ctl check --camera <cam> --key ...  # the gate: PASS/FAIL with the number
-./ctl eval "t.play()" --record take1 --camera <cam>         # film a routine; it is compared to the clip when it ends
-./ctl play tidy --record take1        # the page's Run button: scene.py binds routine or routines={name: fn}
-./ctl log                             # every reading so far, with the scene code it measured
+./ctl compare --camera <cam> [--key case=red] --note "<why>" # the pair and a look sheet; size, offset, overlap per keyed thing
+./ctl check --camera <cam>            # the gate: PASS/FAIL with the number
+./ctl play tidy --record take1 --wait # the page's Run button, filmed; returns when it ends, saying how
+./ctl log                             # every reading so far, with the picture it left and the scene code it measured
 ./ctl catalog robots cells            # the names rss.robot() and Scene(cell=) accept
-./ctl eval "sim['<name>'].position"   # python against the live scene
+./ctl eval - <<'PY'                   # python against the live scene, several lines from stdin
+print(sim['<name>'].position)
+PY
 ```
 
 A snapshot is path traced and draws the room, the mat and the textures; the
 page draws the bench and what you added.
-
-The method and what counts as a finished twin are in
-[`.claude/skills/real-to-sim/SKILL.md`](.claude/skills/real-to-sim/SKILL.md)
-(the `real-to-sim` skill for Claude Code). The `scene.py` contract, every
-command and every reading are in
-[`examples/live/REFERENCE.md`](examples/live/REFERENCE.md).

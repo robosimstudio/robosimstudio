@@ -20,19 +20,28 @@ What is here:
 ```bash
 cd examples/live
 ./ctl up                                    # the page; prints its URL, http://localhost:8080 or the next free port (--share adds a public URL)
-claude --permission-mode acceptEdits        # Claude Code; edits go through without a prompt
-codex -a on-request -s workspace-write      # or Codex; the sandbox may write here and reach the socket
+codex -a on-request -s workspace-write      # Codex; the sandbox may write here and reach the socket
+claude --permission-mode acceptEdits        # or Claude Code; edits go through without a prompt
 ```
 
+Start the agent in this folder: Codex reads [`AGENTS.md`](AGENTS.md) here by
+itself (the method, and what a finished twin is) on top of the repository's,
+and Claude Code reads it through `CLAUDE.md`. Where Codex's sandbox cannot
+start (`bwrap: loopback: Failed RTM_NEWADDR` on some hosts), run it in a
+throwaway clone or worktree of the repository with its sandbox off, never in a
+checkout you care about.
+
 The page opens on the starter scene: two arms on a bare floor. On a remote GPU
-box, pick an idle card with `CUDA_VISIBLE_DEVICES` and use `--share` or an SSH
-tunnel (`ssh -L 8080:localhost:8080 <box>`). The page listens on all interfaces
+box, pick an idle card with `ROBOSIMSTUDIO_DEVICE=cuda:N ./ctl up` (or
+`BUILD = {"device": "cuda:N"}` in `scene.py`), not `CUDA_VISIBLE_DEVICES`,
+which hides every GPU from the path tracer; and use `--share` or an SSH tunnel
+(`ssh -L 8080:localhost:8080 <box>`). The page listens on all interfaces
 (viser's default), so on a shared network firewall the port or use the tunnel.
 `./ctl quit` stops the server.
 
-Both agents read the procedure from [`AGENTS.md`](../../AGENTS.md), so the
-prompt only has to say what to build. Start each prompt below with this
-line:
+The procedure is in `AGENTS.md`, so the prompt only has to say what to build;
+one line naming the clip or the photo is enough. The prompts below say more,
+for a person who wants to steer. Start each with this line:
 
 ```
 A live page is running: it rebuilds scene.py on every save. Use ./ctl to inspect it (see ./ctl --help).
@@ -47,12 +56,11 @@ Drop the clip beside the checkout (not in it) and say:
 Rebuild it in scene.py with this library's core API: the table, two YAM
 arms where the person sat, what is on the table, a camera where the phone
 was, what stands behind the table, and then the arms doing what the person
-did, bound as `routine` in scene.py so I get a Run button on the page. Look
-at the pairs, the look sheets and the strip with your own eyes, not only the
-numbers: the things in their detail, the background, what happened. I am
-watching the page. When you are done, report the readings and what you saw:
-the first frame against the clip, the gate, and the take against the clip's
-timeline. Say in one line what you are about to do before each edit.
+did, by contact alone, bound as `routine` in scene.py so I get a Run button
+on the page. I am watching the page. When you are done, report as AGENTS.md
+says: what still differs from the clip, every shortcut, the gate, and the
+look sheet and strip you judged. Say in one line what you are about to do
+before each edit.
 ```
 
 ## The prompt, with your own photo

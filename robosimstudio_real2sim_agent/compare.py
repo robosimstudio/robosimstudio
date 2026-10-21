@@ -13,14 +13,18 @@ backend's ``seg`` channel, ids named by the scene's handles), so every thing in
 the scene has an exact mask for free. The photograph has none, so each thing is
 *keyed*: a colour name (``case=red``), a hex colour (``socket=#c0c0c0``), a seed
 pixel in the photograph (``socket=@1210,410``: the patch of that colour around
-that pixel), or a name restricted to a seed (``case=red@980,640``). Keying is
-what the agent does instead of segmenting -- it has looked at the photograph
-and knows the case is the red thing.
+that pixel), a name restricted to a seed (``case=red@980,640``), or a mask
+drawn some other way (``gasket=mask:ref/gasket.png``: a PNG the photograph's
+size or not, any pixel not black being the thing). Keying is what the agent
+does instead of segmenting -- it has looked at the photograph and knows the
+case is the red thing. A colour key on a black, many-coloured or thin thing
+finds a fragment of it; its outline on the look sheet shows that before its
+number is trusted, and a mask is the way round it.
 
 Per keyed thing: where it is in each picture, how big, the overlap. Without
-keys, one global reading: how many of the render's edges land on an edge of
-the photograph. Everything is plain numpy, scipy and PIL, because the page's
-process is the one that renders and nothing heavier is installed with it.
+keys, nothing is measured and the pictures are still made. Everything is plain
+numpy, scipy and PIL, because the page's process is the one that renders and
+nothing heavier is installed with it.
 """
 
 from __future__ import annotations
@@ -89,8 +93,12 @@ class Key:
     """A pixel of the photograph the thing is at, ``(x, y)``."""
     tolerance: float = 0.0
     """For a hex colour or a seed: how far a pixel's colour may stray, 0..1 (0 takes the default)."""
+    mask: str = ""
+    """A PNG whose pixels that are not black are the thing, in place of a colour or a seed."""
 
     def describe(self) -> str:
+        if self.mask:
+            return f"the mask in {Path(self.mask).name}"
         parts = [self.colour or "the colour at the seed"]
         if self.seed is not None:
             parts.append(f"around ({self.seed[0]}, {self.seed[1]})")
@@ -98,11 +106,18 @@ class Key:
 
 
 def parse_key(text: str) -> Key:
-    """``name=red``, ``name=#rrggbb~0.2``, ``name=@x,y``, ``name=red@x,y``.
+    """``name=red``, ``name=#rrggbb~0.2``, ``name=@x,y``, ``name=red@x,y``, ``name=mask:path.png``.
 
     A colour word or a hex colour keys by colour; a seed pixel keys by the
-    colour at that pixel of the photograph, the one you looked at.
+    colour at that pixel of the photograph, the one you looked at; a mask is
+    the thing as some other tool drew it.
     """
+    name, sep, how = text.partition("=")
+    if sep and how.strip().startswith("mask:") and re.fullmatch(r"\s*[A-Za-z_][\w\-]*\s*", name):
+        path = how.strip()[len("mask:") :].strip()
+        if not path:
+            raise ValueError(f"{text!r}: a mask key names a PNG, name=mask:path.png")
+        return Key(name=name.strip(), mask=path)
     m = _KEY.match(text)
     if m is None:
         raise ValueError(f"not a key: {text!r}; write name=red, name=#rrggbb, name=@x,y or name=red@x,y")
@@ -181,6 +196,8 @@ def photo_mask(photo: np.ndarray, key: Key) -> np.ndarray:
     """The pixels of ``photo`` (RGB uint8) that are the keyed thing: one connected patch, specks removed."""
     from scipy import ndimage
 
+    if key.mask:
+        return _mask_file(key.mask, photo.shape[:2])
     hsv = _hsv(photo)
     if key.colour in NAMED_COLOURS:
         rule = NAMED_COLOURS[key.colour]
@@ -215,6 +232,18 @@ def photo_mask(photo: np.ndarray, key: Key) -> np.ndarray:
         return labels == at
     sizes = ndimage.sum(cleaned, labels, index=np.arange(1, count + 1))
     return labels == (int(np.argmax(sizes)) + 1)
+
+
+def _mask_file(path: str, shape: tuple[int, int]) -> np.ndarray:
+    """A mask PNG at the photograph's size: any pixel that is not black is the thing."""
+    from PIL import Image
+
+    image = Image.open(path).convert("RGBA")
+    h, w = shape
+    if image.size != (w, h):
+        image = image.resize((w, h), Image.NEAREST)
+    pixels = np.asarray(image)
+    return (pixels[..., :3].max(axis=-1) > 0) & (pixels[..., 3] > 0)
 
 
 def sim_masks(seg: np.ndarray, names_by_id: dict[int, str], wanted: list[str]) -> dict[str, np.ndarray | None]:
@@ -327,6 +356,8 @@ def advice(name: str, reading: dict[str, Any], frame_width: int, key: Key | None
     how = f" (keyed {key.describe()})" if key is not None else ""
     if p is None and s is None:
         return f"{name}: found in neither picture{how}"
+    if p is None and key is not None and key.mask:
+        return f"{name}: the mask holds nothing at this size{how}: empty, or a line too thin to survive the resize"
     if p is None:
         return f"{name}: the key found nothing in the photograph{how}; try another colour, or a seed @x,y on it"
     if s is None:
@@ -370,7 +401,7 @@ def crop_pair(
     *,
     height: int = 240,
 ) -> np.ndarray | None:
-    """The thing in the photograph beside the thing in the render, cut from the same box so the scale is the same."""
+    """The thing in the render beside the thing in the photograph, cut from the same box so the scale is the same."""
     from PIL import Image
 
     box = region_box([pm, sm], photo.shape[:2])
@@ -384,7 +415,7 @@ def crop_pair(
     if sm is not None and sm.any():
         right[outline(sm)[y0:y1, x0:x1]] = SIM_COLOUR
     w = max(1, int(round((x1 - x0) * height / max(1, y1 - y0))))
-    tiles = [np.asarray(Image.fromarray(t).resize((w, height), Image.BILINEAR)) for t in (left, right)]
+    tiles = [np.asarray(Image.fromarray(t).resize((w, height), Image.BILINEAR)) for t in (right, left)]
     gap = np.full((height, 6, 3), 40, np.uint8)
     return np.concatenate([tiles[0], gap, tiles[1]], axis=1)
 
@@ -406,15 +437,15 @@ def look_sheet(
     *,
     width: int = 1280,
 ) -> np.ndarray:
-    """One picture to reason about: the pair on top, then every captioned row (each thing up close, the background)."""
+    """One picture to reason about: the pair on top, render left and photo right as in every pair, then each captioned row."""
     from PIL import Image
 
     h = int(round(photo.shape[0] * (width // 2) / photo.shape[1]))
     top = np.concatenate(
-        [np.asarray(Image.fromarray(t).resize((width // 2, h), Image.BILINEAR)) for t in (photo, render)],
+        [np.asarray(Image.fromarray(t).resize((width // 2, h), Image.BILINEAR)) for t in (render, photo)],
         axis=1,
     )
-    blocks: list[np.ndarray] = [_caption("photo  |  render", width), top]
+    blocks: list[np.ndarray] = [_caption("render  |  photo", width), top]
     for caption, given in rows:
         if given is None:
             continue

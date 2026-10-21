@@ -160,11 +160,7 @@ class TestCompareStill(unittest.TestCase):
         keys = [compare.parse_key("case=red"), compare.parse_key("bolt=@410,160")]
         result = checks.compare_still(rgb, seg, names, tmp / "ref.png", keys)
         self.assertEqual(set(result["objects"]), {"case", "bolt"})
-        self.assertAlmostEqual(
-            result["score"],
-            np.mean([o["iou"] for o in result["objects"].values()]),
-            places=4,
-        )
+        self.assertNotIn("score", result, "no mean over the keys: it said nothing about any one thing")
         self.assertEqual(len(result["lines"]), 2, "one line per key, nothing else")
         pictures = checks.write_compare_pictures(tmp / "cmp_001.png", rgb, result)
         self.assertTrue(Path(pictures["look"]).exists() and pictures["look"].endswith("_look.png"))
@@ -173,8 +169,17 @@ class TestCompareStill(unittest.TestCase):
             beside.size, (2 * rgb.shape[1], rgb.shape[0]), "the render and the photo side by side, full size"
         )
         none = checks.compare_still(rgb, seg, names, tmp / "ref.png", [])
-        self.assertEqual(none["score"], 0.0)
+        self.assertEqual(none["objects"], {})
         self.assertIn("no --key", none["lines"][0])
+        masked = checks.compare_still(
+            rgb, seg, names, tmp / "ref.png", [compare.parse_key("case=mask:" + str(_mask_png(tmp)))]
+        )
+        self.assertAlmostEqual(
+            masked["objects"]["case"]["iou"],
+            result["objects"]["case"]["iou"],
+            places=2,
+            msg="a mask of the case keys what red keyed",
+        )
 
 
 class TestFrames(unittest.TestCase):
@@ -255,14 +260,14 @@ class TestTheLog(unittest.TestCase):
         tmp = Path(tempfile.mkdtemp(prefix="log-"))
         self.assertIn("nothing logged", checks.log_report(checks.log_read(tmp)))
         self.assertEqual(
-            checks.log_append(tmp, {"cmd": "compare", "scene": "abc", "score": 0.31, "note": "first"}),
+            checks.log_append(tmp, {"cmd": "compare", "scene": "abc", "look": "/r/cmp_012_look.png", "note": "first"}),
             1,
         )
         self.assertEqual(checks.log_append(tmp, {"cmd": "check", "scene": "abc", "passed": False}), 2)
         rows = checks.log_read(tmp)
         self.assertEqual([r["n"] for r in rows], [1, 2])
         report = checks.log_report(rows)
-        self.assertIn("0.310", report)
+        self.assertIn("cmp_012_look.png", report, "the picture a report cites, tied to the scene it measured")
         self.assertIn("FAIL", report)
         self.assertEqual(checks.scene_hash(tmp / "nowhere.py"), "missing")
 
@@ -310,7 +315,9 @@ class TestATake(unittest.TestCase):
             seg[20:50, x : x + 30] = 2
             writer.append(rgb)
             segs.append(seg[:: checks.SEG_SCALE, :: checks.SEG_SCALE].astype(np.uint8))
-            rows.append({"i": i, "step": 4 * i, "t": i * 0.25, "objects": {}, "positions": {}})
+            rows.append(
+                {"i": i, "step": 4 * i, "t": i * 0.25, "objects": {}, "positions": {"case": [0.004 * i, 0.0, 0.1]}}
+            )
         writer.close()
         np.savez_compressed(run / "take_seg.npz", seg=np.stack(segs))
         (run / "take.json").write_text(
@@ -330,7 +337,7 @@ class TestATake(unittest.TestCase):
         )
         return run, ref, n
 
-    def test_held_against_its_anchors(self) -> None:
+    def test_beside_its_anchors_with_what_moved_in_the_take(self) -> None:
         run, ref, n = self._take()
         result = checks.compare_take(run, "take", frames.read_timeline(ref), [compare.parse_key("case=red")], ref)
         self.assertEqual(
@@ -338,26 +345,47 @@ class TestATake(unittest.TestCase):
             [0, n - 1],
             "the first and last anchors meet the first and last frames",
         )
-        motion = result["motion"]["case"]
-        self.assertTrue(motion["photo"]["moved"] and motion["sim"]["moved"])
-        self.assertAlmostEqual(motion["photo"]["dx"], 30.0, delta=1.0)
-        self.assertAlmostEqual(motion["sim"]["dx"], 32.0, delta=1.0)
-        self.assertTrue(any("moved in both" in line for line in result["lines"]))
-        self.assertGreater(result["score"], 0.5)
+        self.assertEqual(result["moved"]["case"], {"ended_mm": 4.0 * (n - 1), "farthest_mm": 4.0 * (n - 1)})
+        self.assertIn(f"case went {4 * (n - 1):.0f} mm", result["lines"][-1])
+        self.assertFalse(any("did what the clip did" in line for line in result["lines"]), "no verdict")
         strip = checks.write_strip(run / "cmp_001.png", result["tiles"], tile_width=128)
         self.assertTrue(Path(strip).exists())
-        self.assertEqual(checks.motion_summary(result["motion"]), "1 of 1 did what the clip did")
+        unkeyed = checks.compare_take(run, "take", frames.read_timeline(ref), [], ref)
+        self.assertEqual(len(unkeyed["tiles"]), 2, "no key needed: the strip is the pictures")
 
-    def test_verdict_names_what_differed(self) -> None:
-        motion = {
-            "lid": {"photo": {"dx": 40.0, "dy": 0.0, "moved": True}, "sim": {"dx": 1.0, "dy": 0.0, "moved": False}},
-            "socket": {"photo": {"dx": 30.0, "dy": 5.0, "moved": True}, "sim": {"dx": 28.0, "dy": 4.0, "moved": True}},
-            "bar": {"photo": None, "sim": {"dx": 0.0, "dy": 0.0, "moved": False}},
-        }
-        self.assertEqual(
-            checks.motion_summary(motion),
-            "1 of 3 did what the clip did; lid stayed (clip moved); not found at both ends: bar",
-        )
+    def test_a_key_turning_in_a_case_whose_base_stays_is_seen(self) -> None:
+        frames_ = [
+            {"positions": {"case": [0.0, 0.0, 0.0]}, "parts": {"case": [[0.0, 0.0, 0.0], [0.05, 0.0, 0.0]]}},
+            {"positions": {"case": [0.0, 0.0, 0.0]}, "parts": {"case": [[0.0, 0.0, 0.0], [0.0, 0.05, 0.0]]}},
+        ]
+        self.assertAlmostEqual(checks.take_motion(frames_)["case"]["farthest_mm"], 70.7, delta=0.1)
+
+    def test_an_anchor_pinned_past_the_end_is_said(self) -> None:
+        run, ref, n = self._take()
+        line = frames.read_timeline(ref)
+        line["anchors"][1]["sim_step"] = 10_000
+        result = checks.compare_take(run, "take", line, [], ref)
+        self.assertTrue(any("pinned past the take's end" in x for x in result["lines"]))
+        self.assertEqual(result["anchors"][1]["frame"], n - 1)
+
+    def test_a_part_that_swung_back_does_not_hide_one_that_stayed_moved(self) -> None:
+        swing = [[0.0, 0.0, 0.0], [0.1, 0.0, 0.0], [0.0, 0.0, 0.0]]  # the lid went 100 mm and came back
+        slide = [[0.0, 0.0, 0.0], [0.0, 0.07, 0.0], [0.0, 0.07, 0.0]]  # the base went 70 mm and stayed
+        frames_ = [{"positions": {"case": [0, 0, 0]}, "parts": {"case": [swing[i], slide[i]]}} for i in range(3)]
+        self.assertEqual(checks.take_motion(frames_)["case"], {"ended_mm": 70.0, "farthest_mm": 100.0})
+
+    def test_a_deformable_with_no_position_is_read_off_its_particles(self) -> None:
+        frames_ = [
+            {"positions": {}, "parts": {"rope": [[0, 0, 0], [0.1, 0, 0]]}},
+            {"positions": {}, "parts": {"rope": [[0, 0, 0.03], [0.1, 0, 0]]}},
+        ]
+        self.assertEqual(checks.take_motion(frames_)["rope"]["farthest_mm"], 30.0)
+
+    def test_a_lid_that_opened_and_shut_went_somewhere(self) -> None:
+        track = [{"positions": {"lid": [0.0, 0.0, z]}} for z in (0.0, 0.05, 0.12, 0.05, 0.0)]
+        moved = checks.take_motion(track)
+        self.assertEqual(moved["lid"], {"ended_mm": 0.0, "farthest_mm": 120.0})
+        self.assertEqual(checks.motion_line(moved), "in the take: lid went 120 mm and ended 0 mm from its start")
 
 
 class TestNumbering(unittest.TestCase):
@@ -372,6 +400,17 @@ class TestNumbering(unittest.TestCase):
             self.assertEqual(checks.next_number(run, "cmp"), 5, "after the highest compare on disk")
             self.assertEqual(checks.next_number(run, "snap"), 3, "snapshots are counted apart")
             self.assertEqual(checks.next_number(run, "cmp", seen=7), 8, "and never below what this process wrote")
+
+
+def _mask_png(tmp: Path) -> Path:
+    """The photo's case as another tool would draw it: white on black, at the photo's size."""
+    from PIL import Image
+
+    photo = _photo()
+    mask = (photo[..., 0] > 180) & (photo[..., 1] < 90)
+    path = tmp / "case_mask.png"
+    Image.fromarray(mask.astype(np.uint8) * 255).save(path)
+    return path
 
 
 if __name__ == "__main__":

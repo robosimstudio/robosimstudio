@@ -83,7 +83,7 @@ SERVE_FLAGS = ("hold", "no_watch", "share", "dark", "hide_scenery", "camera_view
 """``up``'s switches that are the server's, spelled as argparse attributes."""
 CATALOGS = ("robots", "grippers", "cells", "assets")
 """What ``catalog`` can list; ``assets`` runs the registries' discovery, which takes seconds."""
-VERBOSE = ("readings", "anchors", "entries", "checks", "motion", "objects", "drift_mm")
+VERBOSE = ("readings", "anchors", "entries", "checks", "moved", "objects", "drift_mm")
 """Reply fields printed only under ``--json``: the raw numbers behind a ``report``."""
 
 
@@ -187,12 +187,13 @@ def build_parser() -> argparse.ArgumentParser:
         default=[],
         metavar="NAME=HOW",
         help="how to find a thing in the photo: case=red, case=#d01a10, socket=@1240,410 (a pixel of the photo "
-        "you looked at), case=red@980,640; repeatable",
+        "you looked at), case=red@980,640, gasket=mask:ref/gasket.png (not black = the thing); repeatable. "
+        "Optional: without keys, compare still writes the pair and the look sheet",
     )
     cmp = sub.add_parser(
         "compare",
         parents=[common, keyed],
-        help="the scene against a photo, in numbers: per thing and overall",
+        help="the scene beside a photo: the pair and a look sheet, and per keyed thing its size, place and overlap",
     )
     cmp.add_argument(
         "--ref",
@@ -205,7 +206,7 @@ def build_parser() -> argparse.ArgumentParser:
     cmp.add_argument(
         "--take",
         default="",
-        help="a take recorded with `eval --record NAME`: hold it against the clip's timeline",
+        help="a take recorded with --record: the clip's anchors above the take's frames, and what moved in the take",
     )
     cmp.add_argument(
         "--timeline",
@@ -252,7 +253,8 @@ def build_parser() -> argparse.ArgumentParser:
     lg = sub.add_parser(
         "log",
         parents=[common],
-        help="every snapshot, compare and check so far, with its score and the scene.py it measured",
+        help="every compare, check, take and snapshot --note so far, with what it left (PASS/FAIL, the picture) "
+        "and the scene.py it measured",
     )
     lg.add_argument("--last", type=int, default=0, help="only the last N")
     run = sub.add_parser("run", parents=[common], help="step N control steps, then hold")
@@ -354,6 +356,16 @@ def _absolute(path: str) -> str:
     return str(Path(path).expanduser().resolve()) if path else ""
 
 
+def _keys(keys: list[str]) -> list[str]:
+    """The keys as given, a mask key's file made absolute: the page reads it from its own directory."""
+    out = []
+    for key in keys:
+        name, sep, how = key.partition("=")
+        masked = sep and how.strip().startswith("mask:")
+        out.append(f"{name}=mask:{_absolute(how.strip()[len('mask:') :].strip())}" if masked else key)
+    return out
+
+
 def build_request(args: argparse.Namespace, parser: argparse.ArgumentParser) -> tuple[dict, float]:
     """The JSON object a parsed command line sends, and how long to wait for its answer."""
     req: dict = {"cmd": args.cmd}
@@ -372,7 +384,7 @@ def build_request(args: argparse.Namespace, parser: argparse.ArgumentParser) -> 
         req.update(
             ref=_absolute(args.ref),
             camera=args.camera,
-            keys=list(args.key),
+            keys=_keys(list(args.key)),
             size=args.size,
             out=_absolute(args.out),
             note=args.note,
@@ -382,7 +394,7 @@ def build_request(args: argparse.Namespace, parser: argparse.ArgumentParser) -> 
     elif args.cmd == "check":
         req.update(
             camera=args.camera,
-            keys=list(args.key),
+            keys=_keys(list(args.key)),
             objects=list(args.objects),
             steps=args.steps,
             settle_mm=args.settle_mm,

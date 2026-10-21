@@ -34,8 +34,8 @@ def _render(w: int = 640, h: int = 360) -> tuple[np.ndarray, np.ndarray, dict[in
     return rgb, seg, {1: "table", 2: "case", 3: "bolt"}
 
 
-class TestScore(unittest.TestCase):
-    def test_a_thing_gone_from_the_render_lowers_the_score(self) -> None:
+class TestAMissingThing(unittest.TestCase):
+    def test_a_thing_gone_from_the_render_or_unlabelled_reads_as_not_in_the_render(self) -> None:
         from PIL import Image
 
         with tempfile.TemporaryDirectory() as tmp:
@@ -43,14 +43,13 @@ class TestScore(unittest.TestCase):
             Image.fromarray(_photo()).save(path)
             keys = [compare.parse_key("case=red"), compare.parse_key("bolt=@410,160")]
             rgb, seg, names = _render()
-            both = checks.compare_still(rgb, seg, names, path, keys)
             gone = seg.copy()
             gone[gone == 2] = 0  # the case off camera
             without = checks.compare_still(rgb, gone, names, path, keys)
             self.assertIsNone(without["objects"]["case"]["iou"])
-            self.assertLess(without["score"], both["score"], "a missing thing counts as no overlap")
+            self.assertIn("case: not in the render", without["lines"][0])
             unlabelled = checks.compare_still(rgb, seg, {1: "table", 3: "bolt"}, path, keys)
-            self.assertLess(unlabelled["score"], both["score"], "so does a name the scene has no label for")
+            self.assertIsNone(unlabelled["objects"]["case"]["sim"], "so does a name the scene has no label for")
 
 
 class TestTake(unittest.TestCase):
@@ -104,18 +103,18 @@ class TestTake(unittest.TestCase):
         )
         return run, ref
 
-    def test_a_thing_missing_from_the_take_scores_zero(self) -> None:
+    def test_a_thing_missing_from_the_take_is_still_drawn(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             run, ref = self._take(Path(tmp), {"1": "table", "3": "other"})
             result = checks.compare_take(run, "take", frames.read_timeline(ref), [compare.parse_key("case=red")], ref)
-            self.assertEqual(result["score"], 0.0)
-            self.assertTrue(all(a["objects"]["case"]["photo"] is not None for a in result["anchors"]))
+            self.assertEqual(
+                len(result["anchors"]), len(result["tiles"]), "the strip is drawn, the case outlined in the clip alone"
+            )
 
     def test_the_strip_makes_its_folder(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             run, ref = self._take(Path(tmp), {"1": "table", "2": "case"})
             result = checks.compare_take(run, "take", frames.read_timeline(ref), [compare.parse_key("case=red")], ref)
-            self.assertGreater(result["score"], 0.5)
             strip = checks.write_strip(Path(tmp) / "new" / "dir" / "x.png", result["tiles"], tile_width=64)
             self.assertTrue(Path(strip).exists())
 
