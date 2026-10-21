@@ -1,6 +1,7 @@
 # SPDX-License-Identifier: Apache-2.0
 """Drive the live page from a shell (standard library only, so it starts in milliseconds).
 
+    ./ctl new lid --ref clip.mov       a twin's own folder, twins/lid/: scene.py, ref/, REPORT.md, its ctl
     ./ctl up                           start a page on scene.py, detached; prints its URL
     ./ctl status                       what is loaded, where things are, the last error
     ./ctl reload                       rebuild scene.py now (saving the file does this too)
@@ -37,6 +38,9 @@ from __future__ import annotations
 
 import argparse
 import json
+import os
+import re
+import shutil
 import subprocess
 import sys
 import time
@@ -123,7 +127,9 @@ def build_parser() -> argparse.ArgumentParser:
         help="start a page on a scene file, detached, and print its URL",
     )
     up.add_argument("--port", type=int, default=8080)
-    up.add_argument("--scene", default="scene.py", help="the file to execute and watch")
+    up.add_argument(
+        "--scene", default="", help="the file to execute and watch (default: scene.py beside the run directory)"
+    )
     up.add_argument("--share", action="store_true", help="ask viser for a public URL as well")
     # Kept, not documented: the page has one shape, and these are the knobs a
     # person who has read the server's source may turn.
@@ -143,6 +149,16 @@ def build_parser() -> argparse.ArgumentParser:
         default="",
         help="where the server's output goes (default <run-dir>/serve.log)",
     )
+    new = sub.add_parser(
+        "new",
+        parents=[common],
+        help="make a twin its own folder, twins/NAME beside the run directory: scene.py, ref/, REPORT.md, its ctl",
+    )
+    new.add_argument("name", help="the folder's name: letters, digits, - and _")
+    new.add_argument(
+        "--ref", action="append", default=[], metavar="FILE", help="a clip or photo to copy into ref/; repeatable"
+    )
+    new.add_argument("--dir", default="", help="where to make it instead of twins/NAME")
     st = sub.add_parser(
         "status",
         parents=[common],
@@ -788,11 +804,81 @@ def show(reply: dict, as_json: bool) -> int:
     return 0
 
 
+TWIN_SCENE = '''# SPDX-License-Identifier: Apache-2.0
+"""{name}: a real-to-sim twin, rebuilt on the live page on every save. The method: examples/live/AGENTS.md."""
+
+import robosimstudio as rss
+
+scene = rss.Scene(cell="bench_075", name="{name}")
+scene.add(rss.robot("yam_bimanual"))
+'''
+
+TWIN_REPORT = """# {name}
+
+## What still differs from the reference
+
+## Shortcuts and departures from the reference
+
+## Readings judged
+
+## Assumptions
+"""
+
+TWIN_CTL = """#!/usr/bin/env bash
+# This twin's command line: the live page's ctl with run/ pinned here, so `./ctl up` serves the scene.py beside it.
+here="$(cd "$(dirname "$0")" && pwd)"
+exec {target} --run-dir "$here/run" "$@"
+"""
+
+
+def cmd_new(args: argparse.Namespace) -> int:
+    """A twin's own folder: everything it needs in one place, which is what the person zips and hands on."""
+    if not re.fullmatch(r"[A-Za-z0-9][A-Za-z0-9_-]*", args.name):
+        print(f"ctl: {args.name!r} is not a folder name: letters, digits, - and _", file=sys.stderr)
+        return 2
+    live = Path(os.path.abspath(args.run_dir)).parent
+    folder = Path(args.dir).resolve() if args.dir else live / "twins" / args.name
+    if folder.exists():
+        print(f"ctl: {folder} is there already; work in it, or pick another name", file=sys.stderr)
+        return 1
+    refs = [Path(r) for r in args.ref]
+    missing = [str(r) for r in refs if not r.is_file()]
+    if missing:
+        print(f"ctl: no file at {', '.join(missing)}", file=sys.stderr)
+        return 2
+    (folder / "ref").mkdir(parents=True)
+    (folder / "scene.py").write_text(TWIN_SCENE.format(name=args.name))
+    (folder / "REPORT.md").write_text(TWIN_REPORT.format(name=args.name))
+    for ref in refs:
+        shutil.copy2(ref, folder / "ref" / ref.name)
+    shim = live / "ctl"
+    if shim.is_file() and folder.is_relative_to(live):  # the checkout's, and the folder moves with the checkout
+        target = f'"$here/{os.path.relpath(shim, folder)}"'
+    elif shim.is_file():
+        target = f'"{shim}"'
+    else:
+        target = f'"{sys.executable}" -m robosimstudio_real2sim_agent'
+    ctl_path = folder / "ctl"
+    ctl_path.write_text(TWIN_CTL.format(target=target))
+    ctl_path.chmod(0o755)
+    reply = {
+        "ok": True,
+        "twin": str(folder),
+        "made": ["scene.py", "REPORT.md", "ctl", *(f"ref/{r.name}" for r in refs)],
+        "next": f"cd {folder} && ./ctl up",
+    }
+    return show(reply, args.json)
+
+
 def main(argv=None) -> int:
     parser = build_parser()
     args = parser.parse_args(argv)
     sock = socket_path(args.run_dir, args.sock)
+    if args.cmd == "new":
+        return cmd_new(args)
     if args.cmd == "up":
+        # the scene beside the run directory: `examples/live/ctl` pins run/ beside its scene.py, a twin's ctl beside its own
+        args.scene = args.scene or str(Path(os.path.abspath(args.run_dir)).parent / "scene.py")
         return cmd_up(args, sock)
     req, timeout = build_request(args, parser)
     waiting = getattr(args, "wait", False)

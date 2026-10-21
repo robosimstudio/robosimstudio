@@ -13,6 +13,7 @@ dist/
 # Run output: episodes, videos and snapshots are evidence, not source.
 outputs/
 examples/live/run/
+examples/live/twins/
 
 # A stripped MJCF is written beside its source and removed afterwards; a crash
 # in between leaks one.

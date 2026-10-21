@@ -1,20 +1,7 @@
 #!/usr/bin/env bash
-# Runs robosimstudio_real2sim_agent with run/ pinned here; `up` serves the scene.py beside this script
-# unless --scene names another, so `examples/live/ctl up` from the repository root works as `./ctl up` here.
-# Python: the checkout's .venv, else $PYTHON, else python3.
-here="$(dirname "$0")"; py="$here/../../.venv/bin/python"; [ -x "$py" ] || py="${PYTHON:-python3}"
-argv=("$@"); i=0
-while [ "$i" -lt "${#argv[@]}" ]; do
-  case "${argv[$i]}" in
-    --run-dir|--sock) i=$((i + 2)) ;;
-    -*) i=$((i + 1)) ;;
-    *) break ;;
-  esac
-done
-if [ "${argv[$i]:-}" = up ]; then
-  case " $* " in
-    *" --scene "*|*" --scene="*) ;;
-    *) argv=("${argv[@]:0:i+1}" --scene "$here/scene.py" "${argv[@]:i+1}") ;;
-  esac
-fi
-exec "$py" -m robosimstudio_real2sim_agent --run-dir "$here/run" "${argv[@]}"
+# Runs robosimstudio_real2sim_agent with run/ pinned here, so `up` serves the scene.py beside this script and
+# `examples/live/ctl up` from the repository root works as `./ctl up` here. A --run-dir given after this one wins,
+# which is how a twin's own ctl (`./ctl new`) pins run/ in its folder. Python: the checkout's .venv, else $PYTHON,
+# else python3.
+here="$(cd "$(dirname "$0")" && pwd)"; py="$here/../../.venv/bin/python"; [ -x "$py" ] || py="${PYTHON:-python3}"
+exec "$py" -m robosimstudio_real2sim_agent --run-dir "$here/run" "$@"

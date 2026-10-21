@@ -16,8 +16,17 @@ than guessing a constructor or a name.
 
 ## Working the page
 
-- `./ctl status --wait` first: a page is up, or `./ctl up` starts one (tell the
-  user its URL). Picking up from an earlier session: `./ctl log`, then open the last
+- **The twin is its own folder.** Before the first edit, from this folder:
+  `./ctl new <name> --ref <clip or photo> [--ref ...]` makes `twins/<name>/`
+  with a starter `scene.py`, the references copied into `ref/`, an empty
+  `REPORT.md` and the folder's own `ctl`. Work from it: `cd twins/<name>`, and
+  every `./ctl` below is that folder's, its readings landing in its `run/`.
+  Everything the twin needs goes in that folder -- `scene.py`, its helper
+  modules, `assets/`, `ref/` -- and the report in its `REPORT.md`. Nothing goes
+  in this folder's own files, the library, `tests/`, the repository root or
+  `/tmp`: the twin's folder is what the person zips and hands on.
+- `./ctl status --wait` first: a page is up, or `./ctl up` starts one on the
+  folder's `scene.py` (tell the user its URL). Picking up from an earlier session: `./ctl log`, then open the last
   look sheet it names, before the next edit.
 - Open every picture a command writes with your image viewer (`view_image`
   in Codex): the pair, the look sheet, the strip. The numbers come second.
@@ -32,9 +41,8 @@ than guessing a constructor or a name.
 - Pick the GPU with `BUILD = {"device": "cuda:N"}` in `scene.py` or
   `ROBOSIMSTUDIO_DEVICE=cuda:N ./ctl up`, never `CUDA_VISIBLE_DEVICES`: the
   path tracer then finds no GPU and the first picture hangs.
-- Helpers and assets go beside `scene.py`; this folder is the twin you hand
-  over. A twin is not a library change: the test tiers and `tests/` are not
-  for it.
+- A twin is not a library change: the test tiers and `tests/` are not for
+  it.
 
 ## The tools
 
@@ -110,6 +118,9 @@ on every twin so far:
 
 ## The report
 
+In the twin's `REPORT.md`, under its four headings, and in short in your last
+message:
+
 - What still differs from the clip: things, background, light, motion.
 - Every shortcut that remains (anything the contact rule above forbids, a
   scripted motion standing in for physics) and every way the scene or the
@@ -129,5 +140,5 @@ How the page behaves is in REFERENCE (*How it works*, *The contract for
 - A script from `examples/` pastes into `scene.py` unchanged.
 - What the person drags on the page is what your next reading sees; if the
   scene looks moved, `./ctl reset` before judging it.
-- `scene.py` and the files beside it are your result: leave them in the
-  state you report. `run/` is not committed.
+- The twin's folder is your result: leave it in the state you report.
+  `twins/` and `run/` are not committed.

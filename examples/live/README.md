@@ -17,18 +17,25 @@ What is here:
   `pip install "robosimstudio @ git+https://github.com/robosimstudio/robosimstudio"`.
 - `run/`: made on first use and not committed. It holds the socket, the
   server's log and every snapshot.
+- `twins/`: one folder per twin, made by `./ctl new`, and not committed. Each
+  is a twin on its own -- its `scene.py`, helpers, assets, `ref/`, `run/`,
+  `REPORT.md` and its own `ctl` -- so zip one to hand it on.
 
 ## Start
 
 ```bash
 cd examples/live
+./ctl new lid --ref ../../../IMG_8983.MOV   # the twin's own folder, twins/lid/, the clip copied into its ref/
+cd twins/lid
 ./ctl up                                    # the page; prints its URL, http://localhost:8080 or the next free port (--share adds a public URL)
 codex -a on-request -s workspace-write      # Codex; the sandbox may write here and reach the socket
 claude --permission-mode acceptEdits        # or Claude Code; edits go through without a prompt
 ```
 
-Start the agent in this folder: Codex reads `AGENTS.md` here by itself, on
-top of the repository's, and Claude Code reads it through `CLAUDE.md`. Where Codex's sandbox cannot
+Start the agent in the twin's folder: Codex reads `examples/live/AGENTS.md` by
+itself on the way down from the repository, and Claude Code reads it through
+`CLAUDE.md`. An agent started anywhere else is pointed to it by the
+repository's `AGENTS.md`, and makes the folder itself. Where Codex's sandbox cannot
 start (`bwrap: loopback: Failed RTM_NEWADDR` on some hosts), run it in a
 throwaway clone or worktree of the repository with its sandbox off, never in a
 checkout you care about.
@@ -51,10 +58,10 @@ A live page is running: it rebuilds scene.py on every save. Use ./ctl to inspect
 
 ## The prompt, with a clip
 
-Drop the clip beside the checkout (not in it) and say:
+With the clip in the twin's `ref/` (`./ctl new <name> --ref <clip>`), say:
 
 ```
-../../../<clip>.mov is a real clip of a person doing one thing at a table.
+ref/<clip>.mov is a real clip of a person doing one thing at a table.
 Rebuild it in scene.py with this library's core API: the table, two YAM
 arms where the person sat, what is on the table, a camera where the phone
 was, what stands behind the table, and then the arms doing what the person
@@ -67,7 +74,7 @@ before each edit.
 
 ## The prompt, with your own photo
 
-Make a `ref/` folder here, drop your photo into `ref/`, and say:
+With the photo in the twin's `ref/` (`./ctl new <name> --ref <photo>`), say:
 
 ```
 ref/<your photo> is a real photo of a robot bench. Rebuild that scene in
@@ -90,9 +97,9 @@ edit.
 
 ## Where things go
 
-Everything the page writes lands in `run/` (snapshots, comparisons, takes,
-`log.jsonl`, `serve.log`); clip stills and `timeline.json` go in `ref/`
-([`REFERENCE.md`](REFERENCE.md#ctl) has the full list).
-
-The result is `scene.py` itself. Copy it aside to keep it;
-`git checkout examples/live/scene.py` puts the starter back.
+A twin is its folder under `twins/`: its `scene.py` and the helpers and
+assets beside it, `ref/` (the references, the clip's stills and
+`timeline.json`), `run/` (snapshots, comparisons, takes, `log.jsonl`,
+`serve.log`; [`REFERENCE.md`](REFERENCE.md#ctl) has the full list) and the
+agent's `REPORT.md`. Zip the folder to hand it on. `scene.py` here is the
+starter for trying the page without a twin.

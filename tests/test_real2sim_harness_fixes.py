@@ -10,6 +10,7 @@ not see a rope sink, and the command that timed out with no word of why.
 from __future__ import annotations
 
 import json
+import os
 import sys
 import tempfile
 import threading
@@ -682,6 +683,43 @@ class CtlWaits(unittest.TestCase):
         self.assertEqual(code, 0)
         timeline = json.loads((self.tmp / "ref" / "timeline.json").read_text())
         self.assertEqual([a.get("label", "") for a in timeline["anchors"]], ["start", ""])
+
+
+class TwinFolder(unittest.TestCase):
+    def setUp(self) -> None:
+        self.live = Path(tempfile.mkdtemp())
+        self.run_dir = self.live / "run"
+        self.clip = self.live / "clip.mov"
+        self.clip.write_bytes(b"not really a clip")
+
+    def test_new_makes_the_folder_with_its_own_ctl(self) -> None:
+        self.assertEqual(ctl.main(["--run-dir", str(self.run_dir), "new", "lid", "--ref", str(self.clip)]), 0)
+        twin = self.live / "twins" / "lid"
+        self.assertEqual(sorted(p.name for p in twin.iterdir()), ["REPORT.md", "ctl", "ref", "scene.py"])
+        self.assertEqual((twin / "ref" / "clip.mov").read_bytes(), b"not really a clip")
+        self.assertTrue(os.access(twin / "ctl", os.X_OK))
+        self.assertIn("## Shortcuts and departures from the reference", (twin / "REPORT.md").read_text())
+        compile((twin / "scene.py").read_text(), "scene.py", "exec")
+        self.assertEqual(
+            ctl.main(["--run-dir", str(self.run_dir), "new", "lid"]), 1, "an existing twin is not overwritten"
+        )
+        self.assertEqual(ctl.main(["--run-dir", str(self.run_dir), "new", "../escape"]), 2)
+
+    def test_its_ctl_pins_run_in_the_folder(self) -> None:
+        import subprocess
+
+        twin = self.live / "elsewhere"
+        ctl.main(["--run-dir", str(self.run_dir), "new", "lid", "--dir", str(twin)])
+        done = subprocess.run([str(twin / "ctl"), "status"], capture_output=True, text=True, timeout=60, check=False)
+        self.assertEqual(done.returncode, 2)
+        self.assertIn(str(twin / "run" / "ctl.sock"), done.stderr)
+
+    def test_up_serves_the_scene_beside_its_run_directory(self) -> None:
+        printed: list[str] = []
+        with mock.patch("builtins.print", lambda *a, **k: printed.append(" ".join(map(str, a)))):
+            code = ctl.main(["--run-dir", str(self.run_dir), "up", "--timeout", "1"])
+        self.assertEqual(code, 2)
+        self.assertIn(str(self.live / "scene.py"), printed[0])
 
 
 if __name__ == "__main__":

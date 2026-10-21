@@ -42,7 +42,7 @@ do not run the tiers for it, and do not add its tests to `tests/`.
 - `uv run --extra gap python scripts/testrun.py --tier medium`: needs the GPU;
   builds and steps scenes.
 - `uvx ruff@0.16.1 check . && uvx ruff@0.16.1 format . --check`.
-- `examples/live/run/` is not committed. A commit message is a lowercase
+- `examples/live/run/` and `examples/live/twins/` are not committed. A commit message is a lowercase
   `area:` prefix and one declarative sentence
   (`studio: the room, and lights that match the render`).
 
@@ -50,8 +50,9 @@ do not run the tiers for it, and do not add its tests to `tests/`.
 
 When asked to rebuild a real scene from a photo or video, match a reference,
 twin a real cell, or build a scene interactively, work on the live page in
-[`examples/live/`](examples/live/README.md): edit its `scene.py`, and the open
-page rebuilds it on every save. **Read
+[`examples/live/`](examples/live/README.md), in a folder of the twin's own that
+`./ctl new` makes there: edit its `scene.py`, and the open page rebuilds it on
+every save. **Read
 [`examples/live/AGENTS.md`](examples/live/AGENTS.md) whole before the first
 edit**: it is the method -- how to work the page, what a finished twin is
 (the robot moves things only through its fingers' contact), and what the report

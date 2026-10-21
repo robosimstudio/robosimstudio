@@ -7,7 +7,11 @@ prompts in [`README.md`](README.md).
 ## How it works
 
 `./ctl up` serves `scene.py` in one process and one browser tab, and rebuilds
-the scene every time the file is saved.
+the scene every time the file is saved. A twin lives in a folder of its own,
+made by `./ctl new` (`twins/<name>/`: `scene.py`, `ref/`, `REPORT.md`, and a
+`ctl` that pins `run/` in the folder); from there `./ctl up` serves that
+folder's `scene.py`, and everything below -- `ref/`, `run/`, the helpers --
+is that folder's. `twins/` is not committed.
 
 - The tab never reloads, and the camera stays where you left it.
 - A file that does not build leaves the previous scene up. `./ctl status`
@@ -60,7 +64,8 @@ scene.add(rss.robot("yam_i2rt"))  # a scene needs something that moves before it
 
 | Command | Does |
 | --- | --- |
-| `up [--port N] [--scene F] [--share]` | Start a server on the file, wait for the page, and print its URL (the next free port if N is busy). With a page already up, names it; refuses if that page is on another scene file or lacks a requested `--share`. |
+| `new NAME [--ref FILE ...] [--dir D]` | Make a twin's folder, `twins/NAME/` beside the run directory (or `D`): a starter `scene.py`, the files copied into `ref/`, `REPORT.md` with its four headings, and the folder's own `ctl`. Needs no page. |
+| `up [--port N] [--scene F] [--share]` | Start a server on the file (default: the `scene.py` beside the run directory), wait for the page, and print its URL (the next free port if N is busy). With a page already up, names it; refuses if that page is on another scene file or lacks a requested `--share`. |
 | `status [--wait]` | What is loaded, the names in it and where they are, the last error, the page's address, how the last routine ended (`last_script`), and `speed`: simulated seconds per wall second. While the page is building or rendering it answers at once with `busy` and for how long. `--wait` returns once the page is free and every save is built. |
 | `reload` | Rebuild now. Saving the file does this too. |
 | `snapshot [--camera N] [--beside REF] [--eye x,y,z --look-at x,y,z] [--size WxH] [--note TEXT]` | A path-traced PNG of the current state, with a reference picture beside it. A snapshot draws the room, the mat and the textures; the page draws only the bench and what you added. |
@@ -81,8 +86,8 @@ scene.add(rss.robot("yam_i2rt"))  # a scene needs something that moves before it
 
 `--json` after any command prints the reply raw.
 
-Output files (numbering continues from the files already in `run/`, across
-restarts):
+Output files, in the `run/` and `ref/` beside the scene file (numbering
+continues from the files already in `run/`, across restarts):
 
 - `run/snap_NNN.png`; with `--beside`, also `run/snap_NNN_vs_ref.png`
 - `run/cmp_NNN_beside.png`, `run/cmp_NNN_look.png`, `run/cmp_NNN.json`; for a
