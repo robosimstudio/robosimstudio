@@ -29,7 +29,42 @@ import pkgutil
 from collections.abc import Callable, Iterator
 from typing import Any
 
-__all__ = ["Registry"]
+__all__ = ["MISSING", "Registry", "unwatch", "watch"]
+
+MISSING: Any = object()
+"""What :func:`watch` is told a name held before it was first registered."""
+
+Watcher = Callable[["Registry", str, Any, str, Any, str], None]
+"""``fn(registry, name, value, origin, previous, previous_origin)``."""
+
+_WATCHERS: list[Watcher] = []
+
+
+def watch(fn: Watcher) -> Watcher:
+    """Call ``fn(registry, name, value, origin, previous, previous_origin)`` after every write to any registry.
+
+    ``value`` and ``origin`` are what the name holds now; ``previous`` is
+    :data:`MISSING` for a name registered for the first time, and the value it
+    replaced for a :meth:`Registry.replace`. A redundant copy
+    that :meth:`Registry.register` hands back the first for writes nothing and
+    is not reported. For a process that runs one file over and over -- the live
+    page, rebuilding ``scene.py`` on every save -- and must take back what the
+    last run registered before the next one registers it again, edited.
+    """
+    _WATCHERS.append(fn)
+    return fn
+
+
+def unwatch(fn: Watcher) -> None:
+    """Stop calling ``fn``; a function not watching is ignored."""
+    if fn in _WATCHERS:
+        _WATCHERS.remove(fn)
+
+
+def _notify(registry: Registry, name: str, previous: Any, previous_origin: str) -> None:
+    value, origin = registry._items[name], registry._origins.get(name, "")
+    for fn in list(_WATCHERS):
+        fn(registry, name, value, origin, previous, previous_origin)
 
 
 class Registry[T]:
@@ -96,6 +131,8 @@ class Registry[T]:
             )
         self._items[name] = value
         self._origins[name] = origin
+        if _WATCHERS:
+            _notify(self, name, MISSING, "")
         return value
 
     def replace(self, name: str, value: T, *, origin: str = "") -> T:
@@ -109,11 +146,30 @@ class Registry[T]:
         """
         if name not in self._items:
             raise KeyError(f"{self.kind} {name!r} is not registered, so there is nothing to replace")
+        previous, previous_origin = self._items[name], self._origins.get(name, "")
         self._items[name] = value
         if origin:
             first = self._origins.get(name, "")
             self._origins[name] = f"{first} + {origin}" if first else origin
+        if _WATCHERS:
+            _notify(self, name, previous, previous_origin)
         return value
+
+    def forget(self, name: str) -> None:
+        """Take a name out, as if it had never been registered; a name not there is ignored.
+
+        Not for content: a lookup that worked a moment ago failing is a worse
+        bug than any duplicate. For the one process that re-runs a file which
+        registers things -- the live page -- to take back what the last run
+        put in before the next run puts in the edited version (see :func:`watch`).
+        """
+        self._items.pop(name, None)
+        self._origins.pop(name, None)
+
+    def restore(self, name: str, value: T, origin: str = "") -> None:
+        """Put a value back under a name, with no duplicate check: the inverse of a :meth:`replace` taken back."""
+        self._items[name] = value
+        self._origins[name] = origin
 
     @property
     def discovers(self) -> tuple[Callable[[], None], ...]:

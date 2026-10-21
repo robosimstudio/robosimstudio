@@ -19,11 +19,12 @@ on for video, so this adds nothing to install.
 from __future__ import annotations
 
 import json
+import math
 import subprocess
 from pathlib import Path
 from typing import Any
 
-__all__ = ["TIMELINE", "contact_sheet", "extract", "parse_times", "probe", "read_timeline", "write_timeline"]
+__all__ = ["TIMELINE", "contact_sheet", "cut", "extract", "parse_times", "probe", "read_timeline", "write_timeline"]
 
 TIMELINE = "timeline.json"
 
@@ -173,3 +174,58 @@ def write_timeline(ref_dir: str | Path, meta: dict[str, Any], anchors: list[dict
     path = ref_dir / TIMELINE
     path.write_text(json.dumps(timeline, indent=1) + "\n")
     return path
+
+
+def cut(
+    clip: str | Path,
+    *,
+    at: str = "0,end",
+    every: float = 0.0,
+    out_dir: str | Path = "ref",
+    width: int = 0,
+) -> dict:
+    """Stills out of the clip at the times asked, a contact sheet, and the timeline they anchor."""
+    clip_path = Path(clip)
+    if not clip_path.is_file():
+        return {"ok": False, "error": f"no clip at {clip}"}
+    out_dir = Path(out_dir)
+    meta = probe(clip_path)
+    if meta["duration"] <= 0:
+        # ffmpeg read "Duration: N/A" (a raw .h264 stream, some webm): "end" would be 0 and no time can be sought
+        return {
+            "ok": False,
+            "error": f"{clip} has no duration ffmpeg can read; re-mux it (ffmpeg -i {clip} -c copy out.mp4)",
+        }
+    times = parse_times(at, meta["duration"] - 1.0 / (meta["fps"] or 30.0))  # "end" is the last frame
+    # a still is named to the hundredth, so the anchor is that hundredth: two times inside one name are one moment
+    floored: dict[float, tuple[str, str]] = {}  # t -> (label, the time as asked)
+    for t, label in times:
+        moment = math.floor(t * 100 + 1e-6) / 100
+        if moment not in floored:
+            floored[moment] = (label, f"{t:g}")
+            continue
+        kept, asked = floored[moment]
+        if label and kept and label != kept:
+            return {
+                "ok": False,
+                "error": f"{asked}:{kept} and {t:g}:{label} fall in one still ({_stem(moment)}.jpg); "
+                "mark them at least 0.01 s apart",
+            }
+        floored[moment] = (kept or label, asked)
+    times = [(t, label) for t, (label, _) in floored.items()]
+    stills_cut = extract(clip_path, [t for t, _ in times], out_dir, width=width)
+    anchors = [{"t": t, "file": p.name, "label": label} for (t, label), p in zip(times, stills_cut, strict=True)]
+    spacing = float(every) if every else max(0.5, round(meta["duration"] / 24.0, 1))
+    sheet, tiles = contact_sheet(clip_path, spacing, out_dir / "contact.jpg")
+    timeline = write_timeline(out_dir, meta, anchors)
+    return {
+        "ok": True,
+        "clip": meta["clip"],
+        "fps": meta["fps"],
+        "size": f"{meta['width']}x{meta['height']}",
+        "duration": meta["duration"],
+        "frames": [str(p) for p in stills_cut],
+        "contact": f"{sheet} ({tiles} tiles, every {spacing} s)",
+        "timeline": str(timeline),
+        "report": "\n".join(f"{a['t']:6.2f} s  {a['file']}  {a['label']}" for a in anchors),
+    }

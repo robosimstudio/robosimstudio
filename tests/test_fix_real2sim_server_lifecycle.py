@@ -10,6 +10,7 @@ from unittest import mock
 import numpy as np
 
 from robosimstudio_real2sim_agent import server as server_mod
+from robosimstudio_real2sim_agent.scenefile import SceneRegistrations
 from robosimstudio_real2sim_agent.server import LiveServer
 
 TIER = "fast"
@@ -18,6 +19,15 @@ TIER = "fast"
 def _bare_server() -> LiveServer:
     live = LiveServer.__new__(LiveServer)
     live.path = Path("/nonexistent/scene.py")
+    live.head_stepped, live._head_ready = False, None
+    live.build_error, live._tick_error = "", ""
+    live.busy, live.busy_since = "", 0.0
+    live._suspended_arms = []
+    live.script_meta = {}
+    live.scripts_started = 0
+    live.last_script = {}
+    live.registrations = SceneRegistrations(Path("/nonexistent"))
+    live.sim = mock.MagicMock(step_count=0)
     live.script = []
     live.recorder = None
     live.run_budget = 0

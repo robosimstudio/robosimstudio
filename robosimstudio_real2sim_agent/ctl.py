@@ -7,6 +7,8 @@
     ./ctl snapshot --beside ref.png    render a PNG of the current state, the reference beside it
     ./ctl run 120                      step the page 120 control steps, then hold
     ./ctl eval "sim['cube'].position"  read or drive the live scene
+    ./ctl play --wait                  play the scene's routine and return when it ends, with how it ended
+    ./ctl status --wait                return once a rebuild or a render under way is done
     ./ctl catalog robots cells         the names rss.robot() and Scene(cell=) accept
     ./ctl ref show ref/photo.jpg       put a picture in the page's sidebar
     ./ctl quit                         stop the server
@@ -22,6 +24,13 @@ session of its own (an agent's shell may exit at once), logging to
 ``<run-dir>/serve.log``, and prints the URL once the ready line appears;
 ``quit`` stops it. If a cold first build outlasts the wait, the server keeps
 running and the log is named.
+
+A command that outlasts its timeout does not leave the agent guessing: the
+page answers ``status`` at once even while it is busy, so the timeout says
+what it is doing and for how long. ``--wait`` on ``play``, ``eval`` and
+``status`` blocks until the routine ends or the page is free, printing the
+page's log as it goes and a line every ten seconds, so an agent whose shell
+returns only when a command does never has to poll.
 """
 
 from __future__ import annotations
@@ -51,7 +60,7 @@ __all__ = [
 
 TIMEOUTS = {
     "reload": 330.0,
-    "snapshot": 120.0,
+    "snapshot": 600.0,
     "eval": 300.0,
     "play": 300.0,
     "catalog": 120.0,
@@ -62,8 +71,13 @@ TIMEOUTS = {
 """Seconds to wait for a reply, per command; :data:`DEFAULT_TIMEOUT` for the rest.
 
 ``play`` waits as long as ``eval``: with ``--record`` both render the take's
-first frame before they answer."""
+first frame before they answer. ``snapshot`` waits as long as ``compare``: the
+first path-traced picture in a process compiles the renderer, for minutes."""
 DEFAULT_TIMEOUT = 30.0
+WAIT_LIMIT = 3600.0
+"""How long ``--wait`` waits by default [s]."""
+SAY_EVERY = 10.0
+"""Seconds between the progress lines ``--wait`` prints while nothing else is printed."""
 START_HINT = "python -m robosimstudio_real2sim_agent up    (from the directory holding scene.py)"
 SERVE_FLAGS = ("hold", "no_watch", "share", "dark", "hide_scenery", "camera_view")
 """``up``'s switches that are the server's, spelled as argparse attributes."""
@@ -129,11 +143,12 @@ def build_parser() -> argparse.ArgumentParser:
         default="",
         help="where the server's output goes (default <run-dir>/serve.log)",
     )
-    sub.add_parser(
+    st = sub.add_parser(
         "status",
         parents=[common],
-        help="what is loaded, where things are, the last error",
+        help="what is loaded, where things are, the last error; what the page is busy with, if it is",
     )
+    _wait_flags(st, "return once the page is not busy and every save has been built")
     sub.add_parser("reload", parents=[common], help="rebuild the scene file now")
     snap = sub.add_parser("snapshot", parents=[common], help="render a PNG of the current state")
     snap.add_argument(
@@ -269,6 +284,7 @@ def build_parser() -> argparse.ArgumentParser:
         default="",
         help="with --record: the camera to record through (default: the first)",
     )
+    _wait_flags(ev, "when the code returns a routine: return when it ends, saying how, its output streamed")
     cat = sub.add_parser("catalog", parents=[common], help="the names the registries know, by kind")
     cat.add_argument("kinds", nargs="*", help=f"any of {', '.join(CATALOGS)}; none means all of them")
     ref = sub.add_parser(
@@ -312,6 +328,7 @@ def build_parser() -> argparse.ArgumentParser:
     play.add_argument("--record", default="", metavar="NAME", help="film it: <run-dir>/NAME.mp4, .json, _seg.npz")
     play.add_argument("--every", type=int, default=4, help="with --record: a frame per this many control steps")
     play.add_argument("--camera", default="", help="with --record: the camera to record through")
+    _wait_flags(play, "return when the routine ends, saying how, its output streamed")
     show = sub.add_parser(
         "show", parents=[common], help="put a picture on the page for the person watching, under a label"
     )
@@ -320,6 +337,17 @@ def build_parser() -> argparse.ArgumentParser:
     show.add_argument("--clear", action="store_true", help="take every picture off the page instead")
     sub.add_parser("quit", parents=[common], help="stop the server")
     return parser
+
+
+def _wait_flags(sub: argparse.ArgumentParser, what: str) -> None:
+    sub.add_argument("--wait", action="store_true", help=what)
+    sub.add_argument(
+        "--wait-limit",
+        type=float,
+        default=WAIT_LIMIT,
+        metavar="S",
+        help=f"with --wait: give up after S seconds (default {WAIT_LIMIT:.0f})",
+    )
 
 
 def _absolute(path: str) -> str:
@@ -410,11 +438,15 @@ def wait_for_steps(sock: Path, reply: dict, steps: int) -> dict:
     start = int(reply["step"])
     target = start + int(steps)
     deadline = time.time() + 30.0 + steps / 5.0
+    busy = ""
     while time.time() < deadline:
         time.sleep(0.2)
         status = request(sock, {"cmd": "status"}, DEFAULT_TIMEOUT)
         if not status.get("ok"):
-            break
+            return status
+        busy = status.get("busy", "")
+        if busy:
+            continue  # a rebuild or a render under way: the next poll says how the run fared
         if status.get("generation", reply.get("generation")) != reply.get("generation"):
             return {"ok": False, "error": "the scene was rebuilt during the run; the run ended", "step": status["step"]}
         if status.get("resets", reply.get("resets")) != reply.get("resets") or status["step"] < start:
@@ -426,7 +458,146 @@ def wait_for_steps(sock: Path, reply: dict, steps: int) -> dict:
                 "time": status["time"],
                 "finite": status["finite"],
             }
+    if busy:
+        return {"ok": False, "error": f"the page was still {busy} when the wait ran out; how the run went is unknown"}
     return reply
+
+
+def _say(text: str) -> None:
+    print(text, file=sys.stderr, flush=True)
+
+
+def busy_note(sock: Path) -> str:
+    """What the page is busy with, as a clause to follow a timeout, or ``""``."""
+    try:
+        status = request(sock, {"cmd": "status"}, 5.0)
+    except (NoServer, NoReply):
+        return ""
+    if not status.get("busy"):
+        return ""
+    return (
+        f"; the page is busy {status['busy']} ({status.get('busy_seconds', 0):.0f} s so far) and carries on -- "
+        "`status --wait` returns when it is free"
+    )
+
+
+def _ref_dir_without_a_page(run_dir: Path) -> Path | None:
+    """Where the page would put a clip's stills, ``ref/`` beside ``scene.py``, found without asking it.
+
+    The run directory sits beside ``scene.py`` (the ``ctl`` shim pins it
+    there); failing that, the directory ``ctl`` was run from holds the file.
+    """
+    for folder in (run_dir.resolve().parent, Path.cwd()):
+        if (folder / "scene.py").is_file():
+            return folder / "ref"
+    return None
+
+
+def server_log(sock: Path, run_dir: Path) -> Path:
+    """The log the page writes to, as the page says (``up --log`` sends it elsewhere), else ``<run-dir>/serve.log``.
+
+    A page that cannot tell (no ``/proc``) leaves the note ``up`` wrote beside
+    it, ``serve.log.path``.
+    """
+    try:
+        named = request(sock, {"cmd": "status"}, 5.0).get("log")
+    except (NoServer, NoReply):
+        named = ""
+    if not named:
+        try:  # "<pid> <path>", trusted only for the page that pid still is
+            pid, _, path = (run_dir / "serve.log.path").read_text().strip().partition(" ")
+            named = path if pid == str(request(sock, {"cmd": "status"}, 5.0).get("pid")) else ""
+        except (OSError, NoServer, NoReply):
+            named = ""
+    return Path(named) if named else run_dir / "serve.log"
+
+
+def wait_until_free(sock: Path, limit: float) -> dict:
+    """Poll ``status`` until the page is not busy and every save has been built; the last status."""
+    start = said = time.monotonic()
+    while True:
+        status = request(sock, {"cmd": "status"}, DEFAULT_TIMEOUT)
+        if not status.get("ok"):
+            return status
+        doing = status.get("busy") or ("a save not built yet" if status.get("pending_save") else "")
+        if not doing:
+            return status
+        now = time.monotonic()
+        if now - start > limit:
+            return {"ok": False, "error": f"still {doing} after {limit:.0f} s; the page carries on"}
+        if now - said >= SAY_EVERY:
+            _say(f"waiting: {doing} ({status.get('busy_seconds', now - start):.0f} s)")
+            said = now
+        time.sleep(0.5)
+
+
+def _log_size(log: Path) -> int:
+    try:
+        return log.stat().st_size
+    except OSError:
+        return 0
+
+
+def wait_for_script(sock: Path, reply: dict, log: Path, offset: int, limit: float) -> dict:
+    """After ``play`` or ``eval`` started a routine: stream the page's log until it ends, then say how.
+
+    The routine is known by the serial the page gave it; ``status`` names the
+    last one to end. Its printed output, a failure's traceback and a take's
+    summary land in the page's log, which is printed as it grows.
+    """
+    serial = int(reply.get("serial") or 0)
+    take = reply.get("take") or (Path(reply["recording"]).stem if reply.get("recording") else "")
+    start = said = time.monotonic()
+    status: dict = {}
+
+    def stream() -> None:
+        nonlocal offset, said
+        size = _log_size(log)
+        if size > offset:
+            with open(log, "rb") as f:
+                f.seek(offset)
+                chunk = f.read(size - offset)
+            offset = size
+            text = chunk.decode(errors="replace").rstrip("\n")
+            if text:
+                print(text, flush=True)
+            said = time.monotonic()
+
+    while True:
+        stream()
+        status = request(sock, {"cmd": "status"}, DEFAULT_TIMEOUT)
+        if not status.get("ok"):
+            return status
+        ended = status.get("last_script") or {}
+        # ended; and a take it filmed is no longer filming, nor being written and put beside the clip
+        filming = take and (status.get("busy") or status.get("recording") == take)
+        if int(ended.get("serial") or 0) >= serial and not filming:
+            break
+        now = time.monotonic()
+        if now - start > limit:
+            return {"ok": False, "error": f"the routine is still playing after {limit:.0f} s; it carries on"}
+        if now - said >= SAY_EVERY:
+            where = f"step {status['step']}, t = {status['time']:.1f} s" if "step" in status else status.get("busy", "")
+            _say(f"playing: {where} ({now - start:.0f} s)")
+            said = now
+        time.sleep(0.5)
+    stream()  # what the page printed while the last status was on its way
+    how = str(ended.get("how", ""))
+    out = {
+        "ok": how == "finished",
+        "routine": ended.get("name", ""),
+        "ended": how,
+        "steps": ended.get("steps"),
+        "wall_seconds": ended.get("wall_seconds"),
+        "speed": status.get("speed"),
+        "take": (status.get("last_take") if status.get("last_take") == take else f"{take} (not written; see the log)")
+        if take
+        else "",
+        "recording": reply.get("recording", ""),
+    }
+    if how != "finished":
+        out["error"] = (ended.get("error") or how).rstrip()
+    return out
 
 
 # ------------------------------------------------------------------ up
@@ -544,6 +715,7 @@ def cmd_up(args: argparse.Namespace, sock: Path) -> int:
     log_path = Path(args.log) if args.log else run_dir / "serve.log"
     proc = spawn_server(serve_argv(args, sock), log_path)
     (run_dir / "serve.pid").write_text(f"{proc.pid}\n")
+    (run_dir / "serve.log.path").write_text(f"{proc.pid} {log_path.resolve()}\n")  # for a page with no /proc
     try:
         ready = wait_ready(log_path, lambda: proc.poll() is None, time.monotonic() + args.timeout)
     except ServerDied as exc:
@@ -606,15 +778,37 @@ def main(argv=None) -> int:
     if args.cmd == "up":
         return cmd_up(args, sock)
     req, timeout = build_request(args, parser)
+    waiting = getattr(args, "wait", False)
+    log = server_log(sock, Path(args.run_dir)) if waiting and args.cmd in ("play", "eval") else Path()
+    offset = _log_size(log)
     try:
-        reply = request(sock, req, timeout)
+        if args.cmd == "status" and waiting:
+            reply = wait_until_free(sock, args.wait_limit)
+        else:
+            reply = request(sock, req, timeout)
         if args.cmd == "run" and reply.get("ok") and not args.no_wait:
             reply = wait_for_steps(sock, reply, args.steps)
+        if args.cmd in ("play", "eval") and waiting and reply.get("ok") and reply.get("serial"):
+            started = reply
+            reply = wait_for_script(sock, reply, log, offset, args.wait_limit)
+            # what the command itself answered stays: an eval's printed output, the note that the scene is stale
+            reply.update({k: started[k] for k in ("stdout", "value", "stale") if started.get(k)})
     except NoServer:
+        if args.cmd == "ref" and req.get("op") == "frames":
+            # nothing about cutting stills needs the page; the stills go where the page would put them
+            from . import frames
+
+            out = req["out"] or _ref_dir_without_a_page(Path(args.run_dir))
+            if out is None:
+                print("ctl: no page and no scene.py beside the run directory or here; give --out", file=sys.stderr)
+                return 2
+            return show(
+                frames.cut(req["path"], at=req["at"], every=req["every"], out_dir=out, width=req["width"]), args.json
+            )
         print(f"ctl: no server at {sock}\nstart one with:  {START_HINT}", file=sys.stderr)
         return 2
     except NoReply as exc:
-        print(f"ctl: {exc}", file=sys.stderr)
+        print(f"ctl: {exc}{busy_note(sock)}", file=sys.stderr)
         return 1
     return show(reply, args.json)
 

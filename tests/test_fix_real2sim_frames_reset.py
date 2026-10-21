@@ -90,13 +90,25 @@ class _Session:
 
 class TestResetUnderARun(unittest.TestCase):
     def test_a_reset_ends_a_run_held(self) -> None:
-        host = types.SimpleNamespace(script=[], run_budget=50, session=_Session(), _finish_recorder=lambda why: None)
+        host = types.SimpleNamespace(
+            script=[],
+            run_budget=50,
+            session=_Session(),
+            _finish_recorder=lambda why: None,
+            _end_scripts=lambda how: None,
+        )
         LiveServer.stop_scripts(host, "reset")
         self.assertEqual(host.run_budget, 0)
         self.assertTrue(host.session.paused, "the run ends paused, as it would have at its last step")
 
     def test_a_free_running_page_is_left_running(self) -> None:
-        host = types.SimpleNamespace(script=[], run_budget=-1, session=_Session(), _finish_recorder=lambda why: None)
+        host = types.SimpleNamespace(
+            script=[],
+            run_budget=-1,
+            session=_Session(),
+            _finish_recorder=lambda why: None,
+            _end_scripts=lambda how: None,
+        )
         LiveServer.stop_scripts(host, "reset")
         self.assertFalse(host.session.paused)
 

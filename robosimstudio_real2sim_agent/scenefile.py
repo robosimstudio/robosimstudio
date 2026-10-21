@@ -22,17 +22,36 @@ view`` -- gets the real thing, and that is its own choice.
 ``build`` is a parameter so the merge of ``BUILD`` over the default can be
 tested with no GPU: the fast tier hands in a function that records what it was
 called with, and a page hands in nothing.
+
+What the file registers -- an entity class, a cell, a gripper, a scenery --
+goes into process-wide registries that outlive the run, and a registry keeps
+the first of two registrations with the same source and refuses two that
+differ. So an edited class would be ignored on the next save and an edited
+cell refused. :class:`SceneRegistrations` notes every registration the file or
+a helper beside it makes, and takes them back before the next run.
 """
 
 from __future__ import annotations
 
+import importlib.util
+import sys
 import time
 from collections.abc import Callable
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any
 
-__all__ = ["DOORS", "Loaded", "fallback_scene", "run_scene_file", "stamp"]
+__all__ = ["DOORS", "LIBRARY", "Loaded", "SceneRegistrations", "fallback_scene", "run_scene_file", "stamp"]
+
+LIBRARY = (
+    "robosimstudio",
+    "robosimstudio_materials",
+    "robosimstudio_studio",
+    "robosimstudio_bench",
+    "robosimstudio_policy_agent",
+    "robosimstudio_real2sim_agent",
+)
+"""The packages whose code is never the scene's own, wherever the scene file sits."""
 
 DOORS = ("view", "draw", "viewer")
 """The ``rss.`` names that would open a page of their own, held shut while the file runs."""
@@ -103,3 +122,83 @@ def fallback_scene():
     scene = rss.Scene(cell="void", name="live-fallback")
     scene.add(rss.robot("yam_i2rt"))  # a scene needs something that moves before it will build
     return scene
+
+
+def _package_dirs(names: tuple[str, ...]) -> tuple[Path, ...]:
+    dirs = []
+    for name in names:
+        try:
+            spec = importlib.util.find_spec(name)
+        except (ImportError, ValueError):
+            continue
+        for location in (spec.submodule_search_locations or []) if spec else []:
+            dirs.append(Path(location).resolve())
+    return tuple(dirs)
+
+
+@dataclass
+class SceneRegistrations:
+    """Every registry write the scene file, a helper beside it or an ``eval`` made, to take back before a rebuild.
+
+    Installed with :func:`robosimstudio.registry.watch`. A write is the scene's
+    when the first frame above the registry that is not library code is the
+    scene file, a module under its directory, or ``<eval>``. Two kinds of
+    write stay: a library module registering as it is first imported -- even
+    when the scene's import set it off -- which the import machinery's frame
+    stops the walk at; and a registry's discovery, run by a lookup the scene
+    made (``rss.robot`` loading the embodiments, the task roots), which
+    :meth:`Registry.load <robosimstudio.registry.Registry.load>`'s frame stops
+    it at. Either, taken back, would never be registered again: the module is
+    imported and the registry loaded.
+    """
+
+    root: Path
+    writes: list[tuple[Any, ...]] = field(default_factory=list)
+    """``(registry, name, value, origin, previous, previous_origin)`` per write, oldest first."""
+    _library: tuple[Path, ...] = ()
+    _load_code: Any = None
+
+    def __post_init__(self) -> None:
+        from robosimstudio.registry import Registry
+
+        self.root = Path(self.root).resolve()
+        self._library = _package_dirs(LIBRARY)
+        self._load_code = Registry.load.__code__
+
+    def __call__(self, registry: Any, name: str, value: Any, origin: str, previous: Any, previous_origin: str) -> None:
+        if self._made_by_scene(sys._getframe(1)):
+            self.writes.append((registry, name, value, origin, previous, previous_origin))
+
+    def _made_by_scene(self, frame: Any) -> bool:
+        while frame is not None:
+            if frame.f_code is self._load_code:
+                return False  # a registry's discovery, whoever's lookup set it off
+            filename = frame.f_code.co_filename
+            if filename == "<eval>":
+                return True
+            if filename.startswith("<"):
+                return False  # the import machinery: a module registering as it loads
+            path = Path(filename).resolve()
+            if not any(path.is_relative_to(lib) for lib in self._library):
+                return path.is_relative_to(self.root) and "site-packages" not in path.parts
+            frame = frame.f_back
+        return False
+
+    def undo(self) -> list[tuple[Any, ...]]:
+        """Take back every noted write, newest first, and forget them; returns them, for :meth:`redo`."""
+        from robosimstudio.registry import MISSING
+
+        taken = list(self.writes)
+        for registry, name, _value, _origin, previous, previous_origin in reversed(taken):
+            if previous is MISSING:
+                registry.forget(name)
+            else:
+                registry.restore(name, previous, previous_origin)
+        self.writes.clear()
+        return taken
+
+    def redo(self, taken: list[tuple[Any, ...]]) -> None:
+        """Put back writes :meth:`undo` took, oldest first, and note them again: a run that failed gives way."""
+        for registry, name, value, origin, _previous, _previous_origin in taken:
+            registry.restore(name, value, origin)
+        self.writes[:0] = taken

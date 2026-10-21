@@ -20,6 +20,7 @@ because every frame it draws is time the rebuild loop does not get; the word
 from __future__ import annotations
 
 import argparse
+import os
 import sys
 from pathlib import Path
 
@@ -57,7 +58,7 @@ def config_from_args(args: argparse.Namespace) -> StudioConfig:
         live=args.camera_view,
         show_scenery=not args.hide_scenery,
         dark_mode=args.dark,
-        out=str(Path(args.run_dir) / "studio"),
+        out=str((Path(args.run_dir) / "studio").absolute()),
     )
 
 
@@ -65,14 +66,18 @@ def main(argv=None) -> int:
     from .server import LiveServer
 
     args = create_parser().parse_args(argv)
-    LiveServer(
+    server = LiveServer(
         scene_path=Path(args.scene),
         sock_path=socket_path(args.run_dir, args.sock),
         run_dir=Path(args.run_dir),
         config=config_from_args(args),
         watch=not args.no_watch,
         hold=args.hold,
-    ).serve()
+    )
+    # Every path is absolute by now. The process works in the scene file's directory, so a file the scene,
+    # a helper or `eval` reads or writes by a relative path is beside scene.py wherever `up` was run from.
+    os.chdir(server.path.parent)
+    server.serve()
     return 0
 
 

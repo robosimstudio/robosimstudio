@@ -746,6 +746,9 @@ class Sim(EnvBase):
         then calls this.
         """
         obs, info = super().reset()
+        # counted, so a reader that sampled step_count before can tell a reset from a pause, however many
+        # steps followed it (the live page's takes and routines count their steps across one)
+        self.reset_count = getattr(self, "reset_count", 0) + 1
         self._warned_nonfinite = False  # the finite flags were just cleared too
         if self._start_joint_q is None and self.model.joint_count:
             # After the base class has warmed up *and* re-posed, so this is the

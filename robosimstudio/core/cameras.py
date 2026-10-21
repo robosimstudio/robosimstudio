@@ -204,6 +204,28 @@ class CameraSpec:
             return local
         return transform_matrix(body_q[self.parent_body + int(body_offset)]) @ local
 
+    def project(
+        self, points: np.ndarray, *, camera_to_world: np.ndarray | None = None
+    ) -> tuple[np.ndarray, np.ndarray]:
+        """World points [m] to this camera's pixels: ``(N, 2)`` ``(u, v)`` and ``(N,)`` depth along the view [m].
+
+        The inverse of what a render does to a point, through :attr:`intrinsics`
+        and the pose, so a point read off the scene lands on the pixel the
+        render drew it at. A point at or behind the camera has a depth ``<= 0``
+        and a pixel that means nothing. ``camera_to_world`` is the pose to
+        project from when it is not :attr:`world_matrix` -- a camera on a body,
+        posed by :meth:`pose_on_body`.
+        """
+        pts = np.asarray(points, dtype=np.float64).reshape(-1, 3)
+        pose = self.world_matrix if camera_to_world is None else np.asarray(camera_to_world, dtype=np.float64)
+        local = (pts - pose[:3, 3]) @ pose[:3, :3]
+        depth = local[:, 2]
+        k = self.intrinsics
+        with np.errstate(divide="ignore", invalid="ignore"):
+            u = k[0, 0] * local[:, 0] / depth + k[0, 2]
+            v = k[1, 1] * local[:, 1] / depth + k[1, 2]
+        return np.stack([u, v], axis=1), depth
+
     def with_pose(self, eye: Sequence[float], look_at: Sequence[float]) -> CameraSpec:
         """This camera moved to another viewpoint."""
         return replace(

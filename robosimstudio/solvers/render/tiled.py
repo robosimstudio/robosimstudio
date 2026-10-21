@@ -21,6 +21,10 @@ Segmentation comes out as a per-pixel *shape* index, which is Newton's own
 numbering and means nothing to a benchmark. The caller supplies a
 ``shape -> label id`` lookup (the toolkit layer builds one from its scene
 handles) and this maps through it, so a task's segmentation ids are the task's.
+A ray that hits a particle or a deformable's triangle mesh reports no shape at
+all but one of Newton's two reserved ids, which name no thing; they come out
+as :data:`SEG_PARTICLES` and :data:`SEG_SOFT_MESH`, below every label, for a
+caller that knows which deformables are in the scene to name.
 """
 
 from __future__ import annotations
@@ -37,10 +41,18 @@ from robosimstudio.core.math import xform_from_matrix
 from robosimstudio.core.render.base import FrameSet, RendererBase
 from robosimstudio.core.render.spec import put
 
-__all__ = ["RendererTiled", "aperture_from_intrinsics"]
+__all__ = ["SEG_PARTICLES", "SEG_SOFT_MESH", "RendererTiled", "aperture_from_intrinsics"]
 
 # What SensorTiledCamera writes where a ray hit nothing.
 _NO_SHAPE = 0xFFFFFFFF
+# What it writes where a ray hit a particle, or the triangle mesh every deformable shares
+# (newton/_src/sensors/warp_raytrace/raytrace.py): not shapes, so not rows of a label table.
+_PARTICLES_SHAPE = 0xFFFFFFFE
+_SOFT_MESH_SHAPE = 0xFFFFFFFD
+SEG_PARTICLES = -2
+"""The ``seg`` label of a pixel whose ray hit a particle: a heap, a pool, a rope's nodes."""
+SEG_SOFT_MESH = -3
+"""The ``seg`` label of a pixel whose ray hit a deformable's triangles: cloth, a bag, a soft body."""
 
 # The ray helper's units cancel between focal length and aperture, so any
 # consistent unit works; 1.0 keeps the offsets numerically small.
@@ -435,12 +447,7 @@ class RendererTiled(RendererBase):
                             np.asarray(depth[slot], dtype=np.float32), nan=0.0, posinf=0.0, neginf=0.0
                         )
                     if "seg" in wanted:
-                        idx = np.asarray(shape[slot], dtype=np.int64)
-                        # Misses arrive as the clear value, not a shape; both land on 0.
-                        miss = idx == _NO_SHAPE
-                        idx = np.where(miss, 0, idx)
-                        labels = idx.astype(np.int32) if self._label_lut is None else self._label_lut[idx]
-                        frame["seg"] = np.where(miss, 0, labels).astype(np.int32)
+                        frame["seg"] = _labels(np.asarray(shape[slot], dtype=np.int64), self._label_lut)
                     out[world][cam.name] = frame
         return out
 
@@ -488,3 +495,23 @@ class RendererTiled(RendererBase):
         context.lights_cast_shadow = wp.array(casts, dtype=wp.bool, device=device)
         context.lights_position = wp.array([wp.vec3f(0.0)] * len(directions), dtype=wp.vec3f, device=device)
         context.lights_orientation = wp.array([wp.vec3f(*d) for d in directions], dtype=wp.vec3f, device=device)
+
+
+def _labels(idx: np.ndarray, lut: np.ndarray | None) -> np.ndarray:
+    """Shape indices to labels: a miss is 0, a particle or deformable-mesh hit its reserved label.
+
+    Indexing the table with a reserved id -- 0xFFFFFFFE, far past its end --
+    raised for any scene with cloth, rope or a heap in view. Any other index
+    past the table's end still raises: it is a table built for another model,
+    and a picture labelled through it would quietly lose things.
+    """
+    particles, soft, miss = idx == _PARTICLES_SHAPE, idx == _SOFT_MESH_SHAPE, idx == _NO_SHAPE
+    shapes = ~(particles | soft | miss)
+    if lut is not None and (shapes & ((idx < 0) | (idx >= len(lut)))).any():
+        worst = int(idx[shapes].max())
+        raise IndexError(f"shape {worst} is past the label table's {len(lut)} rows: the table is not this model's")
+    safe = np.where(shapes, idx, 0)
+    labels = safe.astype(np.int32) if lut is None else lut[safe]
+    labels = np.where(shapes, labels, 0)
+    labels = np.where(particles, SEG_PARTICLES, labels)
+    return np.where(soft, SEG_SOFT_MESH, labels).astype(np.int32)
