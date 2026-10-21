@@ -12,7 +12,7 @@ Pause checkbox on the page is the human's override either way, and the
 studio's own ``set_paused`` keeps the two truthful. While a routine that steps
 the scene itself plays, the page's own stepping is held regardless
 (:meth:`LiveSession.steps_held`); one that only yields is stepped by the page,
-paused or not (:meth:`LiveSession.tick`). And
+paused or not (:meth:`LiveSession.steps_forced`). And
 both Reset buttons -- this folder's and the Simulation folder's -- go through
 the one :meth:`LiveSession.reset_now`.
 """
@@ -51,16 +51,9 @@ class LiveSession(StudioSession):
         """While a routine plays that the page does not step this pass, the studio's own step would double it."""
         return bool(self.host.script) and not self.host.page_steps_script()
 
-    def tick(self) -> bool:
-        """One pass; a routine the page steps is stepped whatever Pause says, as one that steps itself plays."""
-        if not (self.paused and self.host.page_steps_script()) or self.reset_requested:
-            return super().tick()  # a reset this pass ends the routine: the page stays paused through it
-        self.paused = False  # the field alone: the checkbox keeps saying what the person chose
-        try:
-            return super().tick()
-        finally:
-            # what the checkbox says now, so a click on it during the pass is not undone
-            self.paused = bool(self.pause_box.value) if self.pause_box is not None else True
+    def steps_forced(self) -> bool:
+        """A routine the page steps is stepped whatever Pause says; a reset this pass ends it, and stays paused."""
+        return self.host.page_steps_script() and not self.reset_requested
 
     def reset_now(self) -> bool:
         """A reset ends whatever routine is playing and the take filming it, then resets."""

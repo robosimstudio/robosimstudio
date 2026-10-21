@@ -83,12 +83,25 @@ WAIT_LIMIT = 3600.0
 """How long ``--wait`` waits by default [s]."""
 SAY_EVERY = 10.0
 """Seconds between the progress lines ``--wait`` prints while nothing else is printed."""
-START_HINT = "python -m robosimstudio_real2sim_agent up    (from the directory holding scene.py)"
+START_HINT = "./ctl up    (in examples/live, or in a twin's folder)"
 SERVE_FLAGS = ("hold", "no_watch", "share", "dark", "hide_scenery", "camera_view")
 """``up``'s switches that are the server's, spelled as argparse attributes."""
 CATALOGS = ("robots", "grippers", "cells", "assets")
 """What ``catalog`` can list; ``assets`` runs the registries' discovery, which takes seconds."""
-VERBOSE = ("readings", "anchors", "entries", "checks", "moved", "objects", "drift_mm", "ended", "takes_written")
+VERBOSE = (
+    "readings",
+    "anchors",
+    "entries",
+    "checks",
+    "moved",
+    "objects",
+    "drift_mm",
+    "ended",
+    "takes_written",
+    "busy_routine",
+    "pending_save",
+    "log",
+)
 """Reply fields printed only under ``--json``: the raw numbers behind a ``report``."""
 
 
@@ -481,11 +494,12 @@ def wait_for_steps(sock: Path, reply: dict, steps: int) -> dict:
         if status.get("resets", reply.get("resets")) != reply.get("resets") or status["step"] < start:
             return {"ok": False, "error": "the scene was reset during the run; the run ended", "step": status["step"]}
         if status["step"] >= target or (status["paused"] and status["playing"] == 0):
+            full = request(sock, {"cmd": "status"}, DEFAULT_TIMEOUT)  # once, at the end: is the state still finite
             return {
                 "ok": True,
                 "step": status["step"],
                 "time": status["time"],
-                "finite": status.get("finite"),
+                "finite": full.get("finite"),
             }
     if busy:
         return {"ok": False, "error": f"the page was still {busy} when the wait ran out; how the run went is unknown"}
@@ -499,14 +513,18 @@ def _say(text: str) -> None:
 def busy_note(sock: Path) -> str:
     """What the page is busy with, as a clause to follow a timeout, or ``""``."""
     try:
-        status = request(sock, {"cmd": "status"}, 5.0)
+        status = request(sock, {"cmd": "status", "light": True}, 5.0)
     except (NoServer, NoReply):
         return ""
     if not status.get("busy"):
         return ""
+    if status.get("busy_routine"):
+        return (
+            f"; a routine is playing, one of its steps {status.get('busy_seconds', 0):.0f} s so far, and it carries on"
+        )
     return (
         f"; the page is busy {status['busy']} ({status.get('busy_seconds', 0):.0f} s so far) and carries on -- "
-        "`status --wait` returns when it is free"
+        "`status --wait` returns when it is done"
     )
 
 
@@ -529,14 +547,15 @@ def server_log(sock: Path, run_dir: Path) -> Path:
     it, ``serve.log.path``.
     """
     try:
-        named = request(sock, {"cmd": "status"}, 5.0).get("log")
+        status = request(sock, {"cmd": "status", "light": True}, 5.0)
     except (NoServer, NoReply):
-        named = ""
+        status = {}
+    named = status.get("log") or ""
     if not named:
         try:  # "<pid> <path>", trusted only for the page that pid still is
             pid, _, path = (run_dir / "serve.log.path").read_text().strip().partition(" ")
-            named = path if pid == str(request(sock, {"cmd": "status"}, 5.0).get("pid")) else ""
-        except (OSError, NoServer, NoReply):
+            named = path if pid == str(status.get("pid")) else ""
+        except OSError:
             named = ""
     return Path(named) if named else run_dir / "serve.log"
 
@@ -698,7 +717,7 @@ def _differs_from_running(args: argparse.Namespace, status: dict) -> str:
     if running and Path(running).resolve() != Path(args.scene).resolve():
         return (
             f"a page is already up on {running}, not {Path(args.scene).resolve()}; "
-            "`quit` it first, or pick another --run-dir"
+            "`quit` it first, or start another page with its own --run-dir and --scene"
         )
     if args.share and not status.get("share_url"):
         return "a page is already up with no public URL; `quit` it and run `up --share` again"
@@ -726,7 +745,7 @@ def cmd_up(args: argparse.Namespace, sock: Path) -> int:
             return 2
     except NoReply:
         print(
-            f"ctl: a server at {sock} is not answering; `quit` it, or pick another --run-dir",
+            f"ctl: a server at {sock} is not answering; `quit` it, or start another page with its own --run-dir and --scene",
             file=sys.stderr,
         )
         return 1
@@ -795,7 +814,7 @@ def show(reply: dict, as_json: bool) -> int:
         print(f"error: {reply.get('error', '?')}", file=sys.stderr)
         return 1
     for key, value in reply.items():
-        if key == "ok" or value in ("", None) or key in VERBOSE:
+        if key == "ok" or value in ("", None) or key in VERBOSE or (key == "busy_seconds" and not reply.get("busy")):
             continue
         if isinstance(value, dict):
             for sub, item in value.items():
@@ -838,6 +857,12 @@ def cmd_new(args: argparse.Namespace) -> int:
         print(f"ctl: {args.name!r} is not a folder name: letters, digits, - and _", file=sys.stderr)
         return 2
     live = Path(os.path.abspath(args.run_dir)).parent
+    if live.parent.name == "twins" and (live / "REPORT.md").is_file():
+        print(
+            f"ctl: this is already a twin's folder ({live}); work in it, or run `new` from examples/live",
+            file=sys.stderr,
+        )
+        return 1
     folder = Path(args.dir).resolve() if args.dir else live / "twins" / args.name
     if folder.exists():
         print(f"ctl: {folder} is there already; work in it, or pick another name", file=sys.stderr)
@@ -883,8 +908,9 @@ def main(argv=None) -> int:
         return cmd_up(args, sock)
     req, timeout = build_request(args, parser)
     waiting = getattr(args, "wait", False)
-    log = server_log(sock, Path(args.run_dir)) if waiting and args.cmd in ("play", "eval") else Path()
-    offset = _log_size(log)
+    streams = waiting and args.cmd in ("play", "eval")
+    log = server_log(sock, Path(args.run_dir)) if streams else Path()
+    offset = _log_size(log) if streams else 0
     try:
         if args.cmd == "status" and waiting:
             reply = wait_until_free(sock, args.wait_limit)

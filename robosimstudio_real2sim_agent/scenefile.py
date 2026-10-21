@@ -118,11 +118,14 @@ class ScenePaths:
     """What is the scene's own code: one rule, for the modules a rebuild imports afresh and the registrations it
     takes back, so the two never disagree.
 
-    A file is the scene's when it is under the scene file's directory, is not
-    an installed package's, and is not a module imported before the scene file
-    first ran (the library, even when the scene file sits at the repository
-    root). Verdicts are kept per file name: a registry's discovery asks about
-    thousands of frames.
+    A module is the scene's when its file is under the scene file's directory,
+    is not an installed package's, and is not a module imported before the
+    scene file first ran; and its top-level package is neither this library's
+    (``robosimstudio_materials``, say, imported for the first time by a scene
+    file at the repository root, stays the library's) nor another installed
+    distribution's. Verdicts
+    are kept per name and file: a registry's discovery asks about thousands of
+    frames.
     """
 
     def __init__(self, root: Path | str) -> None:
@@ -131,7 +134,8 @@ class ScenePaths:
             Path(p).resolve() for key in ("purelib", "platlib") if (p := sysconfig.get_paths().get(key))
         )
         self._baseline: set[Path] = set()
-        self._verdicts: dict[str, bool] = {}
+        self._verdicts: dict[tuple[str, str], bool] = {}
+        self._distributed: set[str] | None = None
 
     def set_baseline(self, module_names: set[str]) -> None:
         """The modules imported before the scene file first ran: never the scene's, wherever they are."""
@@ -143,8 +147,10 @@ class ScenePaths:
         self._baseline = files
         self._verdicts.clear()
 
-    def is_scene(self, filename: str) -> bool:
-        verdict = self._verdicts.get(filename)
+    def is_scene(self, filename: str, module: str = "") -> bool:
+        """Whether the module ``module`` (its ``__name__``), at ``filename``, is the scene's own code."""
+        key = (module, filename)
+        verdict = self._verdicts.get(key)
         if verdict is None:
             path = Path(filename).resolve()
             verdict = (
@@ -152,9 +158,26 @@ class ScenePaths:
                 and path not in self._baseline
                 and not any(part in ("site-packages", "dist-packages") for part in path.parts)
                 and not any(path.is_relative_to(lib) for lib in self._installed)
+                and not self._is_library_package(module.partition(".")[0])
             )
-            self._verdicts[filename] = verdict
+            self._verdicts[key] = verdict
         return verdict
+
+    def _is_library_package(self, top: str) -> bool:
+        """This library's own packages (``robosimstudio`` and its ``robosimstudio_*`` siblings, which an editable
+        install does not list) and any other installed distribution's."""
+        return top == "robosimstudio" or top.startswith("robosimstudio_") or top in self._distributions()
+
+    def _distributions(self) -> set[str]:
+        """Top-level import names that installed distributions provide: never a scene's."""
+        if self._distributed is None:
+            from importlib.metadata import packages_distributions
+
+            try:
+                self._distributed = set(packages_distributions())
+            except Exception:
+                self._distributed = set()
+        return self._distributed
 
 
 @dataclass(eq=False)  # a watcher is found and removed by identity, never by its notes
@@ -198,7 +221,7 @@ class SceneRegistrations:
                 return True
             if filename.startswith("<"):
                 return False  # the import machinery: a module registering as it loads
-            if self.paths.is_scene(filename):
+            if self.paths.is_scene(filename, frame.f_globals.get("__name__", "")):
                 return True
             frame = frame.f_back  # library code between the registry and whoever called it
         return False

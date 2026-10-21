@@ -193,6 +193,12 @@ class SceneCode(unittest.TestCase):
         self.assertTrue(paths.is_scene(str(root / "helper.py")))
         self.assertFalse(paths.is_scene(str(root / "lib.py")), "imported before the scene ran: the library's")
         self.assertFalse(paths.is_scene("/elsewhere/x.py"))
+        (root / "robosimstudio_materials").mkdir()
+        (root / "robosimstudio_materials" / "bag.py").write_text("")
+        self.assertFalse(
+            paths.is_scene(str(root / "robosimstudio_materials" / "bag.py"), "robosimstudio_materials.bag"),
+            "an installed distribution's module is never the scene's, wherever the scene file sits",
+        )
 
     def test_a_watcher_is_unwatched_by_identity(self) -> None:
         from robosimstudio_real2sim_agent.scenefile import SceneRegistrations
@@ -504,6 +510,35 @@ class RoutineStepping(unittest.TestCase):
         self.assertEqual(live.session.arms["right"].calls, ["suspend", "resume"])
         self.assertFalse(live.session.arms["right"].suspended)
 
+    def test_an_arm_held_off_before_a_routine_that_took_it_back_is_held_off_again(self) -> None:
+        live = _server()
+        live.session.arms["left"].suspended = True
+
+        def takes_left():
+            live.session.arms["left"].resume()
+            yield
+
+        live.start_script(takes_left(), name="take", drives_page=True)
+        _pass(live)
+        _pass(live)
+        self.assertTrue(live.session.arms["left"].suspended)
+
+    def test_a_recording_under_an_old_take_name_does_not_count_as_written(self) -> None:
+        live = _server()
+        live.takes_written = ["take1", "take0"]
+        fake = types.SimpleNamespace(capture=lambda: None, close=lambda: None, name="take1")
+        with mock.patch.object(server_mod.checks, "Recorder", lambda *a, **k: fake):
+            live.start_script(iter(range(3)), name="again", record="take1")
+        self.assertEqual(live.takes_written, ["take0"])
+
+    def test_the_page_steps_a_session_routine_while_paused_but_not_through_a_reset(self) -> None:
+        from robosimstudio_real2sim_agent.page import LiveSession
+
+        page = types.SimpleNamespace(host=types.SimpleNamespace(page_steps_script=lambda: True), reset_requested=False)
+        self.assertTrue(LiveSession.steps_forced(page))
+        page.reset_requested = True
+        self.assertFalse(LiveSession.steps_forced(page))
+
     def test_a_routine_queued_behind_another_is_not_stepped_for_before_it_plays(self) -> None:
         live = _server()
         live.start_script(iter(range(1)), name="a", drives_page=False)
@@ -767,6 +802,12 @@ class TwinFolder(unittest.TestCase):
             ctl.main(["--run-dir", str(self.run_dir), "new", "lid"]), 1, "an existing twin is not overwritten"
         )
         self.assertEqual(ctl.main(["--run-dir", str(self.run_dir), "new", "../escape"]), 2)
+
+    def test_new_from_inside_a_twin_is_refused(self) -> None:
+        ctl.main(["--run-dir", str(self.run_dir), "new", "lid"])
+        twin = self.live / "twins" / "lid"
+        self.assertEqual(ctl.main(["--run-dir", str(twin / "run"), "new", "nested"]), 1)
+        self.assertFalse((twin / "twins").exists())
 
     def test_its_ctl_pins_run_in_the_folder(self) -> None:
         import subprocess

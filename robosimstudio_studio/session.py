@@ -1330,6 +1330,15 @@ class StudioSession:
         """
         return False
 
+    def steps_forced(self) -> bool:
+        """Whether the loop steps this pass though the page is paused, the Pause checkbox left as it is.
+
+        Nothing does on a plain page; ``robosimstudio_real2sim_agent`` says so on
+        a pass where a routine that drives through the arm panels only yielded,
+        since such a routine plays whatever Pause says and the page is what steps it.
+        """
+        return False
+
     def _show_status(self) -> None:
         """Put :attr:`status` on the page now, rather than at the next rate readout."""
         readout = getattr(self, "_status_readout", None)
@@ -1826,7 +1835,7 @@ class StudioSession:
                 self.release_all_requested = False
                 self.release_all()
 
-            if self.paused or self.steps_held():
+            if (self.paused and not self.steps_forced()) or self.steps_held():
                 # The interaction panels are drained while paused: lining a
                 # grasp up on a held scene is exactly when you want to, and
                 # aiming costs an IK solve rather than a step. The others

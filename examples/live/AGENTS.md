@@ -16,7 +16,9 @@ than guessing a constructor or a name.
 
 ## Working the page
 
-- **The twin is its own folder.** Before the first edit, from this folder:
+- **The twin is its own folder.** If you were started in a twin's folder
+  (`twins/<name>/`, with its `REPORT.md`), it is made: work in it. Otherwise,
+  before the first edit, from this folder:
   `./ctl new <name> --ref <clip or photo> [--ref ...]` makes `twins/<name>/`
   with a starter `scene.py`, the references copied into `ref/`, an empty
   `REPORT.md` and the folder's own `ctl`. Work from it: `cd twins/<name>`, and
@@ -34,8 +36,7 @@ than guessing a constructor or a name.
   `./ctl status --wait` after a save (a bag or a rope rebuilds in about a
   minute), `./ctl play NAME --wait` and `./ctl eval "..." --wait` for a routine
   (its output streamed; exit 1 with the traceback if it failed). A command
-  that times out says what the page is busy with; the first path-traced
-  picture in a process compiles for minutes.
+  that times out says what the page is busy with.
 - Several lines of Python go in a heredoc: `./ctl eval - <<'PY' ... PY`.
   `--json` after any command prints the raw reply.
 - Pick the GPU with `ROBOSIMSTUDIO_DEVICE=cuda:N ./ctl up` or
@@ -136,8 +137,8 @@ How the page behaves is in REFERENCE (*How it works*, *The contract for
 `scene.py`*). What changes how you work:
 
 - Save and read; never restart the page to make an edit land. A save that
-  does not build leaves the scene before it up, and every command says so
-  until a save builds.
+  does not build leaves the scene before it up, and `snapshot`, `compare`,
+  `check`, `eval` and `play` say so until a save builds.
 - A script from `examples/` pastes into `scene.py` unchanged.
 - What the person drags on the page is what your next reading sees; if the
   scene looks moved, `./ctl reset` before judging it.

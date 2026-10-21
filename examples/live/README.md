@@ -9,14 +9,16 @@ This file is for you, starting the page and the agent. The agent's method is
 
 What is here:
 
-- `scene.py`: the starter scene and the agent's working file. Bind `routine`
-  (or `routines = {name: fn}`) to get a Run button.
+- `scene.py`: a starter scene for trying the page without a twin. A twin's
+  own `scene.py` is in its folder under `twins/`. Bind `routine` (or
+  `routines = {name: fn}`) to get a Run button.
 - `ctl`: the command line onto the running page; it also runs from the
   repository root as `examples/live/ctl`. It uses the checkout's `.venv`, else
   `$PYTHON` or `python3`, so it also works after
   `pip install "robosimstudio @ git+https://github.com/robosimstudio/robosimstudio"`.
 - `run/`: made on first use and not committed. It holds the socket, the
-  server's log and every snapshot.
+  server's log and every snapshot of a page served on `scene.py` here; a twin
+  keeps its own `run/` in its folder.
 - `twins/`: one folder per twin, made by `./ctl new`, and not committed. Each
   is a twin on its own -- its `scene.py`, helpers, assets, `ref/`, `run/`,
   `REPORT.md` and its own `ctl` -- so zip one to hand it on.

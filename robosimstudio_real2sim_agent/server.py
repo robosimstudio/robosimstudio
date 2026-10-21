@@ -247,7 +247,7 @@ class LiveServer:
             if name in self._baseline_modules or name.partition(".")[0] in self._baseline_modules:
                 continue
             file = getattr(module, "__file__", None)
-            if not file or not self.scene_paths.is_scene(file):
+            if not file or not self.scene_paths.is_scene(file, name):
                 continue
             del sys.modules[name]
             gone.append(name)
@@ -439,6 +439,7 @@ class LiveServer:
                 raise
             self.recorder = recorder
             self.last_take = {}  # filming now: until this one is written, no take is the last one
+            self.takes_written = [t for t in self.takes_written if t != record]  # nor is an older one of its name
         self.script.append(gen)
         self.scripts_started += 1
         self.script_meta[id(gen)] = {
@@ -479,15 +480,18 @@ class LiveServer:
                 panel.suspend()
 
     def _resume_arms(self) -> None:
-        """Put the arm panels back as they were when the script started: one this page or the routine held off is
-        given back; one held off before it stays so."""
+        """Put the arm panels back as they were when the script started: held off or live, whatever the page or the
+        routine did with them meanwhile."""
         before, self._arms_before = self._arms_before, {}
         for name, panel in self._arms().items():
-            if before.get(name) is False and getattr(panel, "suspended", False):
-                try:
+            was, now = before.get(name), bool(getattr(panel, "suspended", False))
+            try:
+                if was is False and now:
                     panel.resume()
-                except Exception:  # a panel of a scene since rebuilt
-                    pass
+                elif was is True and not now:
+                    panel.suspend()  # one the routine took back that was held off before it
+            except Exception:  # a panel of a scene since rebuilt
+                pass
 
     def _end_scripts(self, how: str) -> None:
         """End every queued script, the head first, each reported ``how``."""
@@ -656,9 +660,10 @@ class LiveServer:
 
     def speed(self) -> float | None:
         """Simulated seconds per wall second over the last :data:`SPEED_WINDOW` s; None before there are two samples."""
-        if len(self._speed) < 2:
+        samples = list(self._speed)  # a copy: the main thread clears the deque on a reset while a status reads it
+        if len(samples) < 2:
             return None
-        (w0, t0), (w1, t1) = self._speed[0], self._speed[-1]
+        (w0, t0), (w1, t1) = samples[0], samples[-1]
         return round((t1 - t0) / (w1 - w0), 3) if w1 > w0 else None
 
     def _sample_speed(self) -> None:
@@ -936,7 +941,7 @@ class LiveServer:
         if self.script:
             return {
                 "ok": False,
-                "error": "a routine is playing; wait for it to end (`play --wait`), or `reset` to stop it",
+                "error": "a routine is playing (`status` lists it under `playing`); let it end, or `reset` to stop it",
             }
         self.run_budget = max(1, int(steps))
         self.session.set_paused(False)
@@ -1243,7 +1248,7 @@ class LiveServer:
         if self.script:
             return {
                 "ok": False,
-                "error": "a routine is playing; wait for it to end (`play --wait`), or `reset` to stop it",
+                "error": "a routine is playing (`status` lists it under `playing`); let it end, or `reset` to stop it",
             }
         parsed = self._keys(keys)
         line = self._timeline(timeline)

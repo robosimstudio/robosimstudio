@@ -411,14 +411,14 @@ def crop_pair(
     if box is None:
         return None
     x0, y0, x1, y1 = box
-    left = photo[y0:y1, x0:x1].copy()
-    right = render[y0:y1, x0:x1].copy()
+    photo_crop = photo[y0:y1, x0:x1].copy()
+    render_crop = render[y0:y1, x0:x1].copy()
     if pm is not None and pm.any():
-        left[outline(pm)[y0:y1, x0:x1]] = PHOTO_COLOUR
+        photo_crop[outline(pm)[y0:y1, x0:x1]] = PHOTO_COLOUR
     if sm is not None and sm.any():
-        right[outline(sm)[y0:y1, x0:x1]] = SIM_COLOUR
+        render_crop[outline(sm)[y0:y1, x0:x1]] = SIM_COLOUR
     w = max(1, int(round((x1 - x0) * height / max(1, y1 - y0))))
-    tiles = [np.asarray(Image.fromarray(t).resize((w, height), Image.BILINEAR)) for t in (right, left)]
+    tiles = [np.asarray(Image.fromarray(t).resize((w, height), Image.BILINEAR)) for t in (render_crop, photo_crop)]
     gap = np.full((height, 6, 3), 40, np.uint8)
     return np.concatenate([tiles[0], gap, tiles[1]], axis=1)
 
