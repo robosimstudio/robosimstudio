@@ -49,30 +49,11 @@ do not run the tiers for it, and do not add its tests to `tests/`.
 ## Real to sim: a real bench, scene or clip, rebuilt on the live page
 
 When asked to rebuild a real scene from a photo or video, match a reference,
-twin a real cell, or build a scene interactively, use the live page in
-[`examples/live/`](examples/live/README.md) instead of writing a script and
-running it blind: edit `scene.py`, and the page rebuilds it on every save.
-**Read [`examples/live/AGENTS.md`](examples/live/AGENTS.md) before the first
-edit**: the method, what a finished twin is (among other things: the robot
-moves things only through its fingers' contact), and what the report says.
-Every command and reading is in
-[`examples/live/REFERENCE.md`](examples/live/REFERENCE.md). From
-`examples/live/`:
-
-```bash
-./ctl status --wait                   # the page, once it is free: names, positions, last error, how the last routine ended
-./ctl up                              # if there is none: start one; prints the URL (--share for a public one)
-./ctl ref frames <clip> --at 0:start,4.5:lid_open,end:end   # stills named by their second, a contact sheet, ref/timeline.json
-./ctl snapshot --camera <cam> --beside ref/<still>          # the render beside the still, full size
-./ctl compare --camera <cam> [--key case=red] --note "<why>" # the pair and a look sheet; size, offset, overlap per keyed thing
-./ctl check --camera <cam>            # the gate: PASS/FAIL with the number
-./ctl play tidy --record take1 --wait # the page's Run button, filmed; returns when it ends, saying how
-./ctl log                             # every reading so far, with the picture it left and the scene code it measured
-./ctl catalog robots cells            # the names rss.robot() and Scene(cell=) accept
-./ctl eval - <<'PY'                   # python against the live scene, several lines from stdin
-print(sim['<name>'].position)
-PY
-```
-
-A snapshot is path traced and draws the room, the mat and the textures; the
-page draws the bench and what you added.
+twin a real cell, or build a scene interactively, work on the live page in
+[`examples/live/`](examples/live/README.md): edit its `scene.py`, and the open
+page rebuilds it on every save. **Read
+[`examples/live/AGENTS.md`](examples/live/AGENTS.md) whole before the first
+edit**: it is the method -- how to work the page, what a finished twin is
+(the robot moves things only through its fingers' contact), and what the report
+says. Every command, flag, output file and reading is in
+[`examples/live/REFERENCE.md`](examples/live/REFERENCE.md).

@@ -1,22 +1,23 @@
 # Real to sim on the live page
 
-For any agent rebuilding a real bench, scene or clip in simulation from this
-folder: Codex reads this file by itself when started here, Claude Code through
-`CLAUDE.md` and the `real-to-sim` skill.
+The method for any agent rebuilding a real bench, scene or clip in simulation.
+Codex reads this file by itself when started in this folder, Claude Code through
+`CLAUDE.md` and the `real-to-sim` skill; the repository's `AGENTS.md` points
+here. This file says how to work and what to deliver; [`REFERENCE.md`](REFERENCE.md)
+says what every command, flag, file and reading is, and how the page behaves.
 
 `scene.py` runs on every save, and the `rss.Scene` it binds is built and
 swapped into the open page without a reload. `./ctl` is the command line onto
 that process. Do not run the scene yourself: edit the file and read what the
-page and its readings show. Every command, output file and reading is in
-[`REFERENCE.md`](REFERENCE.md), with the frames and units; the API is in
-`examples/00_getting_started/README.md` and each example folder's README; the
-names are in `./ctl catalog`. Read those rather than guessing a constructor or
-a name.
+page and its readings show. The API is in
+`examples/00_getting_started/README.md` and each example folder's README, the
+frames and units in REFERENCE, the names in `./ctl catalog`. Read those rather
+than guessing a constructor or a name.
 
 ## Working the page
 
-- `./ctl status` first: a page is up, or `./ctl up` starts one (tell the user
-  its URL). Picking up from an earlier session: `./ctl log`, then open the last
+- `./ctl status --wait` first: a page is up, or `./ctl up` starts one (tell the
+  user its URL). Picking up from an earlier session: `./ctl log`, then open the last
   look sheet it names, before the next edit.
 - Open every picture a command writes with your image viewer (`view_image`
   in Codex): the pair, the look sheet, the strip. The numbers come second.
@@ -54,16 +55,17 @@ a name.
   (`gasket=mask:ref/gasket.png`) is the way round it.
 - `./ctl check --camera <name> [--key ...]`: PASS/FAIL with its number for
   builds, finite, camera aspect, things present, worst overlap, and drift
-  when left alone (a deformable's by its particle that moved most). Advisory:
-  explain any FAIL you accept, with the number.
+  when left alone. Advisory: explain any FAIL you accept, with the number.
 - Bind `routine` or `routines = {"open lid": fn, ...}` in `scene.py` for a
   **Run** button per routine; `./ctl play [name] --record <take> --wait` presses
-  it and films it. A routine that takes the page's `session` drives through
-  the arm panels (`robosimstudio_studio.routine`'s `reach`, `grip`, `wait`);
-  any other has them held off while it plays and steps the scene itself
-  (`sim.run(1)` between yields). When a take ends it is put
-  beside the clip: the strip (clip anchors above, take frames below) goes on
-  the board, and one line says what moved in the take and how far.
+  it and films it. Write a routine one of two ways (REFERENCE, *Acting*):
+  taking the page's `session` and driving through the arm panels with
+  `robosimstudio_studio.routine`'s `reach`, `grip` and `wait`; or taking only
+  `sim` and stepping the scene itself (`sim.run(1)` between yields), the arm
+  panels held off meanwhile. A generator `eval` returns is the second kind.
+  When a take ends it is put beside the clip: the strip (clip anchors above,
+  take frames below) goes on the board, and one line says what moved in the
+  take and how far.
 - `./ctl show <png> --label "<what>"` posts a picture to the board for the
   person watching. `./ctl log` lists every reading with the picture it left.
 
@@ -118,17 +120,14 @@ on every twin so far:
 
 ## Rules of the page
 
-- Poses are in the cell's work-surface frame; `snapshot --eye/--look-at` are
-  world metres.
-- `rss.view`, `rss.draw` and `rss.viewer` are no-ops while the file runs, so a
-  script from `examples/` pastes in unchanged.
-- A save re-imports the helpers beside `scene.py` and takes back what they
-  registered, so an edited entity class, cell or gripper lands on the next
-  save. A save that does not build leaves the scene before it up, and every
-  command says so until a save builds.
-- A snapshot is path traced and draws the scenery (a room, a mat, a texture);
-  the page draws the bench and what you added.
-- What the user drags on the page is what your next reading sees; if the
+How the page behaves is in REFERENCE (*How it works*, *The contract for
+`scene.py`*). What changes how you work:
+
+- Save and read; never restart the page to make an edit land. A save that
+  does not build leaves the scene before it up, and every command says so
+  until a save builds.
+- A script from `examples/` pastes into `scene.py` unchanged.
+- What the person drags on the page is what your next reading sees; if the
   scene looks moved, `./ctl reset` before judging it.
-- `run/` holds every picture, take and the log, and is not committed;
-  `scene.py` is your result, so leave it in the state you are reporting.
+- `scene.py` and the files beside it are your result: leave them in the
+  state you report. `run/` is not committed.

@@ -1,7 +1,8 @@
 # live: reference
 
 The `scene.py` contract, every `./ctl` command, and what each reading means.
-Setup and the prompts are in [`README.md`](README.md).
+How to work and what to deliver are in [`AGENTS.md`](AGENTS.md); setup and the
+prompts in [`README.md`](README.md).
 
 ## How it works
 
@@ -48,12 +49,12 @@ scene.add(rss.robot("yam_i2rt"))  # a scene needs something that moves before it
   file runs, so a script pasted from the examples works unchanged unless it
   drives the viewer `rss.viewer` returns.
 - Poses are in the work-surface frame. See [Frames and units](#frames-and-units).
-- Bind `routine` (a callable taking the built `sim` and returning a
-  generator that yields once per control step), or `routines`, a dict of
-  name to such callables, and the page grows a **Run** button per routine
-  with a **Reset** beside them. A click plays the routine on the main thread
-  as `./ctl play` does, and `status` lists them under `routines`. A routine
-  that declares a `session` parameter is handed the page's.
+- Bind `routine` (a callable taking the built `sim`, and the page's `session`
+  if it declares one, returning a generator), or `routines`, a dict of name to
+  such callables, and the page grows a **Run** button per routine with a
+  **Reset** beside them. A click plays the routine on the main thread as
+  `./ctl play` does, and `status` lists them under `routines`. How a routine
+  is stepped is in [Acting](#acting).
 
 ## `./ctl`
 
@@ -73,7 +74,7 @@ scene.add(rss.robot("yam_i2rt"))  # a scene needs something that moves before it
 | `run N` | Step N control steps, then hold. Refused while a routine plays; ends with an error if the scene is rebuilt or reset during the run. |
 | `pause`, `resume` | Pause or resume stepping. |
 | `reset` | Reset the scene. It also stops a playing routine and finishes its take; Pause is left as it was. |
-| `eval "CODE" [--record NAME --every K --camera N]` | Run Python on the sim thread in `scene.py`'s namespace (`sim`, `scene`, `np`, `rss`, and every name the file bound). What it binds, routines and `play` see until the next save starts the namespace over. A generator plays on the page step by step; `--record` films it; `--wait` waits for it as `play --wait` does. |
+| `eval "CODE"` or `eval -` (stdin) `[--record NAME --every K --camera N] [--wait]` | Run Python on the sim thread in `scene.py`'s namespace (`sim`, `scene`, `np`, `rss`, and every name the file bound). What it binds, routines and `play` see until the next save starts the namespace over. A generator plays on the page step by step; `--record` films it; `--wait` waits for it as `play --wait` does. |
 | `catalog [robots\|grippers\|cells\|assets]` | The names the registries know. |
 | `ref show PATH`, `ref hide` | A picture in the page's sidebar. |
 | `quit` | Stop the server. |
@@ -134,9 +135,7 @@ page returns to its previous state when the routine ends.
 
 `compare` puts the render beside the photograph and writes the look sheet;
 for each keyed thing it also measures size ratio, centre offset in pixels, and
-overlap (IoU). Keys are optional: key a thing that keys cleanly, typically the
-one the robot handles. The method and what a finished twin is are in
-[`AGENTS.md`](AGENTS.md) beside this file.
+overlap (IoU). Keys are optional.
 
 ### Keys
 
@@ -153,8 +152,8 @@ included; the photograph needs a `--key` saying how to find it:
 
 The name is the thing's scene name; pixels are in the photograph's own
 resolution. A colour key on a black, many-coloured, shiny or thin thing finds
-a fragment of it: look at its yellow outline on the look sheet before you
-trust its number, and use a mask instead.
+a fragment of it, which its yellow outline on the look sheet shows; a mask
+finds what was drawn.
 
 ### What `compare` says
 
@@ -169,10 +168,7 @@ right, as every pair here; open it first after each save. The **look sheet**
 (`cmp_NNN_look.png`) shows the pair; with keys, the photograph with each thing
 outlined twice (the photo's outline yellow, the render's cyan) and each keyed
 thing cropped from both pictures at one scale; and both pictures with the
-things painted out, which shows what stands behind them. Write down what
-the photograph has that the render lacks, per thing and behind them (a lid
-seam, latch tabs, a label, the table top, the couch); that list is the next
-edit.
+things painted out, which shows what stands behind them.
 
 The render's outlines come off the collider ray tracer, the picture off the
 path tracer: a thing drawn with a skin of its own (grains over a heap's
@@ -191,18 +187,20 @@ FAIL  penetration  worst overlap 1.99 mm between socket and table
 PASS  rest         nothing moved more than 0.4 mm in 60 steps
 ```
 
-The rest check reads a rigid thing's drift off its centre and a deformable's
-off its particle that moved most, so a sagging cloth or a sinking rope fails it;
-a named thing with nothing to read is listed as not measured. It steps the
-scene, then resets it to its start: a pose set with
+The rest check reads a rigid thing's drift off its centre; a cloth's or a
+rope's off its particle that moved most, so a sag or a sink fails it; and a
+heap's or a pool's off the 95th percentile of its particles, so one grain that
+never settles does not. A named thing with nothing to read is listed as not
+measured. It steps the scene, then resets it to its start: a pose set with
 `eval` or reached with `run N` is not kept. `check` is refused while a routine
-plays. `--steps` (60), `--settle-mm` (2) and `--penetration-mm` (1) set the
-bars; the penetration and rest lines print the bar they were held to, and the
-camera line holds the aspect within 2%. A line given nothing to look at
-(`objects` with no `--key` or `--object`) is a SKIP. The bars are defaults
-and `check` blocks nothing. The camera line holds the camera to the clip's aspect
-from `ref/timeline.json`; against a photo, `compare` says when it had to
-stretch the photo to the camera's aspect.
+plays.
+
+`--steps` (60), `--settle-mm` (2) and `--penetration-mm` (1) set the bars; the
+penetration and rest lines print the bar they were held to. The camera line
+holds the camera's aspect to the clip's in `ref/timeline.json`, within 2%;
+against a photo, `compare` says when it had to stretch the photo to the
+camera's aspect. A line given nothing to look at (`objects` with no `--key`
+or `--object`) is a SKIP. The bars are defaults, and `check` blocks nothing.
 
 ### The take
 
@@ -220,17 +218,18 @@ strip: the line is printed and logged with the take.
 in the take: case_lid went 118 mm and ended 4 mm from its start; case went 3 mm; 5 other things stayed within 2 mm
 ```
 
-Nothing says whether the take did what the clip did: read that off the strip.
-Each thing is read at the centre of mass of each of its bodies, or a sample of
-a deformable's particles: "went" is the most any of them went, "ended" the
-most any of them ended from where it started, so a key turning in a case
-whose base stays put, or a lid swinging on its hinge, is seen. An anchor pinned past the take's end is held
-against its last frame, and a line says so.
+Nothing says whether the take did what the clip did: that is read off the
+strip. Each thing is read at the centre of mass of each of its bodies, or a
+sample of a deformable's particles: "went" is the most any of them went,
+"ended" the most any of them ended from where it started, so a key turning in
+a case whose base stays put, or a lid swinging on its hinge, is seen.
+
 The clip and the take need not run the same length. An anchor is matched by
-proportion, or pinned with `"sim_t"` or `"sim_step"` in the timeline. Keys,
-if the last `compare` had any or `--key` gives some, only outline the things:
-a colour key in both rows; a seed or a mask, which keys one still, in the
-take's row alone.
+proportion, or pinned with `"sim_t"` or `"sim_step"` in the timeline; one
+pinned past the take's end is held against its last frame, and a line says
+so. Keys -- `--key`, else the last still `compare`'s -- only outline the
+things: a colour key in both rows; a seed or a mask, which keys one still, in
+the take's row alone.
 
 ### The board
 
@@ -244,8 +243,7 @@ board survives a rebuild. Below it are the **Run** and **Reset** buttons.
 
 `compare`, `check`, a take and `snapshot --note` append to `run/log.jsonl`
 with the hash of the `scene.py` they measured and the picture they left;
-`./ctl log` prints it. Use `--note` to say what each edit changed. A session
-that picks up where another stopped starts here, with the last look sheet.
+`./ctl log` prints it. `--note` says what each edit changed.
 
 ## Frames and units
 
