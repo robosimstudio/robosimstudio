@@ -103,6 +103,8 @@ class Sim(EnvBase):
             it -- it has no episodes to index -- and ``Env`` reassigns it per
             reset. Read by :meth:`reset_scene`, which hands it to each entity's
             own ``reset``."""
+        self.reset_count = getattr(self, "reset_count", 0)  # the base class may have reset once already
+        """Resets since the build: a reader that sampled ``step_count`` before tells a reset from a pause by it."""
         self._start_joint_q: np.ndarray | None = None
         """The articulation this run started from. Captured rather than compiled,
         because the warm-up steps real physics between the compiled pose and the

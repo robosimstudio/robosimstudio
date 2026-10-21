@@ -66,20 +66,20 @@ scene.add(rss.robot("yam_i2rt"))  # a scene needs something that moves before it
 | --- | --- |
 | `new NAME [--ref FILE ...] [--dir D]` | Make a twin's folder, `twins/NAME/` beside the run directory (or `D`): a starter `scene.py`, the files copied into `ref/`, `REPORT.md` with its four headings, and the folder's own `ctl`. Needs no page. |
 | `up [--port N] [--scene F] [--share]` | Start a server on the file (default: the `scene.py` beside the run directory), wait for the page, and print its URL (the next free port if N is busy). With a page already up, names it; refuses if that page is on another scene file or lacks a requested `--share`. |
-| `status [--wait]` | What is loaded, the names in it and where they are, the last error, the page's address, how the last routine ended (`last_script`), and `speed`: simulated seconds per wall second. While the page is building or rendering it answers at once with `busy` and for how long. `--wait` returns once the page is free and every save is built. |
+| `status [--wait [--wait-limit S]]` | What is loaded, the names in it and where they are, the last error, the page's address, how the last routine ended (`last_script`), and `speed`: simulated seconds per wall second. While the page is building or rendering it answers at once with `busy` and for how long. `--wait` returns once the page is free and every save is built, giving up after `--wait-limit` seconds (3600). |
 | `reload` | Rebuild now. Saving the file does this too. |
 | `snapshot [--camera N] [--beside REF] [--eye x,y,z --look-at x,y,z] [--size WxH] [--note TEXT]` | A path-traced PNG of the current state, with a reference picture beside it. A snapshot draws the room, the mat and the textures; the page draws only the bench and what you added. |
-| `ref frames CLIP [--at 0:closed,4.5:lid_open,end] [--every S]` | Stills out of a clip at those seconds, a contact sheet with the seconds burnt in, and `ref/timeline.json` anchoring them. Needs no page. |
+| `ref frames CLIP [--at 0:closed,4.5:lid_open,end] [--every S] [--out D] [--width W]` | Stills out of a clip at those seconds, a contact sheet with the seconds burnt in, and `ref/timeline.json` anchoring them, in `ref/` beside the scene file or `--out`, at the clip's width or `--width`. Needs no page. |
 | `compare [--ref PHOTO] [--camera N] [--key NAME=HOW ...] [--note TEXT]` | The scene beside the photograph: the pair at full size and a look sheet; per keyed thing, its size, offset and overlap. |
 | `compare --take NAME [--key ...]` | A recorded take beside the clip's timeline: the clip's anchors above, the take's frames at the same point below, and what moved in the take. |
 | `check [--camera N] [--key ...] [--object NAME ...]` | The gate: builds, finite state, camera at the clip's aspect, every named thing present, penetration and drift at rest under their bars. |
 | `log [--last N]` | Every compare, check, take and `snapshot --note` so far: what it left (PASS/FAIL, the picture: a snapshot's pair when it made one) and the `scene.py` it measured. |
-| `play [NAME] [--record TAKE --camera N] [--wait]` | Play a routine the scene file binds, as its button on the page does. `--wait` returns when it ends, printing the page's log as it goes, and exits 1 with the traceback if it failed. |
+| `play [NAME] [--record TAKE --camera N --every K] [--wait [--wait-limit S]]` | Play a routine the scene file binds, as its button on the page does; `--record` films a frame every `K` control steps (4). `--wait` returns when it ends and its take is written, printing the page's log as it goes, exits 1 with the traceback if it failed, and gives up after `--wait-limit` seconds (3600). |
 | `show PATH [--label TEXT]`, `show --clear` | A picture on the page's board for the person watching. |
 | `run N` | Step N control steps, then hold. Refused while a routine plays; ends with an error if the scene is rebuilt or reset during the run. |
 | `pause`, `resume` | Pause or resume stepping. |
 | `reset` | Reset the scene. It also stops a playing routine and finishes its take; Pause is left as it was. |
-| `eval "CODE"` or `eval -` (stdin) `[--record NAME --every K --camera N] [--wait]` | Run Python on the sim thread in `scene.py`'s namespace (`sim`, `scene`, `np`, `rss`, and every name the file bound). What it binds, routines and `play` see until the next save starts the namespace over. A generator plays on the page step by step; `--record` films it; `--wait` waits for it as `play --wait` does. |
+| `eval "CODE"` or `eval -` (stdin) `[--record NAME --every K --camera N] [--wait [--wait-limit S]]` | Run Python on the sim thread in `scene.py`'s namespace (`sim`, `scene`, `np`, `rss`, and every name the file bound). What it binds, routines and `play` see until the next save starts the namespace over. A generator plays on the page step by step; `--record` films it; `--wait` waits for it as `play --wait` does. |
 | `catalog [robots\|grippers\|cells\|assets]` | The names the registries know. |
 | `ref show PATH`, `ref hide` | A picture in the page's sidebar. |
 | `quit` | Stop the server. |
@@ -117,7 +117,8 @@ PY
 quoting; what it defines stays in the namespace until the next save.
 
 Rebuilds land running. A routine (from `eval`, `play` or **Run**) plays
-whatever **Pause** says, one `next()` per pass, by the studio's rule:
+whatever **Pause** says, one `next()` per pass, by its kind (unlike the
+studio's own Run buttons, which pause with the page and step every routine):
 
 - a routine that takes the page's `session` drives through the arm panels
   (`robosimstudio_studio.routine`'s `reach`, `grip` and `wait`), which stay
@@ -126,15 +127,18 @@ whatever **Pause** says, one `next()` per pass, by the studio's rule:
   `reach` again works;
 - any other routine drives the scene itself (`sim.run(1)` between yields): the
   page never steps it, and the arm panels are suspended while it plays, so
-  they do not write the joints and the gripper under it, and given back as
-  found when it ends.
+  they do not write the joints and the gripper under it.
+
+When a routine ends, however it ends, the arm panels are put back as they
+were when it started, one it suspended itself included.
 
 A generator `eval` returns is the second kind; to drive through the page,
 bind the routine in `scene.py` with a `session` parameter and `play` it. A
 routine of the second kind that yields 300 times running without stepping is
 stopped, with a line saying why. A routine that takes `session` and writes
 joints itself holds the panels off with `session.arms[...].suspend()`. The
-page returns to its previous state when the routine ends.
+page returns to its previous state when the routine ends, and stays paused
+through a `reset` while paused.
 
 ## Readings
 
@@ -188,8 +192,9 @@ PASS  builds       the last rebuild landed
 PASS  finite       every number in the state is finite
 PASS  camera       phone 1280x720, fov 37 deg; clip 1920x1080
 PASS  objects      all of case, socket, extension are in the scene
-FAIL  penetration  worst overlap 1.99 mm between socket and table
-PASS  rest         nothing moved more than 0.4 mm in 60 steps
+FAIL  penetration  worst overlap 1.99 mm between socket and table (bar 1 mm)
+PASS  rest         nothing moved more than 0.40 mm in 60 steps (bar 2 mm)
+PASS  finite_after still finite after 60 steps
 ```
 
 The rest check reads a rigid thing's drift off its centre; a cloth's or a
@@ -210,7 +215,7 @@ or `--object`) is a SKIP. The bars are defaults, and `check` blocks nothing.
 ### The take
 
 `--record NAME` films a routine as the page plays it (the video, every
-frame's segmentation at quarter size, every thing's position). When it ends,
+frame's segmentation at half size each way, every thing's position). When it ends,
 the page puts it beside the clip's `ref/timeline.json` by itself, as
 `compare --take NAME` does: a strip (`cmp_NNN_strip.png`) with the clip's
 anchors above and the take's frames at the same point of the action below,

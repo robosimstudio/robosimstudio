@@ -179,6 +179,34 @@ class RestOfAHeap(unittest.TestCase):
         self.assertTrue(rest["ok"], rest["detail"])
 
 
+class SceneCode(unittest.TestCase):
+    def test_one_rule_for_what_is_the_scenes_own_code(self) -> None:
+        from robosimstudio_real2sim_agent.scenefile import ScenePaths
+
+        root = Path(tempfile.mkdtemp())
+        (root / "helper.py").write_text("")
+        (root / "lib.py").write_text("")
+        sys.modules["_r2s_baseline_lib"] = types.SimpleNamespace(__file__=str(root / "lib.py"))  # type: ignore[assignment]
+        self.addCleanup(sys.modules.pop, "_r2s_baseline_lib", None)
+        paths = ScenePaths(root)
+        paths.set_baseline({"_r2s_baseline_lib"})
+        self.assertTrue(paths.is_scene(str(root / "helper.py")))
+        self.assertFalse(paths.is_scene(str(root / "lib.py")), "imported before the scene ran: the library's")
+        self.assertFalse(paths.is_scene("/elsewhere/x.py"))
+
+    def test_a_watcher_is_unwatched_by_identity(self) -> None:
+        from robosimstudio_real2sim_agent.scenefile import SceneRegistrations
+
+        root = Path(tempfile.mkdtemp())
+        a, b = SceneRegistrations(root), SceneRegistrations(root)
+        self.assertNotEqual(a, b)
+        registry.watch(a)
+        registry.watch(b)
+        registry.unwatch(b)
+        self.assertIn(a, registry._WATCHERS)
+        registry.unwatch(a)
+
+
 class TakeAccounting(unittest.TestCase):
     def test_a_reset_under_the_take_does_not_stop_the_count(self) -> None:
         rec = checks.Recorder.__new__(checks.Recorder)
@@ -350,6 +378,7 @@ def _server() -> LiveServer:
     live.script, live.recorder, live.run_budget, live.last_error = [], None, 0, ""
     live.head_stepped, live._head_ready, live._suspended_arms, live.last_take = False, None, [], {}
     live.ended, live.takes_written, live.busy_routine = {}, [], False
+    live._arms_before, live.resets = {}, 0
     live.build_error, live._tick_error = "", ""
     live.busy, live.busy_since = "", 0.0
     live._status_lock, live._status_pending = threading.Lock(), None
@@ -460,6 +489,20 @@ class RoutineStepping(unittest.TestCase):
         self.assertEqual(live.ended[serial]["how"], "failed")
         self.assertIn("without stepping", live.ended[serial]["error"])
         self.assertEqual(live.session.arms["left"].calls, ["suspend", "resume"], "given back, then the next takes them")
+
+    def test_an_arm_a_session_routine_held_off_itself_is_given_back_when_it_ends(self) -> None:
+        live = _server()
+
+        def holds_right():
+            live.session.arms["right"].suspend()
+            yield
+            raise RuntimeError("broke with the arm held off")
+
+        live.start_script(holds_right(), name="hold", drives_page=True)
+        _pass(live)
+        _pass(live)
+        self.assertEqual(live.session.arms["right"].calls, ["suspend", "resume"])
+        self.assertFalse(live.session.arms["right"].suspended)
 
     def test_a_routine_queued_behind_another_is_not_stepped_for_before_it_plays(self) -> None:
         live = _server()
@@ -581,6 +624,26 @@ class BusyStatus(unittest.TestCase):
         self.assertLess(time.perf_counter() - started, 2.0)
         self.assertEqual(reply["busy"], "rebuilding the scene file")
         self.assertGreaterEqual(reply["busy_seconds"], 41)
+
+    def test_a_waiting_poll_is_answered_off_the_main_thread_reading_nothing_off_the_scene(self) -> None:
+        live = self._busy_server()
+        live.sim = types.SimpleNamespace(step_count=42, time=0.7)
+        live.session = types.SimpleNamespace(paused=False, arms={})
+        live._speed = __import__("collections").deque()
+        reply = live._on_request({"cmd": "status", "light": True})
+        self.assertEqual((reply["step"], reply["time"], reply["busy"]), (42, 0.7, ""))
+        self.assertEqual(self.queued, 0, "nothing was put on the main thread's bus")
+
+    def test_only_a_path_traced_picture_counts_as_the_first_render(self) -> None:
+        live = _server()
+        live.busy, live.busy_since, live.rendered, live.build_error = "", 0.0, False, ""
+        live.cmd_compare = lambda **kw: {"ok": True}  # type: ignore[method-assign]
+        live.cmd_snapshot = lambda **kw: {"ok": True}  # type: ignore[method-assign]
+        live.dispatch({"cmd": "compare", "take": "take1"})
+        live.dispatch({"cmd": "snapshot", "browser": True})
+        self.assertFalse(live.rendered)
+        live.dispatch({"cmd": "snapshot", "camera": "phone"})
+        self.assertTrue(live.rendered)
 
     def test_a_command_after_a_failed_save_says_the_scene_is_the_one_before(self) -> None:
         live = _server()

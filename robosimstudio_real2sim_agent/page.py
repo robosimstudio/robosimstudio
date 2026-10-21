@@ -53,8 +53,8 @@ class LiveSession(StudioSession):
 
     def tick(self) -> bool:
         """One pass; a routine the page steps is stepped whatever Pause says, as one that steps itself plays."""
-        if not (self.paused and self.host.page_steps_script()):
-            return super().tick()
+        if not (self.paused and self.host.page_steps_script()) or self.reset_requested:
+            return super().tick()  # a reset this pass ends the routine: the page stays paused through it
         self.paused = False  # the field alone: the checkbox keeps saying what the person chose
         try:
             return super().tick()

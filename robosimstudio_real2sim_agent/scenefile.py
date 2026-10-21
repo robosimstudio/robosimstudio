@@ -33,25 +33,15 @@ a helper beside it makes, and takes them back before the next run.
 
 from __future__ import annotations
 
-import importlib.util
 import sys
+import sysconfig
 import time
 from collections.abc import Callable
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any
 
-__all__ = ["DOORS", "LIBRARY", "Loaded", "SceneRegistrations", "fallback_scene", "run_scene_file", "stamp"]
-
-LIBRARY = (
-    "robosimstudio",
-    "robosimstudio_materials",
-    "robosimstudio_studio",
-    "robosimstudio_bench",
-    "robosimstudio_policy_agent",
-    "robosimstudio_real2sim_agent",
-)
-"""The packages whose code is never the scene's own, wherever the scene file sits."""
+__all__ = ["DOORS", "Loaded", "ScenePaths", "SceneRegistrations", "fallback_scene", "run_scene_file", "stamp"]
 
 DOORS = ("view", "draw", "viewer")
 """The ``rss.`` names that would open a page of their own, held shut while the file runs."""
@@ -124,26 +114,57 @@ def fallback_scene():
     return scene
 
 
-def _package_dirs(names: tuple[str, ...]) -> tuple[Path, ...]:
-    dirs = []
-    for name in names:
-        try:
-            spec = importlib.util.find_spec(name)
-        except (ImportError, ValueError):
-            continue
-        for location in (spec.submodule_search_locations or []) if spec else []:
-            dirs.append(Path(location).resolve())
-    return tuple(dirs)
+class ScenePaths:
+    """What is the scene's own code: one rule, for the modules a rebuild imports afresh and the registrations it
+    takes back, so the two never disagree.
+
+    A file is the scene's when it is under the scene file's directory, is not
+    an installed package's, and is not a module imported before the scene file
+    first ran (the library, even when the scene file sits at the repository
+    root). Verdicts are kept per file name: a registry's discovery asks about
+    thousands of frames.
+    """
+
+    def __init__(self, root: Path | str) -> None:
+        self.root = Path(root).resolve()
+        self._installed = tuple(
+            Path(p).resolve() for key in ("purelib", "platlib") if (p := sysconfig.get_paths().get(key))
+        )
+        self._baseline: set[Path] = set()
+        self._verdicts: dict[str, bool] = {}
+
+    def set_baseline(self, module_names: set[str]) -> None:
+        """The modules imported before the scene file first ran: never the scene's, wherever they are."""
+        files = set()
+        for name in module_names:
+            file = getattr(sys.modules.get(name), "__file__", None)
+            if file:
+                files.add(Path(file).resolve())
+        self._baseline = files
+        self._verdicts.clear()
+
+    def is_scene(self, filename: str) -> bool:
+        verdict = self._verdicts.get(filename)
+        if verdict is None:
+            path = Path(filename).resolve()
+            verdict = (
+                path.is_relative_to(self.root)
+                and path not in self._baseline
+                and not any(part in ("site-packages", "dist-packages") for part in path.parts)
+                and not any(path.is_relative_to(lib) for lib in self._installed)
+            )
+            self._verdicts[filename] = verdict
+        return verdict
 
 
-@dataclass
+@dataclass(eq=False)  # a watcher is found and removed by identity, never by its notes
 class SceneRegistrations:
     """Every registry write the scene file, a helper beside it or an ``eval`` made, to take back before a rebuild.
 
     Installed with :func:`robosimstudio.registry.watch`. A write is the scene's
-    when the first frame above the registry that is not library code is the
-    scene file, a module under its directory, or ``<eval>``. Two kinds of
-    write stay: a library module registering as it is first imported -- even
+    when a frame above the registry is the scene's own code (:class:`ScenePaths`)
+    or ``<eval>``, before the walk meets one of two stops; the writes behind
+    those stay: a library module registering as it is first imported -- even
     when the scene's import set it off -- which the import machinery's frame
     stops the walk at; and a registry's discovery, run by a lookup the scene
     made (``rss.robot`` loading the embodiments, the task roots), which
@@ -152,17 +173,16 @@ class SceneRegistrations:
     imported and the registry loaded.
     """
 
-    root: Path
+    paths: ScenePaths
     writes: list[tuple[Any, ...]] = field(default_factory=list)
     """``(registry, name, value, origin, previous, previous_origin)`` per write, oldest first."""
-    _library: tuple[Path, ...] = ()
     _load_code: Any = None
 
     def __post_init__(self) -> None:
         from robosimstudio.registry import Registry
 
-        self.root = Path(self.root).resolve()
-        self._library = _package_dirs(LIBRARY)
+        if not isinstance(self.paths, ScenePaths):
+            self.paths = ScenePaths(self.paths)  # a directory, as a test or a caller may give
         self._load_code = Registry.load.__code__
 
     def __call__(self, registry: Any, name: str, value: Any, origin: str, previous: Any, previous_origin: str) -> None:
@@ -178,10 +198,9 @@ class SceneRegistrations:
                 return True
             if filename.startswith("<"):
                 return False  # the import machinery: a module registering as it loads
-            path = Path(filename).resolve()
-            if not any(path.is_relative_to(lib) for lib in self._library):
-                return path.is_relative_to(self.root) and "site-packages" not in path.parts
-            frame = frame.f_back
+            if self.paths.is_scene(filename):
+                return True
+            frame = frame.f_back  # library code between the registry and whoever called it
         return False
 
     def undo(self) -> list[tuple[Any, ...]]:

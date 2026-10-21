@@ -12,7 +12,7 @@ it and the picture it left, so before and after an edit are two lines apart.
     (:mod:`.compare`).
 ``record`` and ``compare_take``
     A routine played on the page is recorded through a camera -- the video, a
-    quarter-size segmentation of every frame, every thing's position -- and
+    segmentation of every frame at half size each way, every thing's position -- and
     then put beside the clip's ``timeline.json``: the first frame before
     anything happened, the last after everything did, and each moment the
     agent marked in between, in a strip for the eye; and what moved in the
@@ -434,8 +434,16 @@ class Recorder:
         seg = name_deformables(sim, self.cam, np.asarray(frame["seg"]).astype(np.int32), self.deformable_labels, q)
         self.writer.append(rgb)
         self.segs.append(seg[::SEG_SCALE, ::SEG_SCALE].astype(np.uint8 if len(self.names) < 255 else np.int32))
+        try:
+            body_q = np.asarray(sim.state.body_q.numpy(), dtype=np.float64)
+        except Exception:
+            body_q = None
         positions = {}
         for name in sim.names():
+            first = (self.bodies.get(name) or [None])[0]
+            if body_q is not None and first is not None and 0 <= first < len(body_q):
+                positions[name] = [round(float(v), 4) for v in body_q[first, :3]]  # its first body, as Ref reads it
+                continue
             try:
                 positions[name] = [round(float(v), 4) for v in sim[name].position]
             except Exception:
@@ -447,7 +455,7 @@ class Recorder:
                 "step": self.steps,
                 "t": round(self.steps / self.control_hz, 4),
                 "positions": positions,
-                "parts": _part_positions(sim, self.com, self.bodies, q),
+                "parts": _part_positions(sim, self.com, self.bodies, q, body_q),
             }
         )
 
@@ -521,7 +529,11 @@ def take_bodies(sim: Any) -> dict[str, list[int]]:
 
 
 def _part_positions(
-    sim: Any, com: np.ndarray | None = None, bodies: dict[str, list[int]] | None = None, q: np.ndarray | None = None
+    sim: Any,
+    com: np.ndarray | None = None,
+    bodies: dict[str, list[int]] | None = None,
+    q: np.ndarray | None = None,
+    body_q: np.ndarray | None = None,
 ) -> dict[str, list[list[float]]]:
     """Every body of every thing -- a case and its lid, a lock and its key -- where its centre of mass is now.
 
@@ -544,7 +556,7 @@ def _part_positions(
     if not bodies:
         return out
     try:
-        body_q = np.asarray(sim.state.body_q.numpy(), dtype=np.float64)
+        body_q = np.asarray(sim.state.body_q.numpy() if body_q is None else body_q, dtype=np.float64)
         com = np.asarray(sim.model.body_com.numpy() if com is None else com, dtype=np.float64)[: len(body_q)]
         # each body's centre of mass, not its origin: a lid's origin sits on its hinge and does not move as it opens
         where = compose_many(body_q, np.hstack([com, np.tile([0.0, 0.0, 0.0, 1.0], (len(com), 1))]))[:, :3]
@@ -851,6 +863,8 @@ def gate(
     drift = {
         n: 1000.0 * float(np.linalg.norm(np.asarray(after[n]) - np.asarray(before[n]))) for n in before if n in after
     }
+    from robosimstudio.core.render.particles import draws_points
+
     handles = getattr(getattr(getattr(sim, "scene", None), "handles", None), "deformables", None) or {}
     for name, points in _deformable_points(sim, list(shapes_before)).items():
         moved = np.linalg.norm(points - shapes_before[name], axis=1)
@@ -859,7 +873,7 @@ def gate(
             continue
         # a cloth or a rope by the particle that moved most; a heap or a pool, whose grains never all come to
         # rest, by the 95th percentile, so one jittering grain does not fail it
-        point_body = _is_point_body(handles.get(name))
+        point_body = draws_points(handles.get(name)) if handles.get(name) is not None else False
         drift[name] = 1000.0 * float(np.percentile(moved, 95) if point_body else moved.max())
     unmeasured = [n for n in looked_at if n in have and n not in drift]
     worst = max(drift.items(), key=lambda kv: kv[1]) if drift else ("", 0.0)
@@ -895,16 +909,6 @@ def _positions(sim: Any, names: list[str]) -> dict[str, list[float]]:
         except Exception:
             continue
     return out
-
-
-def _is_point_body(handle: Any) -> bool:
-    """A heap, a pool, a lump: particles with no triangles and no tube, drawn as points."""
-    return (
-        handle is not None
-        and not len(getattr(handle, "triangles", ()))
-        and not getattr(handle, "tube_radius", 0.0)
-        and bool(getattr(handle, "point_radius", 0.0))
-    )
 
 
 def _deformable_points(sim: Any, names: list[str]) -> dict[str, np.ndarray]:

@@ -120,7 +120,10 @@ def parse_key(text: str) -> Key:
         return Key(name=name.strip(), mask=path)
     m = _KEY.match(text)
     if m is None:
-        raise ValueError(f"not a key: {text!r}; write name=red, name=#rrggbb, name=@x,y or name=red@x,y")
+        raise ValueError(
+            f"not a key: {text!r}; a name (letters, digits, _ and -) then =red, =#rrggbb, =@x,y, =red@x,y "
+            "or =mask:path.png"
+        )
     name, how, sx, sy, tol = m.groups()
     how = how.strip().strip("'\"").strip()
     seed = (int(sx), int(sy)) if sx is not None else None

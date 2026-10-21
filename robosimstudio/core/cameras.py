@@ -209,7 +209,7 @@ class CameraSpec:
     ) -> tuple[np.ndarray, np.ndarray]:
         """World points [m] to this camera's pixels: ``(N, 2)`` ``(u, v)`` and ``(N,)`` depth along the view [m].
 
-        The inverse of what a render does to a point, through :attr:`intrinsics`
+        The same mapping a render applies to a point, through :attr:`intrinsics`
         and the pose, so a point read off the scene lands on the pixel the
         render drew it at. A point at or behind the camera has a depth ``<= 0``
         and a pixel that means nothing. ``camera_to_world`` is the pose to

@@ -65,8 +65,8 @@ __all__ = [
 TIMEOUTS = {
     "reload": 330.0,
     "snapshot": 600.0,
-    "eval": 300.0,
-    "play": 300.0,
+    "eval": 900.0,
+    "play": 900.0,
     "catalog": 120.0,
     "compare": 600.0,
     "check": 600.0,
@@ -74,8 +74,9 @@ TIMEOUTS = {
 }
 """Seconds to wait for a reply, per command; :data:`DEFAULT_TIMEOUT` for the rest.
 
-``play`` waits as long as ``eval``: with ``--record`` both render the take's
-first frame before they answer. ``snapshot`` waits as long as ``compare``: the
+``play`` and ``eval`` wait longest: with ``--record`` both render the take's
+first frame before they answer, which in a fresh process compiles the path
+tracer's shaders. ``snapshot`` waits as long as ``compare``: the
 first path-traced picture in a process compiles the renderer, for minutes."""
 DEFAULT_TIMEOUT = 30.0
 WAIT_LIMIT = 3600.0
@@ -87,7 +88,7 @@ SERVE_FLAGS = ("hold", "no_watch", "share", "dark", "hide_scenery", "camera_view
 """``up``'s switches that are the server's, spelled as argparse attributes."""
 CATALOGS = ("robots", "grippers", "cells", "assets")
 """What ``catalog`` can list; ``assets`` runs the registries' discovery, which takes seconds."""
-VERBOSE = ("readings", "anchors", "entries", "checks", "moved", "objects", "drift_mm")
+VERBOSE = ("readings", "anchors", "entries", "checks", "moved", "objects", "drift_mm", "ended", "takes_written")
 """Reply fields printed only under ``--json``: the raw numbers behind a ``report``."""
 
 
@@ -469,7 +470,7 @@ def wait_for_steps(sock: Path, reply: dict, steps: int) -> dict:
     busy = ""
     while time.time() < deadline:
         time.sleep(0.2)
-        status = request(sock, {"cmd": "status"}, DEFAULT_TIMEOUT)
+        status = request(sock, {"cmd": "status", "light": True}, DEFAULT_TIMEOUT)
         if not status.get("ok"):
             return status
         busy = status.get("busy", "")
@@ -484,7 +485,7 @@ def wait_for_steps(sock: Path, reply: dict, steps: int) -> dict:
                 "ok": True,
                 "step": status["step"],
                 "time": status["time"],
-                "finite": status["finite"],
+                "finite": status.get("finite"),
             }
     if busy:
         return {"ok": False, "error": f"the page was still {busy} when the wait ran out; how the run went is unknown"}
@@ -544,7 +545,7 @@ def wait_until_free(sock: Path, limit: float) -> dict:
     """Poll ``status`` until the page is not busy and every save has been built; the last status."""
     start = said = time.monotonic()
     while True:
-        status = request(sock, {"cmd": "status"}, DEFAULT_TIMEOUT)
+        status = request(sock, {"cmd": "status", "light": True}, DEFAULT_TIMEOUT)
         if not status.get("ok"):
             return status
         # a routine's step is the page at work, not held up: free, as far as a save or a render goes
@@ -595,7 +596,7 @@ def wait_for_script(sock: Path, reply: dict, log: Path, offset: int, limit: floa
 
     while True:
         stream()
-        status = request(sock, {"cmd": "status"}, DEFAULT_TIMEOUT)
+        status = request(sock, {"cmd": "status", "light": True}, DEFAULT_TIMEOUT)
         if not status.get("ok"):
             return status
         # this routine's own ending, not the newest one's: another may have ended after it

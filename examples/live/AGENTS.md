@@ -1,9 +1,9 @@
 # Real to sim on the live page
 
 The method for any agent rebuilding a real bench, scene or clip in simulation.
-Codex reads this file by itself when started in this folder, Claude Code through
-`CLAUDE.md` and the `real-to-sim` skill; the repository's `AGENTS.md` points
-here. This file says how to work and what to deliver; [`REFERENCE.md`](REFERENCE.md)
+Codex reads this file by itself when started in this folder or below it, and
+Claude Code through `CLAUDE.md`; the repository's `AGENTS.md` and the
+`real-to-sim` skill point here. This file says how to work and what to deliver; [`REFERENCE.md`](REFERENCE.md)
 says what every command, flag, file and reading is, and how the page behaves.
 
 `scene.py` runs on every save, and the `rss.Scene` it binds is built and
@@ -38,9 +38,10 @@ than guessing a constructor or a name.
   picture in a process compiles for minutes.
 - Several lines of Python go in a heredoc: `./ctl eval - <<'PY' ... PY`.
   `--json` after any command prints the raw reply.
-- Pick the GPU with `BUILD = {"device": "cuda:N"}` in `scene.py` or
-  `ROBOSIMSTUDIO_DEVICE=cuda:N ./ctl up`, never `CUDA_VISIBLE_DEVICES`: the
-  path tracer then finds no GPU and the first picture hangs.
+- Pick the GPU with `ROBOSIMSTUDIO_DEVICE=cuda:N ./ctl up` or
+  `BUILD = {"device": "cuda:N"}` in `scene.py`. The first path-traced picture
+  in a process compiles its shaders for minutes: `./ctl status` says so, and it
+  is not a hang.
 - A twin is not a library change: the test tiers and `tests/` are not for
   it.
 

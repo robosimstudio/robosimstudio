@@ -34,7 +34,7 @@ An exception out of a pass -- a panel's drain, a rebuild -- is reported in the
 ``Live`` folder and in ``status`` and the loop goes on; only ``quit`` stops it.
 
 A routine plays one ``next()`` per loop pass, whatever the Pause checkbox
-says, by the studio's rule for its Run buttons. One that takes the page's
+says, by its kind. One that takes the page's
 ``session`` drives through the arm panels (``robosimstudio_studio.routine``'s
 ``reach``, ``grip``, ``wait``): a pass whose ``next()`` only yielded is
 stepped by the page, one that stepped the scene itself is not. Any other
@@ -66,7 +66,6 @@ import os
 import queue
 import signal
 import sys
-import sysconfig
 import threading
 import time
 import traceback
@@ -82,7 +81,7 @@ from robosimstudio_studio.session import StudioConfig
 
 from . import checks, frames, stills
 from .page import LiveSession
-from .scenefile import Loaded, SceneRegistrations, fallback_scene, run_scene_file, stamp
+from .scenefile import Loaded, ScenePaths, SceneRegistrations, fallback_scene, run_scene_file, stamp
 from .wire import ControlSocket, ready_line
 
 __all__ = ["REFRESH_SECONDS", "STABLE_SECONDS", "LiveServer"]
@@ -132,7 +131,7 @@ class LiveServer:
         self.hold = bool(hold)
         """Land every rebuild paused rather than running."""
         self.path = Path(scene_path).resolve()
-        # absolute before the page changes into the scene file's directory (open_page)
+        # absolute before serve.main changes the process into the scene file's directory
         self.sock_path = Path(sock_path).absolute()
         self.run_dir = Path(run_dir).resolve()
         self.run_dir.mkdir(parents=True, exist_ok=True)
@@ -166,13 +165,15 @@ class LiveServer:
         """Whether the head script's last ``next()`` stepped the scene."""
         self._head_ready: int | None = None
         """``id`` of the head script once its arm panels are set as its kind asks."""
-        self._suspended_arms: list = []
-        """Arm panels suspended for a script that steps the scene itself, given back when it ends."""
+        self._arms_before: dict[str, bool] = {}
+        """Which arm panels were suspended when the head script started: they are put back so when it ends."""
         self.recorder: checks.Recorder | None = None
         """Records the script playing, when ``eval --record`` asked for it; finished when the queue empties."""
         self._baseline_modules: set[str] = set()
         """What was imported before the scene file first ran; never evicted on a rebuild."""
-        self.registrations = SceneRegistrations(self.path.parent)
+        self.scene_paths = ScenePaths(self.path.parent)
+        """What the scene's own code is, for the modules a rebuild imports afresh and the registrations it takes back."""
+        self.registrations = SceneRegistrations(self.scene_paths)
         """What the file, its helpers and ``eval`` registered since the last rebuild; taken back before the next."""
         self.busy = ""
         """What the main thread is doing that a ``status`` would otherwise wait out; empty between commands."""
@@ -241,24 +242,12 @@ class LiveServer:
         root -- is never touched), and only those whose file is under the scene
         file's directory: a helper beside ``scene.py``, or a package of them.
         """
-        root = self.path.parent
-        # installed packages are never helpers, even when the virtualenv sits under the scene file's directory
-        installed = {Path(p).resolve() for key in ("purelib", "platlib") if (p := sysconfig.get_paths().get(key))}
         gone = []
         for name, module in list(sys.modules.items()):
             if name in self._baseline_modules or name.partition(".")[0] in self._baseline_modules:
                 continue
             file = getattr(module, "__file__", None)
-            if not file:
-                continue
-            resolved = Path(file).resolve()
-            try:
-                resolved.relative_to(root)
-            except ValueError:
-                continue
-            if any(part in ("site-packages", "dist-packages") for part in resolved.parts) or any(
-                resolved.is_relative_to(lib) for lib in installed
-            ):
+            if not file or not self.scene_paths.is_scene(file):
                 continue
             del sys.modules[name]
             gone.append(name)
@@ -358,10 +347,8 @@ class LiveServer:
             paged = False
             if head is not None:
                 serial = (self.script_meta.get(id(head)) or {}).get("serial", 0)
-                sim, before, mark = self.sim, int(self.sim.step_count), checks.reset_mark(self.sim)
-                self._play()
-                own = checks.steps_since(sim, before, mark) if self.sim is sim else 0
-                self._credit(head, serial, own)  # what its next() took, the last one included
+                sim = self.sim
+                self._credit(head, serial, self._play())  # what its next() took, the last one included
                 paged = self.page_steps_script() and self.script[0] is head
                 before, mark = int(sim.step_count), checks.reset_mark(sim)
             if self.session.tick() and self.run_budget > 0:
@@ -482,22 +469,25 @@ class LiveServer:
         meta = self.script_meta.get(id(self.script[0])) or {}
         return meta.get("drives_page") is True and not self.head_stepped
 
+    def _arms(self) -> dict:
+        return getattr(getattr(self, "session", None), "arms", None) or {}
+
     def _suspend_arms(self) -> None:
-        """Hold the arm panels off a script that drives the scene itself, as the studio does for ``fn(sim)``."""
-        arms = getattr(self.session, "arms", None) or {}
-        for panel in arms.values():
+        """Hold the arm panels off a script that drives the scene itself."""
+        for panel in self._arms().values():
             if not getattr(panel, "suspended", True):
                 panel.suspend()
-                self._suspended_arms.append(panel)
 
     def _resume_arms(self) -> None:
-        """Give back the arm panels this page held off, as found; one held off by anyone else stays so."""
-        panels, self._suspended_arms = self._suspended_arms, []
-        for panel in panels:
-            try:
-                panel.resume()
-            except Exception:  # a panel of a scene since rebuilt
-                pass
+        """Put the arm panels back as they were when the script started: one this page or the routine held off is
+        given back; one held off before it stays so."""
+        before, self._arms_before = self._arms_before, {}
+        for name, panel in self._arms().items():
+            if before.get(name) is False and getattr(panel, "suspended", False):
+                try:
+                    panel.resume()
+                except Exception:  # a panel of a scene since rebuilt
+                    pass
 
     def _end_scripts(self, how: str) -> None:
         """End every queued script, the head first, each reported ``how``."""
@@ -547,8 +537,8 @@ class LiveServer:
         elif serial in self.ended:
             self.ended[serial]["steps"] += steps  # it ended this pass, with these steps in it
 
-    def _play(self) -> None:
-        """One step of the script at the head of the queue.
+    def _play(self) -> int:
+        """One step of the script at the head of the queue; returns the steps its ``next()`` took.
 
         Whether the page steps it is the script's kind (:meth:`start_script`,
         :meth:`page_steps_script`): a routine that drives through the arm
@@ -561,6 +551,7 @@ class LiveServer:
         meta = self.script_meta.get(id(gen)) or {}
         if self._head_ready != id(gen):
             self._head_ready = id(gen)
+            self._arms_before = {name: bool(getattr(p, "suspended", True)) for name, p in self._arms().items()}
             if not meta.get("drives_page"):
                 self._suspend_arms()
         before, mark = int(self.sim.step_count), checks.reset_mark(self.sim)
@@ -581,7 +572,8 @@ class LiveServer:
             self._next_script()
             print(f"[live] script failed:\n{failure}", file=sys.stderr, flush=True)
         else:
-            self.head_stepped = checks.steps_since(self.sim, before, mark) > 0
+            took = checks.steps_since(self.sim, before, mark)
+            self.head_stepped = took > 0
             if not meta.get("drives_page"):
                 meta["idle"] = 0 if self.head_stepped else meta.get("idle", 0) + 1
             if meta.get("idle", 0) >= IDLE_LIMIT:
@@ -607,9 +599,11 @@ class LiveServer:
                         f"[live] the recording failed:\n{traceback.format_exc()[-3000:]}", file=sys.stderr, flush=True
                     )
             if self.script and self.script[0] is gen:
-                return
+                return took
+        took = checks.steps_since(self.sim, before, mark)  # the last next() of an ended script stepped too
         if not self.script:
             self._finish_recorder("the script ended")
+        return took
 
     def _show_take(self, take: str, moved: str) -> None:
         """Every take is put beside the clip as it ends, on the board and in the log, and what moved in it is said.
@@ -740,6 +734,7 @@ class LiveServer:
         # itself resolves -- and so `eval` can import it back the same way.
         sys.path.insert(0, str(self.path.parent))
         self._baseline_modules = set(sys.modules)
+        self.scene_paths.set_baseline(self._baseline_modules)
         from robosimstudio import registry
 
         registry.watch(self.registrations)
@@ -782,7 +777,8 @@ class LiveServer:
         the page is doing and for how long, instead of waiting it out.
         """
         if request.get("cmd") == "status":
-            return self._status_now()
+            # a waiting client's poll is answered here, off the main thread, reading nothing off the scene
+            return self.light_status() if request.get("light") else self._status_now()
         try:
             return self.bus.call(self.dispatch, request)
         except BusTimeout as exc:
@@ -820,11 +816,18 @@ class LiveServer:
         return pending["reply"]
 
     def busy_status(self) -> dict:
-        """What ``status`` says while the main thread is busy: no positions, which would wait for it."""
+        """What ``status`` says while the main thread is busy, and what every ``status`` starts from.
+
+        Read from the socket thread while the main thread changes these, so
+        each is read once: a dict or list copied whole (one step under the
+        GIL), the recorder taken into a local before it is asked its name.
+        """
+        ended, recorder, take = self.ended.copy(), self.recorder, self.last_take
         return {
             "ok": True,
             "busy": self.busy,
-            "busy_seconds": round(time.perf_counter() - self.busy_since, 1),
+            "busy_seconds": round(time.perf_counter() - self.busy_since, 1) if self.busy else 0.0,
+            "busy_routine": self.busy_routine,
             "url": self.url,
             "share_url": self.share_url,
             "pid": os.getpid(),
@@ -833,14 +836,25 @@ class LiveServer:
             "pending_save": self._pending_save(),
             "log": _log_path(),
             "generation": self.generation,
-            "busy_routine": self.busy_routine,
+            "resets": self.resets,
             "playing": len(self.script),
             "last_script": self.last_script,
-            "ended": {str(k): v for k, v in self.ended.items()},
-            "recording": self.recorder.name if self.recorder is not None else "",
-            "last_take": self.last_take.get("take", ""),
+            "ended": {str(k): v for k, v in ended.items()},
+            "recording": recorder.name if recorder is not None else "",
+            "last_take": take.get("take", ""),
             "takes_written": list(self.takes_written),
             "last_error": self.last_error,
+        }
+
+    def light_status(self) -> dict:
+        """The status a waiting client polls: the busy one, with where the scene is in time; nothing read off it."""
+        sim = self.sim
+        return {
+            **self.busy_status(),
+            "step": int(getattr(sim, "step_count", 0)),
+            "time": round(float(getattr(sim, "time", 0.0)), 3),
+            "paused": bool(getattr(self.session, "paused", False)),
+            "speed": self.speed(),
         }
 
     def _pending_save(self) -> bool:
@@ -866,7 +880,12 @@ class LiveServer:
         if handler is None:
             return {"ok": False, "error": f"unknown command {name!r}"}
         what = BUSY.get(name, "")
-        renders = name in ("snapshot", "compare") or (name in ("play", "eval") and request.get("record"))
+        # what path-traces: a snapshot not taken off the browser, a still compare, a take's first frame
+        renders = (
+            (name == "snapshot" and not request.get("browser"))
+            or (name == "compare" and not request.get("take"))
+            or (name in ("play", "eval") and bool(request.get("record")))
+        )
         if what and renders and not self.rendered:
             what += FIRST_RENDER
         try:
@@ -897,37 +916,16 @@ class LiveServer:
                 positions[name] = "no body"
         current = stamp(self.path)
         return {
-            "ok": True,
-            "url": self.url,
-            "share_url": self.share_url,
-            "pid": os.getpid(),
-            "run_dir": str(self.run_dir),
-            "file": str(self.path),
+            **self.light_status(),
             "modified": time.strftime("%H:%M:%S", time.localtime(current[0] / 1e9)) if current else "missing",
             "loaded": time.strftime("%H:%M:%S", time.localtime(self.loaded_at)),
             "load_seconds": round(self.load_seconds, 2),
-            "last_error": self.last_error,
             "cell": scene.cell,
             "names": names,
             "cameras": [c.name for c in sim.cameras],
-            "step": int(sim.step_count),
-            "time": round(float(sim.time), 3),
-            "paused": bool(self.session.paused),
-            "playing": len(self.script),
-            "last_script": self.last_script,
-            "ended": {str(k): v for k, v in self.ended.items()},
-            "takes_written": list(self.takes_written),
-            "speed": self.speed(),
-            "busy": "",
-            "log": _log_path(),
-            "pending_save": self._pending_save(),
-            "generation": self.generation,
-            "resets": self.resets,
             "finite": bool(sim.state_is_finite()),
             "routines": self.routine_names(),
             "board": list(self.board),
-            "recording": self.recorder.name if self.recorder is not None else "",
-            "last_take": self.last_take.get("take", ""),
             "positions": positions,
         }
 
@@ -938,7 +936,7 @@ class LiveServer:
         if self.script:
             return {
                 "ok": False,
-                "error": "a routine is playing and steps the scene itself; wait for it to end, or `reset` to stop it",
+                "error": "a routine is playing; wait for it to end (`play --wait`), or `reset` to stop it",
             }
         self.run_budget = max(1, int(steps))
         self.session.set_paused(False)
@@ -960,7 +958,7 @@ class LiveServer:
         self.session.set_paused(False)
         reply: dict = {"ok": True, "paused": False}
         if self.script:
-            reply["note"] = "a routine is playing; the page runs on its own once it ends"
+            reply["note"] = "a routine is playing; Pause and Resume take effect for the page once it ends"
         return reply
 
     def cmd_reset(self) -> dict:
@@ -1245,7 +1243,7 @@ class LiveServer:
         if self.script:
             return {
                 "ok": False,
-                "error": "a routine is playing and steps the scene itself; wait for it to end, or `reset` to stop it",
+                "error": "a routine is playing; wait for it to end (`play --wait`), or `reset` to stop it",
             }
         parsed = self._keys(keys)
         line = self._timeline(timeline)

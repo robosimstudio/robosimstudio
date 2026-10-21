@@ -11,7 +11,7 @@ from pathlib import Path
 from unittest import mock
 
 from robosimstudio_real2sim_agent import server as server_mod
-from robosimstudio_real2sim_agent.scenefile import run_scene_file
+from robosimstudio_real2sim_agent.scenefile import ScenePaths, run_scene_file
 from robosimstudio_real2sim_agent.server import LiveServer
 
 TIER = "fast"
@@ -55,6 +55,8 @@ def _bare_server(root: Path) -> LiveServer:
     live.path = root / "scene.py"
     live.head_stepped, live._head_ready = False, None
     live.ended, live.takes_written, live.busy_routine = {}, [], False
+    live._arms_before, live.resets = {}, 0
+    live.scene_paths = ScenePaths(root)
     live.build_error, live._tick_error = "", ""
     live.busy, live.busy_since = "", 0.0
     live._suspended_arms = []

@@ -35,15 +35,15 @@ claude --permission-mode acceptEdits        # or Claude Code; edits go through w
 Start the agent in the twin's folder: Codex reads `examples/live/AGENTS.md` by
 itself on the way down from the repository, and Claude Code reads it through
 `CLAUDE.md`. An agent started anywhere else is pointed to it by the
-repository's `AGENTS.md`, and makes the folder itself. Where Codex's sandbox cannot
+repository's `AGENTS.md` (and Claude Code by the `real-to-sim` skill), and
+makes the folder itself. Where Codex's sandbox cannot
 start (`bwrap: loopback: Failed RTM_NEWADDR` on some hosts), run it in a
 throwaway clone or worktree of the repository with its sandbox off, never in a
 checkout you care about.
 
-The page opens on the starter scene: two arms on a bare floor. On a remote GPU
-box, pick an idle card with `ROBOSIMSTUDIO_DEVICE=cuda:N ./ctl up` (or
-`BUILD = {"device": "cuda:N"}` in `scene.py`), not `CUDA_VISIBLE_DEVICES`,
-which hides every GPU from the path tracer; and use `--share` or an SSH tunnel
+The page opens on the twin's starter scene: two arms on a bench. On a remote
+GPU box, pick an idle card with `ROBOSIMSTUDIO_DEVICE=cuda:N ./ctl up` (or
+`BUILD = {"device": "cuda:N"}` in `scene.py`), and use `--share` or an SSH tunnel
 (`ssh -L 8080:localhost:8080 <box>`). The page listens on all interfaces
 (viser's default), so on a shared network firewall the port or use the tunnel.
 `./ctl quit` stops the server.
