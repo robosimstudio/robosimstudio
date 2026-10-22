@@ -77,8 +77,6 @@ def main(argv=None) -> int:
     # Every path is absolute by now. The process works in the scene file's directory, so a file the scene,
     # a helper or `eval` reads or writes by a relative path is beside scene.py wherever `up` was run from.
     os.chdir(server.path.parent)
-    # No __pycache__ in the twin's folder, and no bytecode trusted over a helper edited within the second
-    sys.dont_write_bytecode = True
     server.serve()
     return 0
 

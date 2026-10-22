@@ -84,6 +84,8 @@ WAIT_LIMIT = 3600.0
 """How long ``--wait`` waits by default [s]."""
 SAY_EVERY = 10.0
 """Seconds between the progress lines ``--wait`` prints while nothing else is printed."""
+STALL_SECONDS = 60.0
+"""How long ``run N`` waits on a page that is not busy and takes no step before it says the run stalled."""
 START_HINT = "./ctl up    (in examples/live, or in a twin's folder)"
 SERVE_FLAGS = ("hold", "no_watch", "share", "dark", "hide_scenery", "camera_view")
 """``up``'s switches that are the server's, spelled as argparse attributes."""
@@ -472,44 +474,50 @@ def build_request(args: argparse.Namespace, parser: argparse.ArgumentParser) -> 
 def wait_for_steps(sock: Path, reply: dict, steps: int) -> dict:
     """After ``run N``: poll until the page has stepped N times or holds again.
 
-    A rebuild (a save) or a reset under the run ends it: the step count starts
-    over, so the target would never be reached, and the reply says what
-    happened instead of waiting out the deadline. A reset is read off the
-    page's reset count, not the step count, which may have climbed back past
-    ``start`` by the next poll.
+    However slowly the scene steps, the wait goes on while it steps: it gives
+    up only when the page, not busy, has taken no step for
+    :data:`STALL_SECONDS`. A rebuild (a save) or a reset under the run ends
+    it: the step count starts over, so the target would never be reached, and
+    the reply says what happened instead of waiting on. A reset is read off
+    the page's reset count, not the step count, which may have climbed back
+    past ``start`` by the next poll.
     """
     start = int(reply["step"])
     target = start + int(steps)
-    deadline = time.time() + 30.0 + steps / 5.0
-    busy, at = "", start
-    while time.time() < deadline:
+    at, moved = start, time.time()
+    while True:
         time.sleep(0.2)
         status = request(sock, {"cmd": "status", "light": True}, DEFAULT_TIMEOUT)
         if not status.get("ok"):
             return status
-        busy = status.get("busy", "")
-        if busy:
-            continue  # a rebuild or a render under way: the next poll says how the run fared
+        now = time.time()
+        if status.get("busy"):
+            moved = now  # a rebuild or a render under way holds the steps up: the next poll says how the run fared
+            continue
         if status.get("generation", reply.get("generation")) != reply.get("generation"):
             return {"ok": False, "error": "the scene was rebuilt during the run; the run ended", "step": status["step"]}
         if status.get("resets", reply.get("resets")) != reply.get("resets") or status["step"] < start:
             return {"ok": False, "error": "the scene was reset during the run; the run ended", "step": status["step"]}
-        at = status["step"]
         if status["step"] >= target or (status["paused"] and status["playing"] == 0):
+            done = {"ok": True, "step": status["step"], "time": status["time"]}
             full = request(sock, {"cmd": "status"}, DEFAULT_TIMEOUT)  # once, at the end: is the state still finite
+            if "finite" in full:
+                done["finite"] = full["finite"]
+            else:
+                done["note"] = (
+                    f"whether the state is finite is not known: the page was {full.get('busy') or 'not answering'} "
+                    "-- `./ctl status` says"
+                )
+            return done
+        if status["step"] > at:
+            at, moved = status["step"], now
+        elif now - moved > STALL_SECONDS:
             return {
-                "ok": True,
-                "step": status["step"],
-                "time": status["time"],
-                "finite": full.get("finite"),
+                "ok": False,
+                "error": f"the run stalled at step {at} of {target}: no step in {STALL_SECONDS:.0f} s; "
+                "the page carries on",
+                "step": at,
             }
-    if busy:
-        return {"ok": False, "error": f"the page was still {busy} when the wait ran out; how the run went is unknown"}
-    return {
-        "ok": False,
-        "error": f"the run had not reached step {target} when the wait ran out (at step {at}); the page carries on",
-        "step": at,
-    }
 
 
 def _say(text: str) -> None:
@@ -582,7 +590,7 @@ def wait_until_free(sock: Path, limit: float) -> dict:
         if now - start > limit:
             return {"ok": False, "error": f"still {doing} after {limit:.0f} s; the page carries on"}
         if now - said >= SAY_EVERY:
-            _say(f"waiting: {doing} ({status.get('busy_seconds', now - start):.0f} s)")
+            _say(f"waiting: {doing} ({status.get('busy_seconds', 0) if busy else now - start:.0f} s)")
             said = now
         time.sleep(0.5)
 
@@ -627,7 +635,8 @@ def wait_for_script(sock: Path, reply: dict, log: Path, offset: int, limit: floa
         # this routine's own ending, not the newest one's: another may have ended after it
         ended = (status.get("ended") or {}).get(str(serial)) or {}
         # ended; and a take it filmed is no longer filming, nor being written and put beside the clip
-        filming = take and (status.get("busy") or status.get("recording") == take)
+        writing = status.get("busy") and not status.get("busy_routine")  # a take is written by the main thread
+        filming = take and (writing or status.get("recording") == take)
         if ended and not filming:
             break
         now = time.monotonic()
@@ -737,7 +746,8 @@ def cmd_up(args: argparse.Namespace, sock: Path) -> int:
         )
         return 2
     try:
-        status = request(sock, {"cmd": "status"}, 5.0)
+        # the light status: answered off the main thread, so a page deep in a routine's step still answers at once
+        status = request(sock, {"cmd": "status", "light": True}, 5.0)
     except NoServer:
         if sock.exists() and not sock.is_socket():
             print(f"ctl: {sock} exists and is not a socket; name another --sock", file=sys.stderr)

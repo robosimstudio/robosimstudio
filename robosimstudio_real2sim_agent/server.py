@@ -21,12 +21,12 @@ rebuild, and what they and the file registered is taken back first
 (:class:`.scenefile.SceneRegistrations`), so an edit to a helper beside it --
 an entity class, a cell -- lands with the next save.
 Saves are noticed by polling the stamps of the file and of every ``.py``
-beside it (:meth:`LiveServer.helpers`) every :data:`SCAN_SECONDS`, taken
+beside it (:func:`.scenefile.helper_files`) every :data:`SCAN_SECONDS`, taken
 before each build, and waiting for them to hold still for
 :data:`STABLE_SECONDS`, because editors write in two steps and the compile
-step catches whatever slips through. The page writes no bytecode, and drops a
-helper's before importing it again, so an edit within the second of the last
-one is read from the source.
+step catches whatever slips through. The helpers' cached bytecode is dropped
+before each build, so an edit within the second of the last one is read from
+the source.
 
 The loop is the studio's own ``tick``, driven here rather than by
 ``StudioSession.run`` because ``run`` closes the page when it returns and
@@ -87,7 +87,15 @@ from robosimstudio_studio.session import StudioConfig
 
 from . import checks, frames, stills
 from .page import LiveSession
-from .scenefile import Loaded, ScenePaths, SceneRegistrations, fallback_scene, run_scene_file, stamp
+from .scenefile import (
+    Loaded,
+    ScenePaths,
+    SceneRegistrations,
+    fallback_scene,
+    helper_files,
+    run_scene_file,
+    stamp,
+)
 from .wire import ControlSocket, ready_line
 
 __all__ = ["REFRESH_SECONDS", "SCAN_SECONDS", "STABLE_SECONDS", "LiveServer"]
@@ -96,13 +104,6 @@ STABLE_SECONDS = 0.3
 """How long a saved file has to stop changing before it is executed."""
 SCAN_SECONDS = 0.2
 """How often the loop looks for a save."""
-WATCH_SKIP = frozenset({"run", "ref", "assets", "twins", "__pycache__"})
-"""Folders beside the scene file whose ``.py`` files are not the scene's: its readings and scratch scripts, its
-references, its assets, the twins under it. Hidden folders and this library's packages are skipped too."""
-WATCH_DEPTH = 2
-"""How many folders down from the scene file's a helper module is watched."""
-WATCH_LIMIT = 500
-"""The most ``.py`` files watched: a scene file at the top of a large tree watches the first this many."""
 ROUTINE_WAIT = 5.0
 """Seconds a ``status`` waits out one step of a routine before it answers with the busy status instead."""
 REFRESH_SECONDS = 0.5
@@ -128,6 +129,8 @@ BUSY = {
     "catalog": "listing the registries",
 }
 """What the main thread is doing, by command, for a ``status`` asked meanwhile."""
+READS_THE_SCENE = ("snapshot", "compare", "check", "eval", "play", "run", "reset")
+"""The commands refused while no scene is in the page (``LiveServer.serving`` is ``nothing``)."""
 FIRST_RENDER = (
     "; the first path-traced picture in a process compiles the renderer's shaders, "
     "which can take minutes -- later ones take seconds"
@@ -175,9 +178,9 @@ class LiveServer:
         self.loaded_at = 0.0
         self.load_seconds = 0.0
         self.run_budget = 0
+        """Steps left before the page pauses again; -1 is no limit."""
         self.resets = 0
         """Resets taken since the page came up: ``ctl run N`` reads a change in it as its run ended."""
-        """Steps left before the page pauses again; -1 is no limit."""
         self.script: list = []
         """Generators an ``eval`` returned, advanced one ``next()`` per loop pass."""
         self.head_stepped = False
@@ -187,7 +190,7 @@ class LiveServer:
         self._arms_before: dict[str, bool] = {}
         """Which arm panels were suspended when the head script started: they are put back so when it ends."""
         self.recorder: checks.Recorder | None = None
-        """Records the script playing, when ``eval --record`` asked for it; finished when the queue empties."""
+        """Films the script ``play --record`` or ``eval --record`` started; finished when that script ends."""
         self.scene_paths = ScenePaths(self.path.parent)
         """What the scene's own code is, for the modules a rebuild imports afresh and the registrations it takes back."""
         self.registrations = SceneRegistrations(self.scene_paths)
@@ -228,8 +231,10 @@ class LiveServer:
         """The last :data:`RECENT` takes written, by name."""
         self.last_keys: list[str] = []
         """The keys of the last still comparison; a take that ends outlines its things with them."""
-        self.stand_in = False
-        """Whether the page shows the bare scene standing in for one that did not build or would not go in."""
+        self.serving = "scene"
+        """What the page shows: ``scene`` (the file's, or the one before a save that did not build), ``stand-in``
+        (the bare scene standing in for one that did not go in) or ``nothing`` (the stand-in would not go in either:
+        no scene is in the page, and the commands that read one are refused until a save goes in)."""
         self._loaded_stamp = None
         """The stamps the scene now up was built from, taken before its build: a save meanwhile is still seen."""
         self._pending = None
@@ -265,6 +270,7 @@ class LiveServer:
         loaded then -- the library, even when the file sits at the repository
         root -- is never touched), and only those whose file is under the scene
         file's directory: a helper beside ``scene.py``, or a package of them.
+        The helpers' cached bytecode goes too.
         """
         gone = []
         for name, module in list(sys.modules.items()):
@@ -273,10 +279,11 @@ class LiveServer:
                 continue
             del sys.modules[name]
             gone.append(name)
-            if file.endswith(".py"):
-                # bytecode is trusted on the source's whole-second mtime and size: an edit within the second of the
-                # last one, to the same length, would import the old code
-                Path(importlib.util.cache_from_source(file)).unlink(missing_ok=True)
+        # Bytecode is trusted on the source's whole-second mtime and size: an edit within the second of the last
+        # one, to the same length, would import the old code. Every helper's goes, imported or not -- one whose
+        # import failed after it compiled left its bytecode too.
+        for file in helper_files(self.path):
+            Path(importlib.util.cache_from_source(str(file))).unlink(missing_ok=True)
         if gone:
             importlib.invalidate_caches()
         return gone
@@ -290,7 +297,7 @@ class LiveServer:
         self.run_budget = 0
         try:
             self._adopt(loaded)
-            self.stand_in = False
+            self.serving = "scene"
             ok = True
         except Exception as exc:
             # adopt() gave the old scene back before it failed, so there is no
@@ -302,8 +309,9 @@ class LiveServer:
             try:
                 scene = fallback_scene()
                 self._adopt(Loaded(ns={}, scene=scene, sim=scene.build(control_mode="joint_position"), seconds=0.0))
-                self.stand_in = True
+                self.serving = "stand-in"
             except Exception:
+                self.serving = "nothing"
                 error += (
                     "\n\nand the bare scene that should have replaced it failed too:\n" + traceback.format_exc()[-2000:]
                 )
@@ -358,35 +366,7 @@ class LiveServer:
         first = stamp(self.path)
         if first is None:
             return None
-        return (first, tuple((str(f), stamp(f)) for f in self.helpers()))
-
-    def helpers(self) -> list[Path]:
-        """The ``.py`` files a save to which rebuilds besides the scene file: every one under its folder, down
-        :data:`WATCH_DEPTH` folders, but in :data:`WATCH_SKIP`, hidden or this library's; at most
-        :data:`WATCH_LIMIT`. Every one, imported or not: one that failed to import, or that the file imports later,
-        is watched all the same."""
-        found: list[Path] = []
-        level = [self.path.parent]
-        for _ in range(WATCH_DEPTH + 1):
-            below = []
-            for folder in level:
-                try:
-                    entries = sorted(os.scandir(folder), key=lambda e: e.name)
-                except OSError:
-                    continue
-                for entry in entries:
-                    name = entry.name
-                    if name.startswith("."):
-                        continue
-                    if entry.is_dir(follow_symlinks=False):
-                        if name not in WATCH_SKIP and not name.startswith("robosimstudio"):
-                            below.append(Path(entry.path))
-                    elif name.endswith(".py") and Path(entry.path) != self.path:
-                        found.append(Path(entry.path))
-                        if len(found) >= WATCH_LIMIT:
-                            return found
-            level = below
-        return found
+        return (first, tuple((str(f), stamp(f)) for f in helper_files(self.path)))
 
     def watch(self) -> None:
         now = time.perf_counter()
@@ -423,8 +403,9 @@ class LiveServer:
                 self.run_budget -= 1
                 if self.run_budget == 0:
                     self.session.set_paused(True)
-            if paged and self.sim is sim:
-                self._credit(head, serial, checks.steps_since(sim, before, mark))  # the page's step, taken for it
+            if paged and self.sim is sim and self.script and self.script[0] is head:
+                # the page's step, taken for it -- unless a reset in that tick ended it first
+                self._credit(head, serial, checks.steps_since(sim, before, mark))
             self._tick_error = ""
         except Exception as exc:
             # A panel's drain or a rebuild that raised: the page stays up and
@@ -516,6 +497,7 @@ class LiveServer:
             "drives_page": bool(drives_page),
             "idle": 0,
             "steps": 0,
+            "filmed": bool(record),
             "wall": time.perf_counter(),
         }
         self.run_budget = 0
@@ -673,8 +655,8 @@ class LiveServer:
             if self.script and self.script[0] is gen:
                 return took
         took = checks.steps_since(self.sim, before, mark)  # the last next() of an ended script stepped too
-        if not self.script:
-            self._finish_recorder("the script ended")
+        if meta.get("filmed"):
+            self._finish_recorder("the script ended")  # a routine queued behind it is not filmed into its take
         return took
 
     def _show_take(self, take: str, moved: str, motion: dict | None = None) -> None:
@@ -832,7 +814,7 @@ class LiveServer:
                 sim=scene.build(control_mode="joint_position"),
                 seconds=0.0,
             )
-        self.stand_in = bool(error)
+        self.serving = "stand-in" if error else "scene"
         self.ns, self.scene, self.sim = loaded.ns, loaded.scene, loaded.sim
         self.session = LiveSession(loaded.sim, config=self.config, host=self)
         # viser takes the next port up when the one asked for is busy
@@ -879,6 +861,8 @@ class LiveServer:
                         box["reply"] = self.bus.call(self.dispatch, {"cmd": "status"})
                     except (BusTimeout, BusClosed) as exc:
                         box["reply"] = {"ok": False, "error": f"server busy: {exc}"}
+                    except Exception as exc:  # whatever else: every caller waiting on this one gets a reply
+                        box["reply"] = {"ok": False, "error": f"status failed: {type(exc).__name__}: {exc}"}
                     finally:
                         with self._status_lock:
                             if self._status_pending is box:
@@ -914,6 +898,7 @@ class LiveServer:
             "file": str(self.path),
             "run_dir": str(self.run_dir),
             "pending_save": self._pending_save(),
+            "serving": "" if self.serving == "scene" else self.serving,  # said only when it is not the scene
             "server_log": self.log_path,
             "generation": self.generation,
             "resets": self.resets,
@@ -960,6 +945,13 @@ class LiveServer:
         handler = getattr(self, f"cmd_{name}", None)
         if handler is None:
             return {"ok": False, "error": f"unknown command {name!r}"}
+        if self.serving == "nothing" and name in READS_THE_SCENE:
+            last = self.build_error.strip().splitlines()[-1] if self.build_error.strip() else ""
+            return {
+                "ok": False,
+                "error": f"no scene is in the page: {self.path.name} would not go in, nor the bare scene in its place "
+                f"({last}); save a fix to go in, or `./ctl quit` and `./ctl up` -- `./ctl status` has the traceback",
+            }
         what = BUSY.get(name, "")
         # what path-traces: a snapshot not taken off the browser, a still compare, a take's first frame
         renders = (
@@ -979,7 +971,7 @@ class LiveServer:
         if self.build_error and name in ("snapshot", "compare", "check", "eval", "play"):
             # the page still shows the scene before the save that failed: say so, beside whatever this answered
             last = self.build_error.strip().splitlines()[-1]
-            if self.stand_in:
+            if self.serving == "stand-in":
                 reply["stale"] = (
                     f"{self.path.name} is not up ({last}); a bare scene stands in for it, not your scene -- "
                     "`./ctl status` has the traceback"
@@ -993,6 +985,8 @@ class LiveServer:
 
     # ------------------------------------------------------------ commands
     def cmd_status(self) -> dict:
+        if self.serving == "nothing":
+            return self.light_status()  # no scene to read: what failed is in last_error, and `serving` says so
         sim, scene = self.sim, self.scene
         names = sim.names()
         positions = {}
@@ -1001,10 +995,12 @@ class LiveServer:
                 positions[name] = [round(float(v), 4) for v in sim[name].position]
             except Exception:
                 positions[name] = "no body"
-        current = stamp(self.path)
+        current = self._stamps()
+        # the last save to scene.py or a helper: a save to either rebuilds
+        newest = max([current[0][0], *(s[0] for _, s in current[1] if s)]) if current else 0
         return {
             **self.light_status(),
-            "modified": time.strftime("%H:%M:%S", time.localtime(current[0] / 1e9)) if current else "missing",
+            "modified": time.strftime("%H:%M:%S", time.localtime(newest / 1e9)) if current else "missing",
             "loaded": time.strftime("%H:%M:%S", time.localtime(self.loaded_at)),
             "load_seconds": round(self.load_seconds, 2),
             "cell": scene.cell,

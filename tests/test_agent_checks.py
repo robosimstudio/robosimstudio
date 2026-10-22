@@ -164,10 +164,10 @@ class TestCompareStill(unittest.TestCase):
         self.assertEqual(len(result["lines"]), 2, "one line per key, nothing else")
         pictures = checks.write_compare_pictures(tmp / "cmp_001.png", rgb, result)
         self.assertTrue(Path(pictures["look"]).exists() and pictures["look"].endswith("_look.png"))
-        beside = Image.open(pictures["beside"])
-        self.assertEqual(
-            beside.size, (2 * rgb.shape[1], rgb.shape[0]), "the render and the photo side by side, full size"
-        )
+        with Image.open(pictures["beside"]) as beside:
+            self.assertEqual(
+                beside.size, (2 * rgb.shape[1], rgb.shape[0]), "the render and the photo side by side, full size"
+            )
         none = checks.compare_still(rgb, seg, names, tmp / "ref.png", [])
         self.assertEqual(none["objects"], {})
         self.assertIn("no --key", none["lines"][0])

@@ -33,6 +33,7 @@ a helper beside it makes, and takes them back before the next run.
 
 from __future__ import annotations
 
+import os
 import sys
 import sysconfig
 import time
@@ -41,10 +42,29 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any
 
-__all__ = ["DOORS", "Loaded", "ScenePaths", "SceneRegistrations", "fallback_scene", "run_scene_file", "stamp"]
+__all__ = [
+    "DOORS",
+    "WATCH_DEPTH",
+    "WATCH_LIMIT",
+    "WATCH_SKIP",
+    "Loaded",
+    "ScenePaths",
+    "SceneRegistrations",
+    "fallback_scene",
+    "helper_files",
+    "run_scene_file",
+    "stamp",
+]
 
 DOORS = ("view", "draw", "viewer")
 """The ``rss.`` names that would open a page of their own, held shut while the file runs."""
+WATCH_SKIP = frozenset({"run", "ref", "assets", "twins", "__pycache__"})
+"""Folders beside the scene file whose ``.py`` files are not the scene's: its readings and scratch scripts, its
+references, its assets, the twins under it. Hidden folders and this library's packages are skipped too."""
+WATCH_DEPTH = 2
+"""How many folders down from the scene file's a helper module is watched."""
+WATCH_LIMIT = 500
+"""The most ``.py`` files watched: a scene file at the top of a large tree watches the first this many."""
 
 
 @dataclass(frozen=True)
@@ -103,6 +123,36 @@ def stamp(path: Path | str) -> tuple[int, int] | None:
     except FileNotFoundError:
         return None
     return (st.st_mtime_ns, st.st_size)
+
+
+def helper_files(path: Path | str) -> list[Path]:
+    """The ``.py`` files that are the scene's besides the file itself, in a fixed order: every one under its folder,
+    down :data:`WATCH_DEPTH` folders, but in :data:`WATCH_SKIP`, hidden or this library's; at most
+    :data:`WATCH_LIMIT`. Every one, imported or not: one that failed to import, or that the file imports later, is
+    the scene's all the same. A save to one rebuilds, and the log's scene hash covers them."""
+    path = Path(path).resolve()
+    found: list[Path] = []
+    level = [path.parent]
+    for _ in range(WATCH_DEPTH + 1):
+        below = []
+        for folder in level:
+            try:
+                entries = sorted(os.scandir(folder), key=lambda e: e.name)
+            except OSError:
+                continue
+            for entry in entries:
+                name = entry.name
+                if name.startswith("."):
+                    continue
+                if entry.is_dir(follow_symlinks=False):
+                    if name not in WATCH_SKIP and not name.startswith("robosimstudio"):
+                        below.append(Path(entry.path))
+                elif name.endswith(".py") and Path(entry.path) != path:
+                    found.append(Path(entry.path))
+                    if len(found) >= WATCH_LIMIT:
+                        return found
+        level = below
+    return found
 
 
 def fallback_scene():

@@ -20,7 +20,7 @@ def _bare_server() -> LiveServer:
     live = LiveServer.__new__(LiveServer)
     live.path = Path("/nonexistent/scene.py")
     live.head_stepped, live._head_ready = False, None
-    live.ended, live.takes_written, live.stand_in = {}, [], False
+    live.ended, live.takes_written, live.serving = {}, [], "scene"
     live._arms_before, live.resets = {}, 0
     live.log_path, live._motions = "", {}
     live.scene_paths = ScenePaths(Path("/nonexistent"))

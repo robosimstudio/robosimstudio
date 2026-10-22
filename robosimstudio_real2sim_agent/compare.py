@@ -241,7 +241,8 @@ def _mask_file(path: str, shape: tuple[int, int]) -> np.ndarray:
     """A mask PNG at the photograph's size: any pixel that is not black is the thing."""
     from PIL import Image
 
-    image = Image.open(path).convert("RGBA")
+    with Image.open(path) as opened:
+        image = opened.convert("RGBA")
     h, w = shape
     if image.size != (w, h):
         image = image.resize((w, h), Image.NEAREST)
@@ -300,7 +301,8 @@ def compare_masks(photo: np.ndarray | None, sim: np.ndarray | None) -> dict[str,
 def load_photo(photo_path: str | Path) -> np.ndarray:
     from PIL import Image
 
-    return np.asarray(Image.open(photo_path).convert("RGB"), dtype=np.uint8)
+    with Image.open(photo_path) as opened:
+        return np.asarray(opened.convert("RGB"), dtype=np.uint8)
 
 
 def fit_photo(photo: np.ndarray, width: int, height: int) -> tuple[np.ndarray, float]:

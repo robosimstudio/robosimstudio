@@ -119,7 +119,10 @@ def contact_sheet(
     last = meta["duration"] - 1.0 / (meta["fps"] or 30.0)
     times = [round(i * every, 3) for i in range(int(meta["duration"] // every) + 1) if i * every <= last]
     with tempfile.TemporaryDirectory() as tmp:
-        tiles = [Image.open(p).convert("RGB") for p in extract(clip, times, tmp, width=width)]
+        tiles = []
+        for p in extract(clip, times, tmp, width=width):
+            with Image.open(p) as opened:
+                tiles.append(opened.convert("RGB"))
     if not tiles:
         raise ValueError(f"no frames in {clip}")
     tw, th = tiles[0].size

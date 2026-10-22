@@ -18,8 +18,9 @@ is that folder's. `twins/` is not committed.
   prints the traceback. One that builds but will not go into the page leaves
   a bare scene (one YAM) standing in, and every reply says so.
 - A save to `scene.py` or to any `.py` in its folder, two folders down,
-  rebuilds -- but not under `run/`, `ref/`, `assets/` or `twins/`: a scratch
-  script goes in `run/`. A rebuild re-imports the helper modules beside
+  rebuilds -- but not under `run/`, `ref/`, `assets/`, `twins/`, a hidden
+  folder or one named `robosimstudio*`, and no more than the first 500 files:
+  a scratch script goes in `run/`. A rebuild re-imports the helper modules beside
   `scene.py` (a module or a package in its directory) and takes back what the
   file and its helpers registered (an entity class, a cell, a gripper, a
   scenery), so an edit to a helper lands with the next save: no new name per
@@ -81,7 +82,7 @@ scene.add(rss.robot("yam_bimanual"))  # a scene needs something that moves befor
 | `log [--last N]` | Every compare, check, take and `snapshot --note` so far: what it left (PASS/FAIL, the picture: a snapshot's pair when it made one) and the `scene.py` it measured. |
 | `play [NAME] [--record TAKE --camera N --every K] [--wait [--wait-limit S]]` | Play a routine the scene file binds, as its button on the page does; `--record` films a frame every `K` control steps (4). `--wait` returns when it ends and its take is written, printing the page's log as it goes, exits 1 with the traceback if it failed, and gives up after `--wait-limit` seconds (3600). |
 | `show PATH [--label TEXT]`, `show --clear` | A picture on the page's board for the person watching. |
-| `run N` | Step N control steps, then hold. Refused while a routine plays; ends with an error if the scene is rebuilt or reset during the run. |
+| `run N [--no-wait]` | Step N control steps, then hold, waiting until they are taken however slowly the scene steps. Refused while a routine plays; ends with an error if the scene is rebuilt or reset during the run, or if the page, not busy, takes no step for 60 s (the page carries on). |
 | `pause`, `resume` | Pause or resume stepping. |
 | `reset` | Reset the scene. It also stops a playing routine and finishes its take; Pause is left as it was. |
 | `eval "CODE"` or `eval -` (stdin) `[--record NAME --every K --camera N] [--wait [--wait-limit S]]` | Run Python on the sim thread in `scene.py`'s namespace (`sim`, `scene`, `session`, `np`, `rss`, `live` -- the page's own `LiveServer` --, `server` -- its viser server --, and every name the file bound). What it binds, routines and `play` see until the next save starts the namespace over. Its value is its last line's, when that line is an expression; a generator plays on the page step by step; `--record` films it; `--wait` waits for it as `play --wait` does. |

@@ -55,7 +55,7 @@ def _bare_server(root: Path) -> LiveServer:
     live = LiveServer.__new__(LiveServer)
     live.path = root / "scene.py"
     live.head_stepped, live._head_ready = False, None
-    live.ended, live.takes_written, live.stand_in = {}, [], False
+    live.ended, live.takes_written, live.serving = {}, [], "scene"
     live._arms_before, live.resets = {}, 0
     live.log_path, live._motions = "", {}
     live.scene_paths = ScenePaths(root)
@@ -107,6 +107,18 @@ class EvictHelpers(unittest.TestCase):
                 _bare_server(root).evict_helpers()
             self.assertFalse(cached.exists())
 
+    def test_a_helper_whose_import_failed_is_read_from_its_source_too(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp).resolve()
+            helper = root / "parts" / "hinge.py"
+            helper.parent.mkdir()
+            helper.write_text("raise RuntimeError\n")
+            cached = Path(importlib.util.cache_from_source(str(helper)))
+            cached.parent.mkdir()
+            cached.write_bytes(b"compiled before it raised")  # and no module left in sys.modules to evict
+            _bare_server(root).evict_helpers()
+            self.assertFalse(cached.exists())
+
 
 class FakeRecorder:
     def __init__(self, server, name, *, camera="", every=4) -> None:
@@ -145,6 +157,16 @@ class ScriptQueue(unittest.TestCase):
         self.assertEqual(self.finished, ["another recording started", "another recording started"])
         self.live._play()
         self.assertEqual(next(new), 1)  # the new routine stepped, not the old one
+
+    def test_a_take_ends_with_its_own_routine_not_with_the_queue(self) -> None:
+        filmed, queued = iter(range(1)), iter(range(5))
+        self.live.start_script(filmed, record="t1")
+        self.live.start_script(queued)  # a Run click behind it
+        self.finished.clear()
+        self.live._play()  # its one yield
+        self.live._play()  # and its end
+        self.assertEqual(self.finished, ["the script ended"])
+        self.assertEqual(self.live.script, [queued], "the routine behind it plays on, not filmed into the take")
 
     def test_a_failing_recording_leaves_the_routine_playing(self) -> None:
         gen = iter(range(5))

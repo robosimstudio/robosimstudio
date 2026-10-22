@@ -143,7 +143,8 @@ def side_by_side(sim_rgb: np.ndarray, reference_path: str) -> np.ndarray:
     """The sim frame with the reference picture beside it, scaled to the frame's height."""
     from PIL import Image
 
-    ref = Image.open(reference_path).convert("RGB")
+    with Image.open(reference_path) as opened:
+        ref = opened.convert("RGB")
     h = sim_rgb.shape[0]
     ref = ref.resize((int(round(ref.width * h / ref.height)), h))
     return np.concatenate([sim_rgb, np.asarray(ref)], axis=1)
@@ -162,6 +163,7 @@ def load_reference(path: str, width: int = 420) -> tuple[np.ndarray, str]:
     """A picture at sidebar width, and the name to label it with."""
     from PIL import Image
 
-    image = Image.open(path).convert("RGB")
+    with Image.open(path) as opened:
+        image = opened.convert("RGB")
     image = image.resize((width, max(1, int(round(image.height * width / image.width)))))
     return np.asarray(image, dtype=np.uint8), Path(path).name
