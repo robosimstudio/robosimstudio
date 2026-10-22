@@ -175,11 +175,19 @@ class SimBus:
         discarded. Called *on* the owner thread it runs inline, so a tool that
         is sometimes called from either side works both ways.
         """
-        return self.call_within(self.timeout, fn, *args, **kwargs)
+        return self._call(self.timeout, False, fn, args, kwargs)
 
-    def call_within(self, timeout: float, fn, *args, **kwargs) -> Any:
-        """:meth:`call`, waiting ``timeout`` seconds instead of the bus's: for a caller that will itself stop
-        waiting then, whose request must not run after it has gone."""
+    def call_starting_within(self, timeout: float, fn, *args, **kwargs) -> Any:
+        """Run ``fn`` on the owner thread if a pump takes it within ``timeout`` seconds, and return its result.
+
+        For a caller that stops waiting then: one not taken in time is
+        withdrawn and :class:`BusTimeout` raised, so it never runs; one taken in
+        time runs to its end, however long that is, and its result is
+        returned -- never a timeout for something that ran.
+        """
+        return self._call(timeout, True, fn, args, kwargs)
+
+    def _call(self, timeout: float, finish_started: bool, fn, args: tuple, kwargs: dict) -> Any:
         if self.owner_thread == threading.get_ident():
             if self._closed.is_set():
                 raise BusClosed("the simulation bus closed: the episode ended")
@@ -191,10 +199,13 @@ class SimBus:
             self._queue.put(request)
         if not request.done.wait(timeout):
             with self._lock:
-                if request.state == "queued":
+                withdrawn = request.state == "queued"
+                if withdrawn:
                     request.state = "cancelled"
                 serviced = request.done.is_set()  # finished between the wait and the lock
-            if not serviced:
+            if finish_started and not withdrawn:
+                request.done.wait()  # taken in time: it runs to its end
+            elif not serviced:
                 raise BusTimeout(f"{getattr(fn, '__name__', fn)} was not serviced within {timeout:.0f} s")
         if request.error is not None:
             raise request.error

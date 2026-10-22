@@ -436,7 +436,7 @@ def _server() -> LiveServer:
     live.script, live.recorder, live.run_budget, live.last_error = [], None, 0, ""
     live.head_stepped, live._head_ready, live.last_take = False, None, {}
     live.ended, live.takes_written, live.serving = {}, [], "scene"
-    live.runs, live.run_target, live.last_run, live.scene_id, live.watch_enabled = 0, 0, {}, "", False
+    live.runs, live.run_target, live.scene_id, live.watch_enabled = 0, 0, "", False
     live.runs_ended, live._walked = {}, (-1.0, [])
     live._arms_before, live.resets = {}, 0
     live.log_path, live._motions = "", {}
@@ -532,6 +532,26 @@ class RunEndingsKept(unittest.TestCase):
             live.tick_once()
         self.assertIn("the loop failed: RuntimeError: the drain broke", live.last_run["how"])
 
+    def test_a_run_ended_by_a_failing_pass_whose_checkbox_is_gone_still_ends(self) -> None:
+        live = RunEndings._page(self)  # type: ignore[arg-type]
+        live.cmd_run(120)
+
+        def broken(paused: bool) -> None:
+            live.session.paused = paused
+            raise RuntimeError("the checkbox is mid-teardown")
+
+        live.session.set_paused = broken
+        live._end_run("the loop failed")  # inside the loop's own failure handler: it must not raise
+        self.assertEqual((live.last_run["how"], live.session.paused), ("the loop failed", True))
+
+    def test_eval_that_calls_exit_is_an_error_not_the_pages_end(self) -> None:
+        live = _server()
+        live.ns, live.scene, live.rendered = {}, None, True
+        live.session = types.SimpleNamespace(arms={}, server=None)
+        reply = live.dispatch({"cmd": "eval", "code": "import sys; sys.exit(3)"})
+        self.assertFalse(reply["ok"])
+        self.assertIn("SystemExit", reply["error"])
+
     def test_a_run_of_no_steps_is_refused(self) -> None:
         live = RunEndings._page(self)  # type: ignore[arg-type]
         self.assertFalse(live.cmd_run(0)["ok"])
@@ -540,14 +560,21 @@ class RunEndingsKept(unittest.TestCase):
     def test_a_command_the_client_gave_up_on_is_not_run(self) -> None:
         live = _server()
 
-        def call_within(timeout, fn, request):
+        def call_starting_within(timeout, fn, request):
             self.assertLessEqual(timeout, 28.0, "the page gives up just before the client does")
             raise server_mod.BusTimeout("dispatch was not serviced")
 
-        live.bus = types.SimpleNamespace(call_within=call_within, timeout=900.0)
+        held_on: list[str] = []
+        live.bus = types.SimpleNamespace(
+            call_starting_within=call_starting_within,
+            call=lambda fn, request: held_on.append(request["cmd"]) or {"ok": True},
+            timeout=900.0,
+        )
         reply = live._on_request({"cmd": "run", "steps": 120, "timeout": 30.0})
         self.assertFalse(reply["ok"])
         self.assertIn("`run` was not run", reply["error"])
+        self.assertTrue(live._on_request({"cmd": "quit", "timeout": 30.0})["ok"])
+        self.assertEqual(held_on, ["quit"], "quit waits for a busy page and lands when it is free")
 
 
 class StartUpStandIn(unittest.TestCase):
@@ -969,6 +996,16 @@ class BusyStatus(unittest.TestCase):
         live._take_clicks()
         self.assertIn("no scene is in the page", live.last_error)
 
+    def test_a_reload_keeps_the_walk_it_stamped_with(self) -> None:
+        def build(helper: Path):
+            return types.SimpleNamespace(seconds=1.0, sim=types.SimpleNamespace(names=lambda: []))
+
+        live, helper = self._reloading(build)
+        live._walked = (time.perf_counter(), [])  # a walk from before the helper was made
+        self.assertTrue(live.reload("saved")["ok"])
+        self.assertEqual(live._walked[1], [helper.resolve()])
+        self.assertFalse(live._pending_save(), "status reads the walk the build was stamped with")
+
     def test_a_reload_ties_the_log_to_the_files_its_build_read(self) -> None:
         def build(helper: Path):
             helper.write_text("A = 2222\n")  # saved during the build: not what it read
@@ -1147,6 +1184,22 @@ class CtlWaits(unittest.TestCase):
         self.addCleanup(fake.close)
         reply = ctl.wait_for_steps(self.sock, {"run": 3, "step": 40, "target": 160}, 60.0)
         self.assertEqual((reply["ok"], reply["step"], reply["finite"]), (True, 160, True))
+
+    def test_a_routine_that_finished_without_its_take_is_no_success(self) -> None:
+        ended = {"serial": 5, "name": "lift", "how": "finished"}
+        status = {"ok": True, "busy": "", "ended": {"5": ended}, "takes_written": [], "last_error": "ffmpeg died"}
+        fake = _FakeStatus(self.sock, [status])
+        self.addCleanup(fake.close)
+        reply = ctl.wait_for_script(self.sock, {"serial": 5, "take": "t1"}, self.log, 0, 5.0)
+        self.assertFalse(reply["ok"])
+        self.assertIn("its take t1 was not written: ffmpeg died", reply["error"])
+
+    def test_a_failure_on_a_scene_that_was_not_the_files_says_so(self) -> None:
+        printed: list[str] = []
+        with mock.patch("builtins.print", lambda *a, **k: printed.append(" ".join(map(str, a)))):
+            code = ctl.show({"ok": False, "error": "RoutineError", "stale": "the last save did not build"}, False)
+        self.assertEqual(code, 1)
+        self.assertIn("stale: the last save did not build", printed)
 
     def test_a_run_keeps_the_notes_its_own_reply_carried(self) -> None:
         ended = {"serial": 1, "how": "done", "step": 5, "target": 5, "finite": True}

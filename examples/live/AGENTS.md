@@ -24,8 +24,9 @@ than guessing a constructor or a name.
   `REPORT.md` and the folder's own `ctl`. Work from it: `cd twins/<name>`, and
   every `./ctl` below is that folder's, its readings landing in its `run/`.
   Everything the twin needs goes in that folder -- `scene.py`, its helper
-  modules beside it or in a folder of them (not in `assets/`, `ref/` or
-  `run/`: REFERENCE, *How it works*), `assets/`, `ref/` -- and the report in
+  modules beside it or in a folder of them at most two down (not under
+  `run/`, `ref/`, `assets/`, `twins/`, a hidden folder or one named
+  `robosimstudio*`: REFERENCE, *How it works*), `assets/`, `ref/` -- and the report in
   its `REPORT.md`; a scratch script goes in its `run/`. Nothing goes
   in this folder's own files, the library, `tests/`, the repository root or
   `/tmp`: the twin's folder is what the person zips and hands on.

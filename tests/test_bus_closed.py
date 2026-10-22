@@ -21,6 +21,7 @@ No GPU: the bus is plain threading.
 from __future__ import annotations
 
 import threading
+import time
 import unittest
 
 from robosimstudio.core.bus import BusClosed, BusTimeout, SimBus
@@ -86,10 +87,28 @@ class CallWithin(unittest.TestCase):
         bus, ran = SimBus(timeout=30.0), []
         bus.owner_thread = -1  # an owner that is not this thread, and is not pumping
         with self.assertRaises(BusTimeout):
-            bus.call_within(0.1, ran.append, "late")
+            bus.call_starting_within(0.1, ran.append, "late")
         bus.owner_thread = None
         bus.pump()
         self.assertEqual(ran, [], "withdrawn when its caller stopped waiting, not run behind its back")
+
+    def test_a_call_started_in_time_runs_to_its_end_and_answers(self) -> None:
+        bus = SimBus(timeout=30.0)
+        bus.owner_thread = -1
+
+        def slow() -> str:
+            time.sleep(0.4)
+            return "done"
+
+        result: list[str] = []
+        worker = threading.Thread(target=lambda: result.append(bus.call_starting_within(0.1, slow)))
+        worker.start()
+        while bus._queue.empty():
+            time.sleep(0.01)
+        bus.owner_thread = None
+        bus.pump()  # taken in time, and runs past the 0.1 s
+        worker.join(5)
+        self.assertEqual(result, ["done"], "never a timeout for something that ran")
 
 
 if __name__ == "__main__":

@@ -5,6 +5,7 @@ from __future__ import annotations
 
 import importlib.util
 import inspect
+import os
 import sys
 import tempfile
 import types
@@ -57,7 +58,7 @@ def _bare_server(root: Path) -> LiveServer:
     live.path = root / "scene.py"
     live.head_stepped, live._head_ready = False, None
     live.ended, live.takes_written, live.serving = {}, [], "scene"
-    live.runs, live.run_target, live.last_run, live.scene_id, live.watch_enabled = 0, 0, {}, "", False
+    live.runs, live.run_target, live.scene_id, live.watch_enabled = 0, 0, "", False
     live.runs_ended, live._walked = {}, (-1.0, [])
     live._arms_before, live.resets = {}, 0
     live.log_path, live._motions = "", {}
@@ -104,6 +105,7 @@ class EvictHelpers(unittest.TestCase):
             cached = Path(importlib.util.cache_from_source(str(helper)))
             cached.parent.mkdir()
             cached.write_bytes(b"stale")  # trusted over a same-second, same-length edit
+            os.utime(cached, ns=(helper.stat().st_mtime_ns - 10**8,) * 2)  # compiled before the source's last save
             module = types.ModuleType("fix_r4_lidlib")
             module.__file__ = str(helper)
             with mock.patch.dict(sys.modules, {"fix_r4_lidlib": module}):
@@ -134,6 +136,18 @@ class EvictHelpers(unittest.TestCase):
                     live.load()
                 self.assertIs(sys.modules["fix_r7_lidlib"], old)
 
+    def test_an_unchanged_helpers_bytecode_is_kept(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp).resolve()
+            helper = root / "lidlib.py"
+            helper.write_text("K = 0.1\n")
+            cached = Path(importlib.util.cache_from_source(str(helper)))
+            cached.parent.mkdir()
+            cached.write_bytes(b"compiled after the last save")
+            os.utime(cached, ns=(helper.stat().st_mtime_ns + 10**8,) * 2)
+            _bare_server(root).evict_helpers()
+            self.assertTrue(cached.exists(), "an unchanged helper is not compiled again")
+
     def test_a_helper_whose_import_failed_is_read_from_its_source_too(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp).resolve()
@@ -143,6 +157,7 @@ class EvictHelpers(unittest.TestCase):
             cached = Path(importlib.util.cache_from_source(str(helper)))
             cached.parent.mkdir()
             cached.write_bytes(b"compiled before it raised")  # and no module left in sys.modules to evict
+            os.utime(cached, ns=(helper.stat().st_mtime_ns - 10**8,) * 2)
             _bare_server(root).evict_helpers()
             self.assertFalse(cached.exists())
 
@@ -208,6 +223,27 @@ class ScriptQueue(unittest.TestCase):
         self.live._play()  # and its end
         self.assertEqual(self.finished, ["the script ended"])
         self.assertEqual(self.live.script, [queued], "the routine behind it plays on, not filmed into the take")
+
+    def test_a_new_recording_writes_the_take_before_the_routines_it_drops_clean_up(self) -> None:
+        self.live.start_script(iter(range(5)), record="t1")
+        order: list[str] = []
+        self.live._finish_recorder = lambda why: order.append("take")  # type: ignore[method-assign]
+        self.live._end_scripts = lambda how: order.append("scripts")  # type: ignore[method-assign]
+        self.live.start_script(iter(range(3)), record="t2")
+        self.assertEqual(order, ["take", "scripts"])
+
+    def test_a_routine_that_calls_exit_fails_and_the_page_goes_on(self) -> None:
+        def leave():
+            yield
+            raise SystemExit(0)
+
+        gen = leave()
+        self.live.start_script(gen)
+        self.live._play()
+        with mock.patch("builtins.print"):
+            self.live._play()
+        self.assertEqual(self.live.script, [])
+        self.assertEqual(self.live.last_script["how"], "failed")
 
     def test_a_take_is_filmed_to_the_reset_before_its_routine_cleans_up(self) -> None:
         order: list[str] = []

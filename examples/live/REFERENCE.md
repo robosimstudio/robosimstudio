@@ -45,10 +45,11 @@ is that folder's. `twins/` is not committed.
 - The first path-traced picture in a process (a snapshot, a compare, a take's
   first frame) compiles the renderer's shaders and can take minutes; later
   ones take seconds.
-- A command waits for the page as long as `ctl` waits for its reply (30 s;
-  10 minutes for `snapshot`, `compare`, `check` and `ref`, 15 for `play` and
-  `eval`); one the page could not take in that time, being busy, is not run,
-  and the reply says so.
+- A command the page is too busy to start before `ctl` stops waiting for
+  its reply (30 s for most; `reload` 5.5 minutes, `catalog` 2, `snapshot`,
+  `compare`, `check` and `ref` 10, `play` and `eval` 15) is not run, and the
+  reply says so: send it again. One the page started runs to its end. `quit`,
+  `pause` and `resume` wait for a busy page instead, and land when it is free.
 - The page listens on all interfaces (`0.0.0.0`, viser's default), so on a
   shared network firewall its port or use an SSH tunnel.
 

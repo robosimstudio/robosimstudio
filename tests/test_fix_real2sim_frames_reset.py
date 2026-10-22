@@ -90,7 +90,7 @@ class _Session:
 
 def _running(budget: int) -> LiveServer:
     host = LiveServer.__new__(LiveServer)
-    host.script, host.run_budget, host.runs, host.run_target, host.last_run = [], budget, 1, 100, {}
+    host.script, host.run_budget, host.runs, host.run_target = [], budget, 1, 100
     host.runs_ended = {}
     host.session = _Session()
     host.sim = types.SimpleNamespace(step_count=50, state_is_finite=lambda: True)

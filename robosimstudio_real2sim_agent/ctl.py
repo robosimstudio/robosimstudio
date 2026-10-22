@@ -28,10 +28,12 @@ running and the log is named.
 
 A command that outlasts its timeout does not leave the agent guessing: the
 page answers ``status`` at once even while it is busy, so the timeout says
-what it is doing and for how long. ``--wait`` on ``play`` and ``eval`` blocks
-until the routine ends, printing the page's log as it goes; on ``status``,
-until the page is not building or rendering and every save is built, then
-the full status; and ``run N`` waits until its N steps are taken. Each prints
+what it is doing and for how long; and a command the page cannot start
+before ``ctl`` stops waiting is withdrawn and answered as not run, while one
+it started runs to its end. ``--wait`` on ``play`` and ``eval`` blocks until
+the routine ends, printing the page's log as it goes; on ``status``, until
+the page is not building or rendering and every save is built, then the
+full status; and ``run N`` waits until the page says how the run ended. Each prints
 a line every ten seconds while nothing else is printed and gives up after
 ``--wait-limit`` seconds. An agent whose shell returns only when a command
 does never has to poll.
@@ -514,9 +516,9 @@ def wait_for_steps(sock: Path, reply: dict, limit: float) -> dict:
     """After ``run N``: wait until the page says how that run ended (``runs_ended``), however slowly it steps.
 
     The page ends a run when its steps are taken (``done``), and when it is
-    paused, cut short by a routine, a reset, a rebuild or a failing loop
-    pass, or replaced by another run; anything but ``done`` is an error
-    saying which, at what step.
+    paused, cut short by a routine, a reset, a rebuild, ``resume`` or a
+    failing loop pass, or replaced by another run; anything but ``done`` is
+    an error saying which, at what step.
     """
     serial = str(reply.get("run"))
     status = poll(
@@ -661,6 +663,12 @@ def wait_for_script(sock: Path, reply: dict, log: Path, offset: int, limit: floa
     }
     if how != "finished":
         out["error"] = (ended.get("error") or how).rstrip()
+    elif take and take not in (status.get("takes_written") or []):
+        # the routine finished, but what it was played for is not there
+        out["ok"] = False
+        out["error"] = f"the routine finished, but its take {take} was not written: " + (
+            str(status.get("last_error") or "").strip() or "see the log"
+        )
     return out
 
 
@@ -824,6 +832,9 @@ def show(reply: dict, as_json: bool) -> int:
         return 0 if reply.get("ok") else 1
     if not reply.get("ok"):
         print(f"error: {reply.get('error', '?')}", file=sys.stderr)
+        for key in NOTES:  # a failure on a scene that was not the file's says so too
+            if reply.get(key):
+                print(f"{key}: {_fmt(reply[key])}", file=sys.stderr)
         return 1
     for key, value in reply.items():
         if key == "ok" or value in ("", None) or key in VERBOSE or (key == "busy_seconds" and not reply.get("busy")):

@@ -677,14 +677,25 @@ class StudioSession:
                 np.asarray(event.ray_direction, dtype=np.float64),
             )
 
-        if hasattr(task, "pipeline"):
-            # Already built. Nothing to compile, nothing to look up, and no
-            # failure mode to fall back from.
-            self.adopt(task, episode=self.episode_id)
-        elif not self.load_task(task, self.episode_id, self.config.scene, self.config.embodiment, self.config.gripper):
-            # Nothing to fall back to on the first load, and a page with no
-            # scene in it is not worth serving.
-            raise RuntimeError(f"{task} did not compile; see the traceback above")
+        try:
+            if hasattr(task, "pipeline"):
+                # Already built. Nothing to compile, nothing to look up, and no
+                # failure mode to fall back from.
+                self.adopt(task, episode=self.episode_id)
+            elif not self.load_task(
+                task, self.episode_id, self.config.scene, self.config.embodiment, self.config.gripper
+            ):
+                # Nothing to fall back to on the first load, and a page with no
+                # scene in it is not worth serving.
+                raise RuntimeError(f"{task} did not compile; see the traceback above")
+        except BaseException:
+            # A page that cannot show its first scene is not served: its viewer -- the port, a share tunnel -- goes
+            # with it, so whoever opens another page gets that port.
+            try:
+                self.viewer.close()
+            except Exception:
+                pass
+            raise
 
     # ---------------------------------------------------------------- task load
     @property
