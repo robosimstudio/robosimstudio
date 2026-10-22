@@ -5,12 +5,13 @@ When the file has run, ``scene`` is an ``rss.Scene``. That is all. The server
 builds it with ``scene.build(control_mode="joint_position")`` -- or takes the
 ``sim`` the file bound, if it bound one -- and a ``BUILD = {...}`` dict is
 passed to ``build`` as keyword arguments. ``rss.view``, ``rss.draw`` and
-``rss.viewer`` are no-ops that return None while the file runs, so a script
-pasted from ``examples/`` that calls ``rss.view`` or ``rss.draw`` works
-unchanged (one that drives the viewer ``rss.viewer`` returns does not:
-``viewer.scene`` is an attribute of None): the page is this process's, and a file
-that opened a second one would block on viser's tunnel. The file runs as
-``scene``, not ``__main__``, so a ``__main__`` guard does not fire.
+``rss.viewer`` are no-ops that return None while the file runs, so the body
+of an example's ``main()``, pasted at module level, works with its
+``rss.view`` or ``rss.draw`` calls left in (one that drives the viewer
+``rss.viewer`` returns does not: ``viewer.scene`` is an attribute of None): the
+page is this process's, and a file that opened a second one would block on
+viser's tunnel. The file runs as ``scene``, not ``__main__``, so a
+``__main__`` guard does not fire, and an example's ``main()`` is not called.
 
 Why the doors can be swapped with ``setattr``: ``robosimstudio/__init__.py``
 resolves its flat names through a :pep:`562` ``__getattr__`` that caches into

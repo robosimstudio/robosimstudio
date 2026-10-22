@@ -144,7 +144,8 @@ How the page behaves is in REFERENCE (*How it works*, *The contract for
   on the scene (`snapshot`, `compare`, `check`, `eval`, `play`, `run`,
   `reset`) says so (`stale`) until a save builds; one sent before a save is
   built says that (`pending`).
-- A script from `examples/` pastes into `scene.py` unchanged.
+- An example from `examples/` goes in by the body of its `main()`, pasted
+  at module level (REFERENCE, *The contract for `scene.py`*).
 - What the person drags on the page is what your next reading sees; if the
   scene looks moved, `./ctl reset` before judging it.
 - The twin's folder is your result: leave it in the state you report.

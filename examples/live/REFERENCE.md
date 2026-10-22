@@ -48,8 +48,9 @@ is that folder's. `twins/` is not committed.
 - A command the page is too busy to start before `ctl` stops waiting for
   its reply (30 s for most; `reload` 5.5 minutes, `catalog` 2, `snapshot`,
   `compare`, `check` and `ref` 10, `play` and `eval` 15) is not run, and the
-  reply says so: send it again. One the page started runs to its end. `quit`,
-  `pause` and `resume` wait for a busy page instead, and land when it is free.
+  reply says so: `./ctl status --wait`, then send it again. One the page
+  started runs to its end; if that is after `ctl` stopped waiting, `ctl` says
+  it timed out and what the page is busy with.
 - The page listens on all interfaces (`0.0.0.0`, viser's default), so on a
   shared network firewall its port or use an SSH tunnel.
 
@@ -68,8 +69,11 @@ scene.add(rss.robot("yam_bimanual"))  # a scene needs something that moves befor
   `sim` yourself and the server takes that instead.
 - A `BUILD = {...}` dict is passed to `build` as keyword arguments.
 - `rss.view`, `rss.draw` and `rss.viewer` do nothing and return None while the
-  file runs, so a script pasted from the examples works unchanged unless it
-  drives the viewer `rss.viewer` returns.
+  file runs. An example builds its scene inside `main()`, which the page does
+  not call (the file runs as `scene`, so a `__main__` guard does not fire):
+  paste the body of its `main()` into `scene.py` at module level, and its
+  `rss.view` and `rss.draw` calls are harmless; one that drives the viewer
+  `rss.viewer` returns is not.
 - Poses are in the work-surface frame. See [Frames and units](#frames-and-units).
 - Bind `routine` (a callable taking the built `sim`, and the page's `session`
   if it declares one, returning a generator), or `routines`, a dict of name to

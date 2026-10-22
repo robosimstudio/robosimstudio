@@ -409,6 +409,12 @@ class Recorder:
         self.bodies = take_bodies(self.sim)
         self.last_capture = -1
 
+    def start(self) -> None:
+        """Take the scene as it stands as the take's beginning: its step count from here, and frame 0."""
+        self._raw, self._mark, self.steps = int(self.sim.step_count), reset_mark(self.sim), 0
+        self.started = time.perf_counter()
+        self.capture()
+
     def close(self) -> None:
         """Close the video writer and the id renderer; safe to call twice."""
         for thing in (self.writer, self.renderer):

@@ -30,7 +30,8 @@ A command that outlasts its timeout does not leave the agent guessing: the
 page answers ``status`` at once even while it is busy, so the timeout says
 what it is doing and for how long; and a command the page cannot start
 before ``ctl`` stops waiting is withdrawn and answered as not run, while one
-it started runs to its end. ``--wait`` on ``play`` and ``eval`` blocks until
+it started runs to its end -- and if that is after ``ctl`` stopped waiting,
+``ctl`` says it timed out and what the page is busy with. ``--wait`` on ``play`` and ``eval`` blocks until
 the routine ends, printing the page's log as it goes; on ``status``, until
 the page is not building or rendering and every save is built, then the
 full status; and ``run N`` waits until the page says how the run ended. Each prints
@@ -892,7 +893,18 @@ def cmd_new(args: argparse.Namespace) -> int:
             file=sys.stderr,
         )
         return 1
+    from .scenefile import WATCH_DEPTH, scene_folder  # here: the client imports the standard library alone
+
     folder = Path(args.dir).resolve() if args.dir else live / "twins" / args.name
+    for above in folder.parents[:WATCH_DEPTH]:
+        # inside another scene's own code, its page would watch, re-import and hash this twin as its own
+        if (above / "scene.py").is_file() and all(scene_folder(p) for p in folder.relative_to(above).parts):
+            print(
+                f"ctl: {folder} is inside the scene at {above / 'scene.py'}, whose page would take it for its own code; "
+                "make it under twins/ or elsewhere",
+                file=sys.stderr,
+            )
+            return 1
     if folder.exists():
         print(f"ctl: {folder} is there already; work in it, or pick another name", file=sys.stderr)
         return 1

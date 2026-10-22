@@ -564,17 +564,20 @@ class RunEndingsKept(unittest.TestCase):
             self.assertLessEqual(timeout, 28.0, "the page gives up just before the client does")
             raise server_mod.BusTimeout("dispatch was not serviced")
 
-        held_on: list[str] = []
+        live.bus = types.SimpleNamespace(call_starting_within=call_starting_within, timeout=900.0)
+        for cmd in ("run", "quit"):  # one rule for every command
+            reply = live._on_request({"cmd": cmd, "steps": 120, "timeout": 30.0})
+            self.assertFalse(reply["ok"])
+            self.assertIn(f"`{cmd}` was not run", reply["error"])
+
+    def test_a_client_that_says_no_wait_gets_the_buses_and_the_same_rule(self) -> None:
+        live = _server()
+        waited: list[float] = []
         live.bus = types.SimpleNamespace(
-            call_starting_within=call_starting_within,
-            call=lambda fn, request: held_on.append(request["cmd"]) or {"ok": True},
-            timeout=900.0,
+            call_starting_within=lambda timeout, fn, request: waited.append(timeout) or {"ok": True}, timeout=900.0
         )
-        reply = live._on_request({"cmd": "run", "steps": 120, "timeout": 30.0})
-        self.assertFalse(reply["ok"])
-        self.assertIn("`run` was not run", reply["error"])
-        self.assertTrue(live._on_request({"cmd": "quit", "timeout": 30.0})["ok"])
-        self.assertEqual(held_on, ["quit"], "quit waits for a busy page and lands when it is free")
+        live._on_request({"cmd": "eval", "code": "1"})
+        self.assertEqual(waited, [900.0])
 
 
 class StartUpStandIn(unittest.TestCase):
@@ -729,7 +732,7 @@ class RoutineStepping(unittest.TestCase):
     def test_a_recording_under_an_old_take_name_does_not_count_as_written(self) -> None:
         live = _server()
         live.takes_written = ["take1", "take0"]
-        fake = types.SimpleNamespace(capture=lambda: None, close=lambda: None, name="take1")
+        fake = types.SimpleNamespace(start=lambda: None, close=lambda: None, name="take1")
         with mock.patch.object(server_mod.checks, "Recorder", lambda *a, **k: fake):
             live.start_script(iter(range(3)), name="again", record="take1")
         self.assertEqual(live.takes_written, ["take0"])
@@ -802,7 +805,7 @@ class RoutineStepping(unittest.TestCase):
 
         live.start_script(stubborn(), name="old")
         live._play()
-        fake = types.SimpleNamespace(capture=lambda: None, close=lambda: None)
+        fake = types.SimpleNamespace(start=lambda: None, close=lambda: None)
         with mock.patch.object(server_mod.checks, "Recorder", lambda *a, **k: fake):
             live.start_script(iter(range(3)), name="new", record="take2")  # ends the old one first
         self.assertIn("cleanup failed", live.last_error)
@@ -1290,6 +1293,21 @@ class CtlWaits(unittest.TestCase):
         self.assertEqual(code, 0)
         timeline = json.loads((self.tmp / "ref" / "timeline.json").read_text())
         self.assertEqual([a.get("label", "") for a in timeline["anchors"]], ["start", ""])
+
+
+class TwinInsideAScene(unittest.TestCase):
+    def test_a_twin_is_not_made_where_another_scenes_page_would_take_it_for_its_own(self) -> None:
+        live = Path(tempfile.mkdtemp())
+        (live / "ctl").write_text("")
+        outer = live / "twins" / "a"
+        outer.mkdir(parents=True)
+        (outer / "scene.py").write_text("")
+        with mock.patch("builtins.print"):
+            code = ctl.main(["--run-dir", str(live / "run"), "new", "b", "--dir", str(outer / "b")])
+        self.assertEqual(code, 1)
+        self.assertFalse((outer / "b").exists())
+        with mock.patch("builtins.print"):
+            self.assertEqual(ctl.main(["--run-dir", str(live / "run"), "new", "c"]), 0, "twins/ is no scene's code")
 
 
 class TwinFolder(unittest.TestCase):

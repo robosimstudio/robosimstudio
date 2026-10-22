@@ -227,8 +227,11 @@ class ControlSocket:
                     reply = self.handler(request)
                 except Exception as exc:
                     reply = {"ok": False, "error": f"{type(exc).__name__}: {exc}"}
-            stream.write(encode(reply))
-            stream.flush()
+            try:
+                stream.write(encode(reply))
+                stream.flush()
+            except OSError:
+                pass  # the client stopped waiting before a command it started ended: nobody to tell
 
     def close(self) -> None:
         self._stop.set()

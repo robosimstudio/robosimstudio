@@ -136,8 +136,6 @@ BUSY = {
 READS_THE_SCENE = ("snapshot", "compare", "check", "eval", "play", "run", "reset")
 """The commands that act on the scene in the page: their reply says when it is not the file's (a save that did
 not build, a bare scene standing in, a save not built yet), and they are refused while no scene is in."""
-HOLDS_ON = ("quit", "pause", "resume")
-"""Commands that wait for a busy page however long the client waits: they land when it is free, never dropped."""
 MISSING_STAMPS = object()
 """The stamps not given: the status takes them itself."""
 FIRST_RENDER = (
@@ -306,17 +304,16 @@ class LiveServer:
         for name, module in gone.items():
             del sys.modules[name]
             files.add(Path(module.__file__))
-        # Bytecode is trusted on the source's whole-second mtime and size: an edit within the second of the one it
-        # was compiled from, to the same length, would import the old code. A helper's goes when it was written
-        # before the source's last save -- imported or not: one whose import failed after it compiled left its
-        # bytecode too -- and stays when it is newer, so an unchanged helper is not compiled again.
+        # Bytecode is trusted on the source's whole-second mtime and size, and nothing on disk says which text it
+        # was compiled from: an edit within the second of the one it was compiled from, to the same length, would
+        # import the old code. So every helper's goes, imported or not (one whose import failed after it compiled
+        # left its bytecode too); compiling a twin's few helpers again costs milliseconds. A file that will not go
+        # is left.
         for file in files:
             if file.suffix != ".py":
                 continue
             try:
-                cached = Path(importlib.util.cache_from_source(str(file)))
-                if cached.stat().st_mtime_ns < file.stat().st_mtime_ns:
-                    cached.unlink()
+                Path(importlib.util.cache_from_source(str(file))).unlink(missing_ok=True)
             except (OSError, ValueError):
                 pass
         if gone:
@@ -536,19 +533,23 @@ class LiveServer:
             self.last_error = self.build_error or self._tick_error
         if record:
             # made first: a camera that is not there or a first frame that fails leaves what plays, and its take, be
-            recorder = None
             try:
+                # made first: a camera that is not there fails here, and leaves what plays, and its take, be
                 recorder = checks.Recorder(self, record, camera=camera, every=every)
-                recorder.capture()  # frame 0: the state before anything happened
             except Exception:
-                if recorder is not None:
-                    recorder.close()
-                gen.close()  # never to play: its cleanup runs now, not whenever it is collected
+                getattr(gen, "close", lambda: None)()  # it will never play
                 raise
             # the new take films the new routine alone: what was queued ahead of it is dropped, not filmed into it;
-            # the take filming that goes first, its last frame the scene as they left it, before their cleanup runs
+            # the take filming that goes first, its last frame the scene as they left it, before their cleanup runs;
+            # and the new one starts after that cleanup, from the scene the new routine starts from
             self._finish_recorder("another recording started")
             self._end_scripts("dropped: another recording started")
+            try:
+                recorder.start()  # its step count from here, and frame 0: the state before anything happened
+            except Exception:
+                recorder.close()
+                getattr(gen, "close", lambda: None)()
+                raise
             self.recorder = recorder
             self.last_take = {}  # filming now: until this one is written, no take is the last one
             self.takes_written = [t for t in self.takes_written if t != record]  # nor is an older one of its name
@@ -647,7 +648,7 @@ class LiveServer:
             return ""
         try:
             close()
-        except Exception:
+        except (Exception, SystemExit):  # a cleanup that calls exit() fails, as a routine that does; the page goes on
             error = traceback.format_exc()[-3000:]
             self.last_error = error
             print(f"[live] a script raised as it was stopped:\n{error}", file=sys.stderr, flush=True)
@@ -927,7 +928,11 @@ class LiveServer:
             print(
                 f"[live] {self.path.name} built but would not go into the page:\n{error}", file=sys.stderr, flush=True
             )
-            loaded = fallback_loaded()
+            failed, loaded = loaded.sim, fallback_loaded()
+            try:
+                failed.close()  # its arrays off the card before the stand-in's go on
+            except Exception:
+                pass
             self.ns, self.scene, self.sim = loaded.ns, loaded.scene, loaded.sim
             self.session = LiveSession(loaded.sim, config=self.config, host=self)
         self.serving = "stand-in" if error else "scene"
@@ -948,20 +953,19 @@ class LiveServer:
         ``status`` is the exception: while the main thread is busy -- a
         rebuild, a render, a gate -- it is answered here, at once, with what
         the page is doing and for how long, instead of waiting it out. Any
-        other command but :data:`HOLDS_ON` is started only within the time the
-        client said it would wait (``timeout``): one the page cannot start by
-        then is withdrawn and answered as not run, and one it started runs to
-        its end.
+        other command is started only within the time the client said it would
+        wait (``timeout``): one the page cannot start by then is withdrawn and
+        answered as not run, and one it started runs to its end.
         """
         waits = float(request.pop("timeout", 0) or 0)
         if request.get("cmd") == "status":
             # a waiting client's poll is answered here, off the main thread, reading nothing off the scene
             return self.light_status() if request.get("light") else self._status_now()
+        # a command the page cannot start before the client stops waiting is withdrawn, not run behind its back;
+        # one it started runs to its end, and its reply says so (a client that sent no wait gets the bus's)
+        limit = max(1.0, waits - 2.0) if waits else self.bus.timeout
         try:
-            if request.get("cmd") in HOLDS_ON or not waits:
-                return self.bus.call(self.dispatch, request)
-            # a command the page cannot start before the client stops waiting is withdrawn, not run behind its back
-            return self.bus.call_starting_within(max(1.0, waits - 2.0), self.dispatch, request)
+            return self.bus.call_starting_within(limit, self.dispatch, request)
         except BusTimeout:
             busy = self.busy_state[0] or "busy"
             return {
@@ -1477,7 +1481,7 @@ class LiveServer:
                 penetration_mm=float(penetration_mm),
                 timeline=line,
             )
-        except Exception as exc:
+        except (Exception, SystemExit) as exc:
             # the rest check may already have stepped the scene: reset it, as a passing check does
             self.session.reset_requested = True
             self.session.set_paused(was_paused)

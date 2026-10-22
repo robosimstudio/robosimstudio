@@ -136,17 +136,17 @@ class EvictHelpers(unittest.TestCase):
                     live.load()
                 self.assertIs(sys.modules["fix_r7_lidlib"], old)
 
-    def test_an_unchanged_helpers_bytecode_is_kept(self) -> None:
+    def test_a_helpers_bytecode_goes_even_when_newer_than_its_source(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp).resolve()
             helper = root / "lidlib.py"
             helper.write_text("K = 0.1\n")
             cached = Path(importlib.util.cache_from_source(str(helper)))
             cached.parent.mkdir()
-            cached.write_bytes(b"compiled after the last save")
-            os.utime(cached, ns=(helper.stat().st_mtime_ns + 10**8,) * 2)
+            cached.write_bytes(b"compiled from the text before a same-second save")
+            os.utime(cached, ns=(helper.stat().st_mtime_ns + 10**8,) * 2)  # written after, read before
             _bare_server(root).evict_helpers()
-            self.assertTrue(cached.exists(), "an unchanged helper is not compiled again")
+            self.assertFalse(cached.exists(), "nothing on disk says which text it was compiled from")
 
     def test_a_helper_whose_import_failed_is_read_from_its_source_too(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
@@ -173,6 +173,9 @@ class FakeRecorder:
 
     def capture(self) -> None:
         self.frames.append(-1)
+
+    def start(self) -> None:
+        self.capture()
 
     def maybe(self) -> None:
         if self.fail:
@@ -229,8 +232,25 @@ class ScriptQueue(unittest.TestCase):
         order: list[str] = []
         self.live._finish_recorder = lambda why: order.append("take")  # type: ignore[method-assign]
         self.live._end_scripts = lambda how: order.append("scripts")  # type: ignore[method-assign]
-        self.live.start_script(iter(range(3)), record="t2")
-        self.assertEqual(order, ["take", "scripts"])
+        started = FakeRecorder.start
+        with mock.patch.object(FakeRecorder, "start", lambda rec: (order.append("start"), started(rec))):
+            self.live.start_script(iter(range(3)), record="t2")
+        self.assertEqual(order, ["take", "scripts", "start"], "the new take starts after their cleanup")
+
+    def test_a_routine_whose_cleanup_calls_exit_is_stopped_and_the_page_goes_on(self) -> None:
+        def leave():
+            try:
+                yield
+            finally:
+                raise SystemExit(0)
+
+        gen = leave()
+        self.live.start_script(gen)
+        self.live._play()
+        with mock.patch("builtins.print"):
+            self.live.stop_scripts("reset")
+        self.assertEqual(self.live.script, [])
+        self.assertIn("SystemExit", self.live.last_error)
 
     def test_a_routine_that_calls_exit_fails_and_the_page_goes_on(self) -> None:
         def leave():
