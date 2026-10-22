@@ -88,36 +88,37 @@ class _Session:
         self.paused = paused
 
 
+def _running(budget: int) -> LiveServer:
+    host = LiveServer.__new__(LiveServer)
+    host.script, host.run_budget, host.runs, host.run_target, host.last_run = [], budget, 1, 100, {}
+    host.session = _Session()
+    host.sim = types.SimpleNamespace(step_count=50, state_is_finite=lambda: True)
+    host._finish_recorder = lambda why: None  # type: ignore[method-assign]
+    host._end_scripts = lambda how: None  # type: ignore[method-assign]
+    return host
+
+
 class TestResetUnderARun(unittest.TestCase):
     def test_a_reset_ends_a_run_held(self) -> None:
-        host = types.SimpleNamespace(
-            script=[],
-            run_budget=50,
-            session=_Session(),
-            _finish_recorder=lambda why: None,
-            _end_scripts=lambda how: None,
-        )
-        LiveServer.stop_scripts(host, "reset")
+        host = _running(50)
+        host.stop_scripts("reset")
         self.assertEqual(host.run_budget, 0)
         self.assertTrue(host.session.paused, "the run ends paused, as it would have at its last step")
+        self.assertEqual((host.last_run["how"], host.last_run["step"]), ("cut short: reset", 50))
 
     def test_a_free_running_page_is_left_running(self) -> None:
-        host = types.SimpleNamespace(
-            script=[],
-            run_budget=-1,
-            session=_Session(),
-            _finish_recorder=lambda why: None,
-            _end_scripts=lambda how: None,
-        )
-        LiveServer.stop_scripts(host, "reset")
+        host = _running(-1)
+        host.stop_scripts("reset")
+        self.assertEqual(host.run_budget, -1)
         self.assertFalse(host.session.paused)
+        self.assertEqual(host.last_run, {})
 
-    def test_the_wait_sees_a_reset_from_step_zero(self) -> None:
+    def test_the_wait_says_the_run_was_reset(self) -> None:
         path = Path(tempfile.mkdtemp(prefix="run-")) / "ctl.sock"
-        base = {"step": 50, "time": 0.0, "finite": True, "paused": False, "playing": 0, "generation": 1, "resets": 1}
-        page = _FakePage(path, base)
+        ended = {"serial": 1, "how": "cut short: reset", "step": 0, "target": 10, "finite": None}
+        page = _FakePage(path, {"step": 0, "time": 0.0, "last_run": ended})
         self.addCleanup(page.close)
-        reply = ctl.wait_for_steps(path, {"ok": True, "step": 0, "generation": 1, "resets": 0}, 10)
+        reply = ctl.wait_for_steps(path, {"ok": True, "run": 1, "step": 0, "target": 10}, 30.0)
         self.assertFalse(reply["ok"])
         self.assertIn("reset", reply["error"])
 

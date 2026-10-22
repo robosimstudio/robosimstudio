@@ -201,6 +201,20 @@ class SceneCode(unittest.TestCase):
             "an installed distribution's module is never the scene's, wherever the scene file sits",
         )
 
+    def test_the_modules_imported_afresh_are_the_files_watched(self) -> None:
+        from robosimstudio_real2sim_agent.scenefile import ScenePaths
+
+        root = Path(tempfile.mkdtemp()).resolve()
+        for rel in ("scene.py", "rig.py", "parts/hinge/latch.py", "parts/a/b/deep.py", "assets/gen.py", "run/p.py"):
+            (root / rel).parent.mkdir(parents=True, exist_ok=True)
+            (root / rel).write_text("")
+        paths = ScenePaths(root)
+        paths.set_baseline(set())
+        watched = set(helper_files(root / "scene.py"))
+        for file in sorted(root.rglob("*.py")):
+            if file.name != "scene.py":
+                self.assertEqual(paths.is_scene(str(file), file.stem), file in watched, file.relative_to(root))
+
     def test_a_watcher_is_unwatched_by_identity(self) -> None:
         from robosimstudio_real2sim_agent.scenefile import SceneRegistrations
 
@@ -422,6 +436,7 @@ def _server() -> LiveServer:
     live.script, live.recorder, live.run_budget, live.last_error = [], None, 0, ""
     live.head_stepped, live._head_ready, live.last_take = False, None, {}
     live.ended, live.takes_written, live.serving = {}, [], "scene"
+    live.runs, live.run_target, live.last_run, live.scene_id, live.watch_enabled = 0, 0, {}, "", False
     live._arms_before, live.resets = {}, 0
     live.log_path, live._motions = "", {}
     live.build_error, live._tick_error = "", ""
@@ -447,6 +462,48 @@ def _pass(live: LiveServer, page_steps: int = 1) -> None:
     live._take_clicks = lambda: None  # type: ignore[method-assign]
     live.watch_enabled, live._tick_error, live._refreshed = False, "", time.perf_counter()
     live.tick_once()
+
+
+class RunEndings(unittest.TestCase):
+    def _page(self) -> LiveServer:
+        live = _server()
+        live.session = types.SimpleNamespace(arms={}, paused=True)
+        live.session.set_paused = lambda paused: setattr(live.session, "paused", paused)
+        live.sim = types.SimpleNamespace(step_count=10, state_is_finite=lambda: True)
+        return live
+
+    def test_a_run_ends_done_and_held_at_its_last_step(self) -> None:
+        live = self._page()
+        reply = live.cmd_run(2)
+        self.assertEqual((reply["run"], reply["target"]), (1, 12))
+
+        def tick() -> bool:
+            live.sim.step_count += 1
+            return True
+
+        live.bus = types.SimpleNamespace(pump=lambda budget: 0)
+        live.session.tick = tick
+        live._take_clicks = lambda: None  # type: ignore[method-assign]
+        live._refreshed = time.perf_counter()
+        live.tick_once()
+        self.assertEqual(live.last_run, {})
+        live.tick_once()
+        self.assertEqual((live.last_run["how"], live.last_run["step"], live.last_run["finite"]), ("done", 12, True))
+        self.assertTrue(live.session.paused)
+
+    def test_a_pause_a_routine_or_another_run_ends_it_saying_which(self) -> None:
+        live = self._page()
+        live.cmd_run(100)
+        live.cmd_pause()
+        self.assertEqual(live.last_run["how"], "paused")
+        live.cmd_run(100)
+        live.start_script(iter(()), name="lift")
+        self.assertEqual(live.last_run["how"], "cut short: a routine started")
+        self.assertTrue(live.session.paused, "held, not running on unbounded once the routine ends")
+        live.script.clear()
+        live.cmd_run(100)
+        live.cmd_run(5)
+        self.assertEqual((live.last_run["serial"], live.last_run["how"]), (3, "another run started"))
 
 
 class RoutineStepping(unittest.TestCase):
@@ -815,6 +872,37 @@ class BusyStatus(unittest.TestCase):
         self.assertEqual(live.cmd_eval(code="x = 2\nx * 21")["value"], "42")
         self.assertIsNone(live.cmd_eval(code="y = 1")["value"])
 
+    def test_a_command_while_a_save_is_not_built_says_so(self) -> None:
+        live = _server()
+        live.rendered, live.watch_enabled = True, True
+        live._pending_save = lambda stamps=None: True  # type: ignore[method-assign]
+        live.cmd_eval = lambda **kw: {"ok": True}  # type: ignore[method-assign]
+        self.assertIn("not built yet", live.dispatch({"cmd": "eval", "code": "1"})["pending"])
+
+    def test_a_run_button_on_an_empty_page_is_refused_as_ctl_play_is(self) -> None:
+        live = _server()
+        live.rendered, live.serving = True, "nothing"
+        live.build_error = "Traceback ...\nRuntimeError: CUDA out of memory"
+        live.clicks = __import__("queue").Queue()
+        live.clicks.put(("play", "lift"))
+        live.refresh_live = lambda force=False: None  # type: ignore[method-assign]
+        live._take_clicks()
+        self.assertIn("no scene is in the page", live.last_error)
+
+    def test_a_reload_ties_the_log_to_the_files_its_build_read(self) -> None:
+        def build(helper: Path):
+            helper.write_text("A = 2222\n")  # saved during the build: not what it read
+            return types.SimpleNamespace(seconds=1.0, sim=types.SimpleNamespace(names=lambda: []))
+
+        live, _helper = self._reloading(build)
+        before = checks.scene_hash(live.path)
+        live.scene_id = "old"
+        self.assertTrue(live.reload("saved")["ok"])
+        self.assertEqual(live.scene_id, before)
+        live.load = lambda: (_ for _ in ()).throw(SyntaxError("x"))  # type: ignore[method-assign]
+        live.reload("saved")
+        self.assertEqual(live.scene_id, before, "a save that did not build leaves the scene, and its hash, up")
+
     def test_a_command_on_the_stand_in_scene_says_it_is_not_the_users(self) -> None:
         live = _server()
         live.rendered, live.serving = True, "stand-in"
@@ -970,39 +1058,27 @@ class CtlWaits(unittest.TestCase):
         self.addCleanup(fake.close)
         self.assertEqual(ctl.wait_until_free(self.sock, 30.0), {"ok": True, "busy": ""})
 
-    def test_a_run_waits_through_a_busy_page(self) -> None:
-        busy = {"ok": True, "busy": "rebuilding the scene file", "busy_seconds": 2.0}
-        done = {"ok": True, "busy": "", "step": 160, "time": 2.7, "paused": True, "playing": 0, "finite": True}
-        fake = _FakeStatus(self.sock, [busy, busy, {**done, "generation": 1, "resets": 0}])
+    def test_a_run_is_waited_for_through_a_busy_page_until_its_ending(self) -> None:
+        busy = {"ok": True, "busy": "rebuilding the scene file", "step": 90, "last_run": {}}
+        ended = {"serial": 3, "how": "done", "step": 160, "target": 160, "finite": True}
+        fake = _FakeStatus(
+            self.sock, [busy, busy, {"ok": True, "busy": "", "step": 160, "time": 2.7, "last_run": ended}]
+        )
         self.addCleanup(fake.close)
-        reply = ctl.wait_for_steps(self.sock, {"step": 40, "generation": 1, "resets": 0}, 120)
-        self.assertEqual(reply["step"], 160)
+        reply = ctl.wait_for_steps(self.sock, {"run": 3, "step": 40, "target": 160}, 60.0)
+        self.assertEqual((reply["ok"], reply["step"], reply["finite"]), (True, 160, True))
 
-    def test_a_run_that_stalls_is_not_a_success(self) -> None:
-        stuck = {"ok": True, "busy": "", "step": 45, "time": 0.1, "paused": False, "playing": 0}
-        fake = _FakeStatus(self.sock, [{**stuck, "generation": 1, "resets": 0}])
+    def test_a_long_run_says_where_it_is_and_gives_up_at_its_limit(self) -> None:
+        fake = _FakeStatus(self.sock, [{"ok": True, "busy": "", "step": 45, "last_run": {}}])
         self.addCleanup(fake.close)
-        clock = iter(range(0, 10_000, 20))
-        fake_time = types.SimpleNamespace(time=lambda: float(next(clock)), sleep=lambda s: None)
-        with mock.patch.object(ctl, "time", fake_time):
-            reply = ctl.wait_for_steps(self.sock, {"step": 40, "generation": 1, "resets": 0}, 1000)
+        said: list[str] = []
+        clock = iter(range(0, 10_000, 4))
+        fake_time = types.SimpleNamespace(monotonic=lambda: float(next(clock)), sleep=lambda s: None)
+        with mock.patch.object(ctl, "time", fake_time), mock.patch.object(ctl, "_say", said.append):
+            reply = ctl.wait_for_steps(self.sock, {"run": 3, "step": 40, "target": 1040}, 30.0)
         self.assertFalse(reply["ok"])
-        self.assertIn("stalled at step 45 of 1040", reply["error"])
-
-    def test_a_slow_run_is_waited_for_as_long_as_it_steps(self) -> None:
-        polls = [
-            {"ok": True, "busy": "", "step": n, "time": 0.1, "paused": n == 50, "playing": 0, "generation": 1}
-            for n in range(41, 51)
-        ]
-        fake = _FakeStatus(self.sock, [{**p, "resets": 0} for p in polls])
-        self.addCleanup(fake.close)
-        clock = iter(range(0, 10_000, 40))  # one step every 40 s: 400 s for ten
-        fake_time = types.SimpleNamespace(time=lambda: float(next(clock)), sleep=lambda s: None)
-        with mock.patch.object(ctl, "time", fake_time):
-            reply = ctl.wait_for_steps(self.sock, {"step": 40, "generation": 1, "resets": 0}, 10)
-        self.assertTrue(reply["ok"])
-        self.assertEqual(reply["step"], 50)
-        self.assertIn("not known", reply["note"], "the fake's full status has no `finite`")
+        self.assertIn("still running, step 45 of 1040 after 30 s", reply["error"])
+        self.assertTrue(said and "step 45 of 1040" in said[0], said)
 
     def test_a_take_is_not_held_up_by_another_routines_step(self) -> None:
         done = {"serial": 4, "name": "lift", "how": "finished"}

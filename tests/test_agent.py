@@ -457,32 +457,43 @@ class _FakePage:
 
 
 class TestTheRunWait(unittest.TestCase):
-    """``run N`` polls until N steps are taken; what ends the run otherwise must end the wait too."""
+    """``run N`` waits on the page's word for how that run ended; whatever ends it, the wait ends saying so."""
 
     def setUp(self) -> None:
         self.path = Path(tempfile.mkdtemp(prefix="run-")) / "ctl.sock"
-        base = {"step": 0, "time": 0.0, "finite": True, "paused": False, "playing": 0, "generation": 1}
-        self.page = _FakePage(self.path, base)
+        self.page = _FakePage(self.path, {"step": 0, "time": 0.0, "last_run": {}})
         self.addCleanup(self.page.close)
+        self.run = {"ok": True, "run": 2, "step": 40, "target": 1040}
+
+    def _ended(self, how: str, step: int, finite=None) -> None:
+        self.page.status.update(
+            step=step, last_run={"serial": 2, "how": how, "step": step, "target": 1040, "finite": finite}
+        )
 
     def test_a_rebuild_under_the_run_ends_it(self) -> None:
-        self.page.status.update(step=3, generation=2)
+        self._ended("the scene was rebuilt", 3)
         started = time.time()
-        reply = ctl.wait_for_steps(self.path, {"ok": True, "step": 40, "generation": 1}, 1000)
+        reply = ctl.wait_for_steps(self.path, self.run, 60.0)
         self.assertFalse(reply["ok"])
         self.assertIn("rebuilt", reply["error"])
-        self.assertLess(time.time() - started, 5.0, "said at once, not at the deadline")
+        self.assertLess(time.time() - started, 5.0, "said at once")
 
-    def test_a_reset_under_the_run_ends_it(self) -> None:
-        self.page.status.update(step=2)
-        reply = ctl.wait_for_steps(self.path, {"ok": True, "step": 40, "generation": 1}, 1000)
+    def test_a_pause_under_the_run_is_no_success(self) -> None:
+        self._ended("paused", 240, finite=True)
+        reply = ctl.wait_for_steps(self.path, self.run, 60.0)
         self.assertFalse(reply["ok"])
-        self.assertIn("reset", reply["error"])
+        self.assertIn("ended at step 240 of 1040: paused", reply["error"])
 
     def test_steps_taken_end_it(self) -> None:
-        self.page.status.update(step=50)
-        reply = ctl.wait_for_steps(self.path, {"ok": True, "step": 40, "generation": 1}, 10)
-        self.assertEqual(reply, {"ok": True, "step": 50, "time": 0.0, "finite": True})
+        self._ended("done", 1040, finite=True)
+        reply = ctl.wait_for_steps(self.path, self.run, 60.0)
+        self.assertEqual(reply, {"ok": True, "step": 1040, "time": 0.0, "finite": True})
+
+    def test_an_earlier_runs_ending_is_not_this_ones(self) -> None:
+        self.page.status.update(step=41, last_run={"serial": 1, "how": "done", "step": 40, "target": 40})
+        reply = ctl.wait_for_steps(self.path, self.run, 1.0)
+        self.assertFalse(reply["ok"])
+        self.assertIn("still running, step 41 of 1040", reply["error"])
 
     def test_play_waits_as_long_as_eval(self) -> None:
         self.assertEqual(ctl.TIMEOUTS["play"], ctl.TIMEOUTS["eval"])

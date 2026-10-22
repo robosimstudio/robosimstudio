@@ -50,6 +50,7 @@ __all__ = [
     "Loaded",
     "ScenePaths",
     "SceneRegistrations",
+    "fallback_loaded",
     "fallback_scene",
     "helper_files",
     "run_scene_file",
@@ -60,11 +61,18 @@ DOORS = ("view", "draw", "viewer")
 """The ``rss.`` names that would open a page of their own, held shut while the file runs."""
 WATCH_SKIP = frozenset({"run", "ref", "assets", "twins", "__pycache__"})
 """Folders beside the scene file whose ``.py`` files are not the scene's: its readings and scratch scripts, its
-references, its assets, the twins under it. Hidden folders and this library's packages are skipped too."""
+references, its assets, the twins under it. Hidden folders and this library's packages are not the scene's either
+(:func:`scene_folder`)."""
 WATCH_DEPTH = 2
-"""How many folders down from the scene file's a helper module is watched."""
+"""How many folders down from the scene file's a helper module is the scene's."""
 WATCH_LIMIT = 500
 """The most ``.py`` files watched: a scene file at the top of a large tree watches the first this many."""
+
+
+def scene_folder(name: str) -> bool:
+    """Whether a folder under the scene file's can hold the scene's own code: the one rule for which folders do,
+    which :class:`ScenePaths` and :func:`helper_files` both apply."""
+    return not name.startswith(".") and name not in WATCH_SKIP and not name.startswith("robosimstudio")
 
 
 @dataclass(frozen=True)
@@ -142,12 +150,10 @@ def helper_files(path: Path | str) -> list[Path]:
                 continue
             for entry in entries:
                 name = entry.name
-                if name.startswith("."):
-                    continue
                 if entry.is_dir(follow_symlinks=False):
-                    if name not in WATCH_SKIP and not name.startswith("robosimstudio"):
+                    if scene_folder(name):
                         below.append(Path(entry.path))
-                elif name.endswith(".py") and Path(entry.path) != path:
+                elif name.endswith(".py") and not name.startswith(".") and Path(entry.path) != path:
                     found.append(Path(entry.path))
                     if len(found) >= WATCH_LIMIT:
                         return found
@@ -156,7 +162,8 @@ def helper_files(path: Path | str) -> list[Path]:
 
 
 def fallback_scene():
-    """The scene served when the file does not build at start-up: a bare floor and one robot."""
+    """The bare scene that stands in for the file's: a floor and one robot. Served when the file does not build at
+    start-up, and when a rebuilt scene would not go into the page."""
     import robosimstudio as rss
 
     scene = rss.Scene(cell="void", name="live-fallback")
@@ -164,14 +171,22 @@ def fallback_scene():
     return scene
 
 
+def fallback_loaded() -> Loaded:
+    """:func:`fallback_scene`, built, as a run of the file would have left it."""
+    scene = fallback_scene()
+    return Loaded(ns={}, scene=scene, sim=scene.build(control_mode="joint_position"), seconds=0.0)
+
+
 class ScenePaths:
     """What is the scene's own code: one rule, for the modules a rebuild imports afresh and the registrations it
     takes back, so the two never disagree.
 
-    A module is the scene's when its file is under the scene file's directory
-    and is not an installed package's, and the module -- by name, its package
-    by its top-level name, and its file -- was not imported before the scene
-    file first ran; and its top-level package is not this library's
+    A module is the scene's when its file is under the scene file's directory,
+    at most :data:`WATCH_DEPTH` folders down and in no folder :func:`scene_folder`
+    rules out -- the files :func:`helper_files` watches -- and is not an
+    installed package's, and the module -- by name, its package by its
+    top-level name, and its file -- was not imported before the scene file
+    first ran; and its top-level package is not this library's
     (``robosimstudio_materials``, say, imported for the first time by a scene
     file at the repository root, stays the library's). Verdicts
     are kept per name and file: a registry's discovery asks about thousands of
@@ -204,10 +219,13 @@ class ScenePaths:
         if verdict is None:
             path = Path(filename).resolve()
             top = module.partition(".")[0]
+            folders = path.relative_to(self.root).parts[:-1] if path.is_relative_to(self.root) else None
             verdict = (
                 module not in self._baseline_names
                 and top not in self._baseline_names
-                and path.is_relative_to(self.root)
+                and folders is not None
+                and len(folders) <= WATCH_DEPTH
+                and all(scene_folder(name) for name in folders)
                 and path not in self._baseline
                 and not any(part in ("site-packages", "dist-packages") for part in path.parts)
                 and not any(path.is_relative_to(lib) for lib in self._installed)

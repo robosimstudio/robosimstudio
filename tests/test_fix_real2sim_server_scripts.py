@@ -4,6 +4,7 @@
 from __future__ import annotations
 
 import importlib.util
+import inspect
 import sys
 import tempfile
 import types
@@ -56,6 +57,7 @@ def _bare_server(root: Path) -> LiveServer:
     live.path = root / "scene.py"
     live.head_stepped, live._head_ready = False, None
     live.ended, live.takes_written, live.serving = {}, [], "scene"
+    live.runs, live.run_target, live.last_run, live.scene_id, live.watch_enabled = 0, 0, {}, "", False
     live._arms_before, live.resets = {}, 0
     live.log_path, live._motions = "", {}
     live.scene_paths = ScenePaths(root)
@@ -122,6 +124,8 @@ class EvictHelpers(unittest.TestCase):
 
 class FakeRecorder:
     def __init__(self, server, name, *, camera="", every=4) -> None:
+        if camera == "phnoe":
+            raise KeyError("no camera named phnoe")
         self.name = name
         self.frames: list[int] = []
         self.closed = False
@@ -157,6 +161,18 @@ class ScriptQueue(unittest.TestCase):
         self.assertEqual(self.finished, ["another recording started", "another recording started"])
         self.live._play()
         self.assertEqual(next(new), 1)  # the new routine stepped, not the old one
+
+    def test_a_recording_that_cannot_start_leaves_what_plays_and_its_take(self) -> None:
+        playing, new = iter(range(5)), (step for step in range(3))
+        self.live.start_script(playing, record="t1")
+        filming = self.live.recorder
+        self.finished.clear()
+        with self.assertRaises(KeyError):
+            self.live.start_script(new, record="t2", camera="phnoe")
+        self.assertEqual(self.live.script, [playing])
+        self.assertIs(self.live.recorder, filming)
+        self.assertEqual(self.finished, [], "t1 is not cut short")
+        self.assertEqual(inspect.getgeneratorstate(new), "GEN_CLOSED", "the routine that will never play is closed")
 
     def test_a_take_ends_with_its_own_routine_not_with_the_queue(self) -> None:
         filmed, queued = iter(range(1)), iter(range(5))

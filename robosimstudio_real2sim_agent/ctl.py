@@ -30,9 +30,11 @@ A command that outlasts its timeout does not leave the agent guessing: the
 page answers ``status`` at once even while it is busy, so the timeout says
 what it is doing and for how long. ``--wait`` on ``play`` and ``eval`` blocks
 until the routine ends, printing the page's log as it goes; on ``status``,
-until the page is not building or rendering, with a line every ten seconds,
-then the full status. An agent whose shell returns only when a command does
-never has to poll.
+until the page is not building or rendering and every save is built, then
+the full status; and ``run N`` waits until its N steps are taken. Each prints
+a line every ten seconds while nothing else is printed and gives up after
+``--wait-limit`` seconds. An agent whose shell returns only when a command
+does never has to poll.
 """
 
 from __future__ import annotations
@@ -47,6 +49,7 @@ import sys
 import time
 from collections.abc import Callable
 from pathlib import Path
+from typing import Any
 
 from .wire import DEFAULT_RUN_DIR, NoReply, NoServer, parse_ready, request, socket_path
 
@@ -84,8 +87,8 @@ WAIT_LIMIT = 3600.0
 """How long ``--wait`` waits by default [s]."""
 SAY_EVERY = 10.0
 """Seconds between the progress lines ``--wait`` prints while nothing else is printed."""
-STALL_SECONDS = 60.0
-"""How long ``run N`` waits on a page that is not busy and takes no step before it says the run stalled."""
+POLL_SECONDS = 0.5
+"""How often a wait asks the page how things stand."""
 START_HINT = "./ctl up    (in examples/live, or in a twin's folder)"
 SERVE_FLAGS = ("hold", "no_watch", "share", "dark", "hide_scenery", "camera_view")
 """``up``'s switches that are the server's, spelled as argparse attributes."""
@@ -102,6 +105,7 @@ VERBOSE = (
     "ended",
     "takes_written",
     "busy_routine",
+    "last_run",
     "pending_save",
     "server_log",
 )
@@ -292,7 +296,14 @@ def build_parser() -> argparse.ArgumentParser:
     lg.add_argument("--last", type=int, default=0, help="only the last N")
     run = sub.add_parser("run", parents=[common], help="step N control steps, then hold")
     run.add_argument("steps", type=int)
-    run.add_argument("--no-wait", action="store_true")
+    run.add_argument("--no-wait", action="store_true", help="return at once instead of when the steps are taken")
+    run.add_argument(
+        "--wait-limit",
+        type=float,
+        default=WAIT_LIMIT,
+        metavar="S",
+        help=f"give up waiting after S seconds (default {WAIT_LIMIT:.0f})",
+    )
     sub.add_parser("pause", parents=[common])
     sub.add_parser("resume", parents=[common], help="run until paused again")
     sub.add_parser("reset", parents=[common], help="put the scene back to its start")
@@ -471,53 +482,53 @@ def build_request(args: argparse.Namespace, parser: argparse.ArgumentParser) -> 
     return req, TIMEOUTS.get(args.cmd, DEFAULT_TIMEOUT)
 
 
-def wait_for_steps(sock: Path, reply: dict, steps: int) -> dict:
-    """After ``run N``: poll until the page has stepped N times or holds again.
+def poll(sock: Path, done: Callable[[dict], Any], doing: Callable[[dict], str], limit: float, each=None) -> dict:
+    """Ask the page how things stand every :data:`POLL_SECONDS` until ``done(status)``; the last status.
 
-    However slowly the scene steps, the wait goes on while it steps: it gives
-    up only when the page, not busy, has taken no step for
-    :data:`STALL_SECONDS`. A rebuild (a save) or a reset under the run ends
-    it: the step count starts over, so the target would never be reached, and
-    the reply says what happened instead of waiting on. A reset is read off
-    the page's reset count, not the step count, which may have climbed back
-    past ``start`` by the next poll.
+    The one loop every wait runs: a line saying ``doing(status)`` every
+    :data:`SAY_EVERY` seconds while ``each()`` -- run before every poll --
+    printed nothing, and a not-ok reply saying what it was still doing once
+    ``limit`` seconds have passed (the page carries on). A status the page
+    could not give is returned as it came.
     """
-    start = int(reply["step"])
-    target = start + int(steps)
-    at, moved = start, time.time()
+    start = said = time.monotonic()
     while True:
-        time.sleep(0.2)
+        if each is not None and each():
+            said = time.monotonic()
         status = request(sock, {"cmd": "status", "light": True}, DEFAULT_TIMEOUT)
-        if not status.get("ok"):
+        if not status.get("ok") or done(status):
             return status
-        now = time.time()
-        if status.get("busy"):
-            moved = now  # a rebuild or a render under way holds the steps up: the next poll says how the run fared
-            continue
-        if status.get("generation", reply.get("generation")) != reply.get("generation"):
-            return {"ok": False, "error": "the scene was rebuilt during the run; the run ended", "step": status["step"]}
-        if status.get("resets", reply.get("resets")) != reply.get("resets") or status["step"] < start:
-            return {"ok": False, "error": "the scene was reset during the run; the run ended", "step": status["step"]}
-        if status["step"] >= target or (status["paused"] and status["playing"] == 0):
-            done = {"ok": True, "step": status["step"], "time": status["time"]}
-            full = request(sock, {"cmd": "status"}, DEFAULT_TIMEOUT)  # once, at the end: is the state still finite
-            if "finite" in full:
-                done["finite"] = full["finite"]
-            else:
-                done["note"] = (
-                    f"whether the state is finite is not known: the page was {full.get('busy') or 'not answering'} "
-                    "-- `./ctl status` says"
-                )
-            return done
-        if status["step"] > at:
-            at, moved = status["step"], now
-        elif now - moved > STALL_SECONDS:
-            return {
-                "ok": False,
-                "error": f"the run stalled at step {at} of {target}: no step in {STALL_SECONDS:.0f} s; "
-                "the page carries on",
-                "step": at,
-            }
+        now = time.monotonic()
+        if now - start > limit:
+            return {"ok": False, "error": f"still {doing(status)} after {limit:.0f} s; the page carries on"}
+        if now - said >= SAY_EVERY:
+            _say(f"waiting: {doing(status)} ({now - start:.0f} s)")
+            said = now
+        time.sleep(POLL_SECONDS)
+
+
+def wait_for_steps(sock: Path, reply: dict, limit: float) -> dict:
+    """After ``run N``: wait until the page says how that run ended (``last_run``), however slowly it steps.
+
+    The page ends a run -- held -- when its steps are taken (``done``) and
+    when it is paused, cut short by a routine, a rebuild or a reset, or
+    replaced by another run; anything but ``done`` is an error saying which,
+    at what step.
+    """
+    serial = reply.get("run")
+    status = poll(
+        sock,
+        lambda st: (st.get("last_run") or {}).get("serial") == serial,
+        lambda st: f"running, step {st.get('step')} of {reply.get('target')}",
+        limit,
+    )
+    if not status.get("ok"):
+        return status
+    run = status["last_run"]
+    out = {"ok": run["how"] == "done", "step": run["step"], "time": status.get("time"), "finite": run.get("finite")}
+    if run["how"] != "done":
+        out["error"] = f"the run ended at step {run['step']} of {run['target']}: {run['how']}"
+    return out
 
 
 def _say(text: str) -> None:
@@ -576,23 +587,13 @@ def server_log(sock: Path, run_dir: Path) -> Path:
 
 def wait_until_free(sock: Path, limit: float) -> dict:
     """Poll ``status`` until the page is not busy and every save has been built; the last status."""
-    start = said = time.monotonic()
-    while True:
-        status = request(sock, {"cmd": "status", "light": True}, DEFAULT_TIMEOUT)
-        if not status.get("ok"):
-            return status
+
+    def doing(status: dict) -> str:
         # a routine's step is the page at work, not held up: free, as far as a save or a render goes
         busy = "" if status.get("busy_routine") else status.get("busy")
-        doing = busy or ("a save not built yet" if status.get("pending_save") else "")
-        if not doing:
-            return status
-        now = time.monotonic()
-        if now - start > limit:
-            return {"ok": False, "error": f"still {doing} after {limit:.0f} s; the page carries on"}
-        if now - said >= SAY_EVERY:
-            _say(f"waiting: {doing} ({status.get('busy_seconds', 0) if busy else now - start:.0f} s)")
-            said = now
-        time.sleep(0.5)
+        return busy or ("a save not built yet" if status.get("pending_save") else "")
+
+    return poll(sock, lambda status: not doing(status), doing, limit)
 
 
 def _log_size(log: Path) -> int:
@@ -605,54 +606,48 @@ def _log_size(log: Path) -> int:
 def wait_for_script(sock: Path, reply: dict, log: Path, offset: int, limit: float) -> dict:
     """After ``play`` or ``eval`` started a routine: stream the page's log until it ends, then say how.
 
-    The routine is known by the serial the page gave it; ``status`` names the
-    last one to end. Its printed output, a failure's traceback and a take's
-    summary land in the page's log, which is printed as it grows.
+    The routine is known by the serial the page gave it; ``status`` keeps how
+    each of the last few ended. A take it filmed is waited for until it is
+    written: ``recording`` names it until then. The routine's printed output, a
+    failure's traceback and a take's summary land in the page's log, which is
+    printed as it grows.
     """
-    serial = int(reply.get("serial") or 0)
+    serial = str(int(reply.get("serial") or 0))
     take = reply.get("take") or (Path(reply["recording"]).stem if reply.get("recording") else "")
-    start = said = time.monotonic()
-    status: dict = {}
 
-    def stream() -> None:
-        nonlocal offset, said
+    def stream() -> bool:
+        nonlocal offset
         size = _log_size(log)
-        if size > offset:
-            with open(log, "rb") as f:
-                f.seek(offset)
-                chunk = f.read(size - offset)
-            offset = size
-            text = chunk.decode(errors="replace").rstrip("\n")
-            if text:
-                print(text, flush=True)
-            said = time.monotonic()
+        if size <= offset:
+            return False
+        with open(log, "rb") as f:
+            f.seek(offset)
+            chunk = f.read(size - offset)
+        offset = size
+        text = chunk.decode(errors="replace").rstrip("\n")
+        if text:
+            print(text, flush=True)
+        return bool(text)
 
-    while True:
-        stream()
-        status = request(sock, {"cmd": "status", "light": True}, DEFAULT_TIMEOUT)
-        if not status.get("ok"):
-            return status
-        # this routine's own ending, not the newest one's: another may have ended after it
-        ended = (status.get("ended") or {}).get(str(serial)) or {}
-        # ended; and a take it filmed is no longer filming, nor being written and put beside the clip
-        writing = status.get("busy") and not status.get("busy_routine")  # a take is written by the main thread
-        filming = take and (writing or status.get("recording") == take)
-        if ended and not filming:
-            break
-        now = time.monotonic()
-        if now - start > limit:
-            return {"ok": False, "error": f"the routine is still playing after {limit:.0f} s; it carries on"}
-        if now - said >= SAY_EVERY:
-            where = f"step {status['step']}, t = {status['time']:.1f} s" if "step" in status else status.get("busy", "")
-            _say(f"playing: {where} ({now - start:.0f} s)")
-            said = now
-        time.sleep(0.5)
+    def done(status: dict) -> bool:
+        # this routine's own ending, not the newest one's; and its take no longer filming or being written
+        return bool((status.get("ended") or {}).get(serial)) and not (take and status.get("recording") == take)
+
+    def doing(status: dict) -> str:
+        if take and (status.get("ended") or {}).get(serial):
+            return f"writing the take {take}"
+        return f"playing, step {status.get('step')}, t = {status.get('time', 0.0):.1f} s"
+
+    status = poll(sock, done, doing, limit, each=stream)
     stream()  # what the page printed while the last status was on its way
+    if not status.get("ok"):
+        return status
+    ended = status["ended"][serial]
     how = str(ended.get("how", ""))
     out = {
         "ok": how == "finished",
         "routine": ended.get("name", ""),
-        "ended": how,
+        "how": how,  # not `ended`: that is status's dict of endings, printed only under --json
         "steps": ended.get("steps"),
         "wall_seconds": ended.get("wall_seconds"),
         "speed": status.get("speed"),
@@ -942,12 +937,12 @@ def main(argv=None) -> int:
         else:
             reply = request(sock, req, timeout)
         if args.cmd == "run" and reply.get("ok") and not args.no_wait:
-            reply = wait_for_steps(sock, reply, args.steps)
+            reply = wait_for_steps(sock, reply, args.wait_limit)
         if args.cmd in ("play", "eval") and waiting and reply.get("ok") and reply.get("serial"):
             started = reply
             reply = wait_for_script(sock, reply, log, offset, args.wait_limit)
             # what the command itself answered stays: an eval's printed output, the note that the scene is stale
-            reply.update({k: started[k] for k in ("stdout", "value", "stale") if started.get(k)})
+            reply.update({k: started[k] for k in ("stdout", "value", "stale", "pending") if started.get(k)})
     except NoServer:
         if args.cmd == "ref" and req.get("op") == "frames":
             # nothing about cutting stills needs the page; the stills go where the page would put them

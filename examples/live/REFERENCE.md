@@ -16,11 +16,18 @@ is that folder's. `twins/` is not committed.
 - The tab never reloads, and the camera stays where you left it.
 - A file that does not build leaves the previous scene up. `./ctl status`
   prints the traceback. One that builds but will not go into the page leaves
-  a bare scene (one YAM) standing in, and every reply says so.
-- A save to `scene.py` or to any `.py` in its folder, two folders down,
-  rebuilds -- but not under `run/`, `ref/`, `assets/`, `twins/`, a hidden
-  folder or one named `robosimstudio*`, and no more than the first 500 files:
-  a scratch script goes in `run/`. A rebuild re-imports the helper modules beside
+  a bare scene (one YAM) standing in: `status` says `serving: stand-in`. If
+  even that will not go in, no scene is in the page (`serving: nothing`):
+  `snapshot`, `compare`, `check`, `eval`, `play`, `run` and `reset` are
+  refused until a save goes in, or `./ctl quit` and `./ctl up`. Until a save
+  goes in, the replies of those that act on the scene carry `stale`, saying
+  which scene they acted on; while a save is not built yet, they carry
+  `pending`.
+- The scene's own code is `scene.py` and every `.py` in its folder, two
+  folders down -- but not under `run/`, `ref/`, `assets/`, `twins/`, a hidden
+  folder or one named `robosimstudio*`. A save to any of it rebuilds (the
+  first 500 files are watched), and a rebuild imports it afresh: a helper
+  module goes there, and a scratch script in `run/`. A rebuild re-imports the helper modules beside
   `scene.py` (a module or a package in its directory) and takes back what the
   file and its helpers registered (an entity class, a cell, a gripper, a
   scenery), so an edit to a helper lands with the next save: no new name per
@@ -82,7 +89,7 @@ scene.add(rss.robot("yam_bimanual"))  # a scene needs something that moves befor
 | `log [--last N]` | Every compare, check, take and `snapshot --note` so far: what it left (PASS/FAIL, the picture: a snapshot's pair when it made one) and the `scene.py` it measured. |
 | `play [NAME] [--record TAKE --camera N --every K] [--wait [--wait-limit S]]` | Play a routine the scene file binds, as its button on the page does; `--record` films a frame every `K` control steps (4). `--wait` returns when it ends and its take is written, printing the page's log as it goes, exits 1 with the traceback if it failed, and gives up after `--wait-limit` seconds (3600). |
 | `show PATH [--label TEXT]`, `show --clear` | A picture on the page's board for the person watching. |
-| `run N [--no-wait]` | Step N control steps, then hold, waiting until they are taken however slowly the scene steps. Refused while a routine plays; ends with an error if the scene is rebuilt or reset during the run, or if the page, not busy, takes no step for 60 s (the page carries on). |
+| `run N [--no-wait] [--wait-limit S]` | Step N control steps, then hold, waiting until they are taken however slowly the scene steps (`--wait-limit`, 3600 s). Refused while a routine plays. A run cut short -- paused, a routine started, a save rebuilt the scene, a reset, another run -- ends held, and the reply is an error saying which, at what step; `status`'s `last_run` says how the last one ended. |
 | `pause`, `resume` | Pause or resume stepping. |
 | `reset` | Reset the scene. It also stops a playing routine and finishes its take; Pause is left as it was. |
 | `eval "CODE"` or `eval -` (stdin) `[--record NAME --every K --camera N] [--wait [--wait-limit S]]` | Run Python on the sim thread in `scene.py`'s namespace (`sim`, `scene`, `session`, `np`, `rss`, `live` -- the page's own `LiveServer` --, `server` -- its viser server --, and every name the file bound). What it binds, routines and `play` see until the next save starts the namespace over. Its value is its last line's, when that line is an expression; a generator plays on the page step by step; `--record` films it; `--wait` waits for it as `play --wait` does. |
@@ -258,7 +265,9 @@ board survives a rebuild. Below it are the **Run** and **Reset** buttons.
 ### The log
 
 `compare`, `check`, a take and `snapshot --note` append to `run/log.jsonl`
-with the hash of the `scene.py` they measured and the picture they left;
+with the hash of the files the scene they measured was built from --
+`scene.py` and its helpers, as the build read them (`bare` for the stand-in)
+-- and the picture they left;
 `./ctl log` prints it. `--note` says what each edit changed.
 
 ## Frames and units
