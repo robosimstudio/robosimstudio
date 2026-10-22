@@ -42,10 +42,12 @@ than guessing a constructor or a name.
   that times out says what the page is busy with.
 - Several lines of Python go in a heredoc: `./ctl eval - <<'PY' ... PY`.
   `--json` after any command prints the raw reply.
-- Pick the GPU with `ROBOSIMSTUDIO_DEVICE=cuda:N ./ctl up` or
-  `BUILD = {"device": "cuda:N"}` in `scene.py`. The first path-traced picture
-  in a process compiles its shaders for minutes: `./ctl status` says so, and it
-  is not a hang.
+- Pick the GPU with `CUDA_VISIBLE_DEVICES=N ./ctl up`: the page then sees
+  that card alone. `ROBOSIMSTUDIO_DEVICE=cuda:N` or `BUILD = {"device": ...}`
+  only picks where the scene builds, and the page still holds about 600 MiB
+  on every other card, someone else's included. The first path-traced
+  picture in a process compiles its shaders for minutes: `./ctl status` says
+  so, and it is not a hang.
 - A twin is not a library change: the test tiers and `tests/` are not for
   it.
 
@@ -61,9 +63,10 @@ than guessing a constructor or a name.
   outlines yellow, render cyan, each keyed thing up close, both pictures with
   the things painted out); per keyed thing its size ratio, offset and overlap.
   On the look sheet, list per thing what the photo has that the render lacks
-  (a lid seam, latch tabs, a label, a chamfer, a colour, a texture) and what
-  stands behind it (table top, floor, wall, furniture): that list is your
-  next edit. Key what keys cleanly, typically the thing the robot handles; a
+  (a lid seam, latch tabs, a label, a chamfer, a colour, a texture), what
+  stands behind it (table top, floor, wall, furniture, a window) and how it
+  is lit (where the light comes from, how bright and how warm, which way the
+  shadows fall, what shines): that list is your next edit. Key what keys cleanly, typically the thing the robot handles; a
   colour key that outlines a fragment measures nothing, and a mask
   (`gasket=mask:ref/gasket.png`) is the way round it.
 - `./ctl check --camera <name> [--key ...]`: PASS/FAIL with its number for
@@ -110,7 +113,10 @@ on every twin so far:
 - The first frame agrees: each thing the clip shows is in the scene at its
   size and place, through a camera where the clip's was, and to your own eye
   on the pair and the look sheet it looks like the clip: the things in their
-  detail and what stands behind them, with their colours and textures.
+  detail and what stands behind them, with their colours and textures, under
+  the clip's light -- from where it comes, how bright and how warm, with the
+  shadows and highlights it makes. The light is the scene's `render=`
+  (REFERENCE, *The contract for `scene.py`*).
 - The robot moves things only through its fingers' contact: no pose written
   onto a thing, no latch, weld, attachment, dragger or spring, no motor on the
   thing's own joints, no finger colliders added. If the gripper needs

@@ -77,6 +77,15 @@ scene.add(rss.robot("yam_bimanual"))  # a scene needs something that moves befor
   stay, and its `rss.view` and `rss.draw` calls are harmless (one that drives
   the viewer `rss.viewer` returns is not).
 - Poses are in the work-surface frame. See [Frames and units](#frames-and-units).
+- The light, and what fills the frame past the room, are
+  `rss.Scene(..., render=RenderSpec(...))`, with
+  `from robosimstudio.core.render import RenderSpec`: `light_direction` (the
+  way the key light travels, world frame), `key_intensity`, `fill_lights`
+  (`(direction, intensity)` pairs), `ambient` (RGB), `shadows`, `environment`
+  (the path tracer's preset: `default`, `studio`, `lab`, `none`),
+  `environment_map` (an HDR panorama for the path tracer) and `background`
+  (RGB where nothing is hit). A field left unset keeps the house look. The
+  numbers do not carry across renderers: judge a change on the pair.
 - Bind `routine` (a callable taking the built `sim`, and the page's `session`
   if it declares one, returning a generator), or `routines`, a dict of name to
   such callables, and the page grows a **Run** button per routine with a
@@ -149,7 +158,10 @@ studio's own Run buttons, which pause with the page and step every routine):
   (`robosimstudio_studio.routine`'s `reach`, `grip` and `wait`), which stay
   live: a pass whose `next()` only yielded is stepped by the page, one that
   stepped the scene itself (`sim.run(30)` to settle) is not, so `reach`, settle,
-  `reach` again works;
+  `reach` again works. `reach` raises when the hand does not get within its
+  `tolerance`; for a hand that contact will stop -- fingers closing on a lid,
+  a press, a pull -- `short = yield from reach(..., arrive=False)` ends where
+  the hand comes to rest and returns how far short it is [m];
 - any other routine drives the scene itself (`sim.run(1)` between yields): the
   page never steps it, and the arm panels are suspended while it plays, so
   they do not write the joints and the gripper under it.
