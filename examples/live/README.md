@@ -23,9 +23,8 @@ What is here:
   is a twin on its own -- its `scene.py`, helpers, assets, `ref/`, `run/`,
   `REPORT.md` and its own `ctl` -- so zip one to hand it on, without its
   readings and bytecode (`zip -r lid.zip lid -x 'lid/run/*' '*/__pycache__/*'`
-  from `twins/`). Unzipped outside
-  a checkout, its `./ctl` runs on `$PYTHON` or `python3` with robosimstudio
-  installed.
+  from `twins/`). Unzipped outside a checkout, its `./ctl` runs on `$PYTHON`
+  or `python3` with robosimstudio installed.
 
 ## Start
 
@@ -48,12 +47,13 @@ throwaway clone or worktree of the repository with its sandbox off, never in a
 checkout you care about.
 
 The page opens on the twin's starter scene: two arms on a bench. On a remote
-GPU box, pick an idle card with `CUDA_VISIBLE_DEVICES=N ./ctl up` (naming it
-with `ROBOSIMSTUDIO_DEVICE` alone still holds memory on every card), and use
-`--share` or an SSH tunnel
+GPU box, pick an idle card with `CUDA_VISIBLE_DEVICES=N ./ctl up` (the page
+then calls it `cuda:0`; naming it with `ROBOSIMSTUDIO_DEVICE` alone still
+holds memory on every card), and use `--share` or an SSH tunnel
 (`ssh -L 8080:localhost:8080 <box>`). The page listens on all interfaces
-(viser's default), so on a shared network firewall the port or use the tunnel.
-`./ctl quit` stops the server (on a page busy past its wait, after `./ctl status --wait`).
+(viser's default), so on a shared network firewall the port or use the
+tunnel. `./ctl quit` stops the server once a build, a render or a routine's
+step under way ends.
 
 The method is in `AGENTS.md`, so the prompt only has to say what to build; one
 line naming the clip or the photo is enough. The prompts below say more, for

@@ -79,13 +79,20 @@ TIMEOUTS = {
     "compare": 600.0,
     "check": 600.0,
     "ref": 600.0,
+    "quit": 330.0,
+    "reset": 330.0,
+    "pause": 330.0,
+    "resume": 330.0,
 }
 """Seconds to wait for a reply, per command; :data:`DEFAULT_TIMEOUT` for the rest.
 
 ``play`` and ``eval`` wait longest: with ``--record`` both render the take's
 first frame before they answer, which in a fresh process compiles the path
 tracer's shaders. ``snapshot`` waits as long as ``compare``: the
-first path-traced picture in a process compiles the renderer, for minutes."""
+first path-traced picture in a process compiles the renderer, for minutes.
+The commands that stop or hold what plays wait as long as ``reload``: they go
+in between two of a routine's steps, and one step can outlast 30 s, which
+``status --wait`` does not wait out (a routine playing is not a busy page)."""
 DEFAULT_TIMEOUT = 30.0
 WAIT_LIMIT = 3600.0
 """How long ``--wait`` waits by default [s]."""
@@ -767,8 +774,8 @@ def cmd_up(args: argparse.Namespace, sock: Path) -> int:
             return 2
     except NoReply:
         print(
-            f"ctl: a server at {sock} is not answering even its status; stop that process (its pid is the first "
-            "word of serve.log.path in the run directory), or start another page with its own --run-dir and --scene",
+            f"ctl: a server at {sock} is not answering even its status; stop that process (its pid is in serve.pid "
+            "in the run directory), or start another page with its own --run-dir and --scene",
             file=sys.stderr,
         )
         return 1

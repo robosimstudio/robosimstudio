@@ -9,6 +9,7 @@ not see a rope sink, and the command that timed out with no word of why.
 
 from __future__ import annotations
 
+import gc
 import json
 import os
 import shutil
@@ -18,6 +19,7 @@ import threading
 import time
 import types
 import unittest
+import weakref
 from pathlib import Path
 from unittest import mock
 
@@ -29,7 +31,7 @@ from robosimstudio.registry import MISSING, Registry
 from robosimstudio.solvers.render.tiled import SEG_PARTICLES, SEG_SOFT_MESH, _labels
 from robosimstudio_real2sim_agent import checks, ctl, wire
 from robosimstudio_real2sim_agent import server as server_mod
-from robosimstudio_real2sim_agent.scenefile import SceneRegistrations, helper_files
+from robosimstudio_real2sim_agent.scenefile import Loaded, ScenePaths, SceneRegistrations, hash_checked, helper_files
 from robosimstudio_real2sim_agent.server import LiveServer
 from tests.test_fix_real2sim_frames_reset import _clip
 
@@ -238,41 +240,51 @@ class SceneCode(unittest.TestCase):
         registry.unwatch(a)
 
 
+def _case_rest(lid_after: tuple) -> dict:
+    """The gate's rest line for a case whose base stays and whose lid ends at the quaternion ``lid_after``."""
+    body_q = np.zeros((3, 7))
+    body_q[:, 6] = 1.0
+    com = np.array([[0.0, 0.0, 0.0], [0.0, 0.0, 0.0], [0.1, 0.0, 0.0]])
+    handles = types.SimpleNamespace(
+        objects={"case": None}, statics={}, deformables={}, entity=lambda name: types.SimpleNamespace(bodies=(1, 2))
+    )
+
+    class Sim:
+        cameras = ()
+        scene = types.SimpleNamespace(handles=handles)
+        state = types.SimpleNamespace(body_q=types.SimpleNamespace(numpy=body_q.copy))
+        model = types.SimpleNamespace(body_com=types.SimpleNamespace(numpy=lambda: com))
+
+        def state_is_finite(self) -> bool:
+            return bool(np.isfinite(body_q).all())
+
+        def names(self) -> list[str]:
+            return ["case"]
+
+        def run(self, steps: int) -> None:
+            body_q[2, 3:7] = lid_after
+
+        def sync(self) -> None:
+            pass
+
+        def __getitem__(self, name):
+            return types.SimpleNamespace(position=body_q[1, :3].copy())  # the base, which stays
+
+    with mock.patch.object(checks, "_penetration", return_value=(0.0, [])):
+        result = checks.gate(types.SimpleNamespace(sim=Sim(), build_error=""), steps=1)
+    return next(c for c in result["checks"] if c["name"] == "rest")
+
+
 class GateSeesJointedThings(unittest.TestCase):
     def test_a_lid_that_swings_while_its_base_stays_fails_rest(self) -> None:
-        body_q = np.zeros((3, 7))
-        body_q[:, 6] = 1.0
-        com = np.array([[0.0, 0.0, 0.0], [0.0, 0.0, 0.0], [0.1, 0.0, 0.0]])
-        handles = types.SimpleNamespace(
-            objects={"case": None}, statics={}, deformables={}, entity=lambda name: types.SimpleNamespace(bodies=(1, 2))
-        )
-
-        class Sim:
-            cameras = ()
-            scene = types.SimpleNamespace(handles=handles)
-            state = types.SimpleNamespace(body_q=types.SimpleNamespace(numpy=body_q.copy))
-            model = types.SimpleNamespace(body_com=types.SimpleNamespace(numpy=lambda: com))
-
-            def state_is_finite(self) -> bool:
-                return True
-
-            def names(self) -> list[str]:
-                return ["case"]
-
-            def run(self, steps: int) -> None:
-                body_q[2, 3:7] = (0.0, 0.0, np.sin(np.pi / 8), np.cos(np.pi / 8))  # the lid swings 45 degrees
-
-            def sync(self) -> None:
-                pass
-
-            def __getitem__(self, name):
-                return types.SimpleNamespace(position=body_q[1, :3].copy())  # the base, which stays
-
-        with mock.patch.object(checks, "_penetration", return_value=(0.0, [])):
-            result = checks.gate(types.SimpleNamespace(sim=Sim(), build_error=""), steps=1)
-        rest = next(c for c in result["checks"] if c["name"] == "rest")
+        rest = _case_rest((0.0, 0.0, np.sin(np.pi / 8), np.cos(np.pi / 8)))  # the lid swings 45 degrees
         self.assertFalse(rest["ok"], rest["detail"])
         self.assertIn("case drifted", rest["detail"])
+
+    def test_a_lid_that_blows_up_while_its_base_stays_fails_rest(self) -> None:
+        rest = _case_rest((np.nan,) * 4)
+        self.assertFalse(rest["ok"], rest["detail"])
+        self.assertIn("case drifted nan", rest["detail"])
 
 
 class TakeAccounting(unittest.TestCase):
@@ -1409,3 +1421,168 @@ class TwinFolder(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class TheSceneThatWouldNotGoIn(unittest.TestCase):
+    """A scene that builds but will not go into the page is given back before the bare one is built in its place."""
+
+    class Twin:
+        def __init__(self, made: list, closed: list) -> None:
+            made.append(weakref.ref(self))
+            self.closed = closed
+
+        def close(self) -> None:
+            self.closed.append("sim")
+
+    def test_a_rebuild_lets_it_go_before_the_stand_in_is_built(self) -> None:
+        live = _server()
+        made: list = []
+        closed: list[str] = []
+        seen: list = []
+
+        def adopt(sim, *, label: str = "") -> None:
+            if isinstance(sim, self.Twin):
+                raise RuntimeError("adopt failed")
+
+        def bare() -> types.SimpleNamespace:
+            gc.collect()
+            seen.append((made[0]() is None, list(closed), live.sim))
+            return types.SimpleNamespace(ns={}, scene="bare", sim="the bare scene", seconds=0.0)
+
+        live.session = types.SimpleNamespace(
+            adopt=adopt,
+            begin_run=lambda: None,
+            status="",
+            teardown=lambda: closed.append("teardown"),
+            viewer=types.SimpleNamespace(set_model=lambda model: closed.append(f"viewer {model}")),
+        )
+        live.generation, live.ns, live.scene = 0, {}, None
+        live._end_scripts = lambda why: None  # type: ignore[method-assign]
+        live._end_run = lambda why, hold=False: None  # type: ignore[method-assign]
+        live.refresh_live = lambda force=False: None  # type: ignore[method-assign]
+        live.load = lambda files=None: Loaded(ns={}, scene="twin", sim=self.Twin(made, closed), seconds=1.0)  # type: ignore[method-assign]
+        with (
+            mock.patch.object(server_mod, "helper_files", lambda path: []),
+            mock.patch.object(server_mod.checks, "scene_hash", lambda path, files: "h"),
+            mock.patch.object(server_mod, "fallback_loaded", bare),
+            mock.patch("builtins.print"),
+        ):
+            reply = live.reload("saved")
+        self.assertEqual(seen, [(True, ["teardown", "viewer None", "sim"], None)], "nothing of it held while building")
+        self.assertEqual(
+            (reply["ok"], live.serving, live.scene_id, live.sim), (False, "stand-in", "bare", "the bare scene")
+        )
+        self.assertIn("adopt failed", live.last_error)
+
+    def test_at_start_up_it_is_let_go_before_the_stand_in_is_built(self) -> None:
+        from robosimstudio_studio.session import StudioConfig
+
+        folder = Path(tempfile.mkdtemp())
+        self.addCleanup(shutil.rmtree, folder, True)
+        (folder / "scene.py").write_text("")
+        live = LiveServer(
+            scene_path=folder / "scene.py", sock_path=folder / "s.sock", run_dir=folder / "run", config=StudioConfig()
+        )
+        made: list = []
+        closed: list[str] = []
+        seen: list = []
+        twin = self.Twin
+
+        class Session:
+            def __init__(self, sim, *, config, host) -> None:
+                if isinstance(sim, twin):
+                    raise RuntimeError("adopt failed")
+                self.server = types.SimpleNamespace(get_port=lambda: 8080)
+
+            def begin_run(self) -> None:
+                pass
+
+        def bare() -> types.SimpleNamespace:
+            gc.collect()
+            seen.append((made[0]() is None, list(closed), live.sim))
+            return types.SimpleNamespace(ns={}, scene="bare", sim="the bare scene", seconds=0.0)
+
+        live.load = lambda files=None: Loaded(ns={}, scene="twin", sim=twin(made, closed), seconds=1.0)  # type: ignore[method-assign]
+        live.refresh_live = lambda force=False: None  # type: ignore[method-assign]
+        self.addCleanup(registry.unwatch, live.registrations)
+        self.addCleanup(lambda: sys.path.remove(str(folder.resolve())) if str(folder.resolve()) in sys.path else None)
+        with (
+            mock.patch.object(server_mod, "LiveSession", Session),
+            mock.patch.object(server_mod, "fallback_loaded", bare),
+            mock.patch("builtins.print"),
+        ):
+            live.open_page()
+        self.assertEqual(seen, [(True, ["sim"], None)], "nothing of it held while building")
+        self.assertEqual((live.serving, live.scene_id), ("stand-in", "bare"))
+
+
+class TakeProbe(unittest.TestCase):
+    def _recorder(self, height: int = 540) -> checks.Recorder:
+        rec = checks.Recorder.__new__(checks.Recorder)
+        rec.sim = types.SimpleNamespace(step_count=7, reset_count=0)
+        rec.cam = types.SimpleNamespace(name="side")
+        rec._probed = None
+        rec.looks = []
+        rec._look = lambda: (rec.looks.append(1), (np.zeros((height, 960, 3), np.uint8), "seg", None))[1]
+        rec.captured = []
+        rec.capture = lambda look=None: rec.captured.append(look)
+        return rec
+
+    def test_a_video_the_encoder_cannot_make_fails_the_probe(self) -> None:
+        with mock.patch("robosimstudio.core.render.video.ffmpeg_exe", return_value="/bin/true"):
+            with self.assertRaisesRegex(ValueError, "even width and height"):
+                self._recorder(height=541).probe()
+        with mock.patch("robosimstudio.core.render.video.ffmpeg_exe", return_value="/nonexistent/ffmpeg"):
+            with self.assertRaisesRegex(FileNotFoundError, "no ffmpeg"):
+                self._recorder().probe()
+
+    def test_frame_0_is_the_probes_unless_the_scene_stepped_since(self) -> None:
+        rec = self._recorder()
+        with mock.patch("robosimstudio.core.render.video.ffmpeg_exe", return_value="/bin/true"):
+            rec.probe()
+            rec.start()
+            self.assertEqual((len(rec.looks), rec.captured[-1][1]), (1, "seg"), "rendered once")
+            rec.probe()
+            rec.sim.step_count += 1  # what was dropped stepped the scene as it cleaned up
+            rec.start()
+        self.assertIsNone(rec.captured[-1], "filmed afresh")
+
+
+class LibraryNamedHelpers(unittest.TestCase):
+    def test_a_module_named_as_the_librarys_beside_the_scene_is_neither_watched_nor_the_scenes(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp).resolve()
+            for name in ("scene", "robosimstudio2", "robosimstudio_lid", "lidlib"):
+                (root / f"{name}.py").write_text("")
+            self.assertEqual([p.name for p in helper_files(root / "scene.py")], ["lidlib.py"])
+            paths = ScenePaths(root)
+            self.assertEqual(
+                {
+                    n: paths.is_scene(str(root / f"{n}.py"), n)
+                    for n in ("robosimstudio2", "robosimstudio_lid", "lidlib")
+                },
+                {"robosimstudio2": False, "robosimstudio_lid": False, "lidlib": True},
+            )
+
+    def test_a_helper_never_imported_gets_no_bytecode_written(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            helper = Path(tmp) / "notes.py"
+            helper.write_text("X = 1\n")
+            hash_checked(helper)
+            self.assertFalse((Path(tmp) / "__pycache__").exists(), "nothing written into the folder the person zips")
+
+
+class HeldUpByARoutine(unittest.TestCase):
+    def test_a_command_a_routines_step_held_up_says_it_goes_in_between_steps(self) -> None:
+        live = _server()
+        live.busy_state = ("playing one step of a routine", time.perf_counter(), True)
+
+        def call_starting_within(timeout, fn, request):
+            raise server_mod.BusTimeout("dispatch was not serviced")
+
+        live.bus = types.SimpleNamespace(call_starting_within=call_starting_within, timeout=900.0)
+        reply = live._on_request({"cmd": "quit", "timeout": ctl.TIMEOUTS["quit"]})
+        self.assertIn("between two of the routine's steps", reply["error"])
+        self.assertNotIn("status --wait", reply["error"], "which does not wait out a routine")
+        for cmd in ("quit", "reset", "pause", "resume"):
+            self.assertGreaterEqual(ctl.TIMEOUTS[cmd], ctl.TIMEOUTS["reload"], f"{cmd} waits out a long step")

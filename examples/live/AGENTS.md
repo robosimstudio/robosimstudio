@@ -3,8 +3,9 @@
 The method for any agent rebuilding a real bench, scene or clip in simulation.
 Codex reads this file by itself when started in this folder or below it, and
 Claude Code through `CLAUDE.md`; the repository's `AGENTS.md` and the
-`real-to-sim` skill point here. This file says how to work and what to deliver; [`REFERENCE.md`](REFERENCE.md)
-says what every command, flag, file and reading is, and how the page behaves.
+`real-to-sim` skill point here. This file says how to work and what to
+deliver; [`REFERENCE.md`](REFERENCE.md) says what every command, flag, file
+and reading is, and how the page behaves.
 
 `scene.py` runs on every save, and the `rss.Scene` it binds is built and
 swapped into the open page without a reload. `./ctl` is the command line onto
@@ -26,13 +27,15 @@ than guessing a constructor or a name.
   Everything the twin needs goes in that folder -- `scene.py`, its helper
   modules beside it or in a folder of them at most two down (not under
   `run/`, `ref/`, `assets/`, `twins/`, a hidden folder or one named
-  `robosimstudio*`: REFERENCE, *How it works*), `assets/`, `ref/` -- and the report in
-  its `REPORT.md`; a scratch script goes in its `run/`. Nothing goes
-  in this folder's own files, the library, `tests/`, the repository root or
-  `/tmp`: the twin's folder is what the person zips and hands on.
+  `robosimstudio*`, and not named `robosimstudio*.py` itself: REFERENCE,
+  *How it works*), `assets/`, `ref/` -- and the report in its `REPORT.md`; a
+  scratch script goes in its `run/`. Nothing goes in this folder's own files,
+  the library, `tests/`, the repository root or `/tmp`: the twin's folder is
+  what the person zips and hands on.
 - `./ctl status --wait` first: a page is up, or `./ctl up` starts one on the
-  folder's `scene.py` (tell the user its URL). Picking up from an earlier session: `./ctl log`, then open the last
-  look sheet it names, before the next edit.
+  folder's `scene.py` (tell the user its URL). Picking up from an earlier
+  session: `./ctl log`, then open the last look sheet it names, before the
+  next edit.
 - Open every picture a command writes with your image viewer (`view_image`
   in Codex): the pair, the look sheet, the strip. The numbers come second.
 - Commands that take long block until they are done, so never sleep and poll:
@@ -43,11 +46,13 @@ than guessing a constructor or a name.
 - Several lines of Python go in a heredoc: `./ctl eval - <<'PY' ... PY`.
   `--json` after any command prints the raw reply.
 - Pick the GPU with `CUDA_VISIBLE_DEVICES=N ./ctl up`: the page then sees
-  that card alone. `ROBOSIMSTUDIO_DEVICE=cuda:N` or `BUILD = {"device": ...}`
-  only picks where the scene builds, and the page still holds about 600 MiB
-  on every other card, someone else's included. The first path-traced
-  picture in a process compiles its shaders for minutes: `./ctl status` says
-  so, and it is not a hang.
+  that card alone, as `cuda:0`, so leave out `ROBOSIMSTUDIO_DEVICE` and any
+  `BUILD = {"device": ...}` (or make them `cuda:0`; `cuda:N` names a card it
+  cannot see). Naming the card with those alone only picks where the scene
+  builds, and the page still holds about 600 MiB on every other card,
+  someone else's included. The first path-traced picture in a process
+  compiles its shaders for minutes: `./ctl status` says so, and it is not a
+  hang.
 - A twin is not a library change: the test tiers and `tests/` are not for
   it.
 
@@ -66,9 +71,10 @@ than guessing a constructor or a name.
   (a lid seam, latch tabs, a label, a chamfer, a colour, a texture), what
   stands behind it (table top, floor, wall, furniture, a window) and how it
   is lit (where the light comes from, how bright and how warm, which way the
-  shadows fall, what shines): that list is your next edit. Key what keys cleanly, typically the thing the robot handles; a
-  colour key that outlines a fragment measures nothing, and a mask
-  (`gasket=mask:ref/gasket.png`) is the way round it.
+  shadows fall, what shines): that list is your next edit. Key what keys
+  cleanly, typically the thing the robot handles; a colour key that outlines
+  a fragment measures nothing, and a mask (`gasket=mask:ref/gasket.png`) is
+  the way round it.
 - `./ctl check --camera <name> [--key ...]`: PASS/FAIL with its number for
   builds, finite, camera aspect, things present, worst overlap, and drift
   when left alone. Advisory: explain any FAIL you accept, with the number.
@@ -114,9 +120,10 @@ on every twin so far:
   size and place, through a camera where the clip's was, and to your own eye
   on the pair and the look sheet it looks like the clip: the things in their
   detail and what stands behind them, with their colours and textures, under
-  the clip's light -- from where it comes, how bright and how warm, with the
-  shadows and highlights it makes. The light is the scene's `render=`
-  (REFERENCE, *The contract for `scene.py`*).
+  light as close to the clip's as the renderer can make it -- as bright, a
+  window or a lamp the clip shows built in -- through the scene's `render=`
+  (REFERENCE, *The contract for `scene.py`*). Where the light still differs
+  (its direction, its warmth, the shadows it casts) the report says so.
 - The robot moves things only through its fingers' contact: no pose written
   onto a thing, no latch, weld, attachment, dragger or spring, no motor on the
   thing's own joints, no finger colliders added. If the gripper needs

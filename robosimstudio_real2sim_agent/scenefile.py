@@ -59,6 +59,7 @@ __all__ = [
     "fallback_scene",
     "hash_checked",
     "helper_files",
+    "library_name",
     "run_scene_file",
     "stamp",
 ]
@@ -75,10 +76,17 @@ WATCH_LIMIT = 500
 """The most ``.py`` files watched: a scene file at the top of a large tree watches the first this many."""
 
 
+def library_name(name: str) -> bool:
+    """Whether a folder, a module beside the scene file or a top-level package is named as this library's
+    (``robosimstudio*``), and so is never the scene's: the one rule :class:`ScenePaths` and :func:`helper_files`
+    both apply."""
+    return name.startswith("robosimstudio")
+
+
 def scene_folder(name: str) -> bool:
     """Whether a folder under the scene file's can hold the scene's own code: the one rule for which folders do,
     which :class:`ScenePaths` and :func:`helper_files` both apply."""
-    return not name.startswith(".") and name not in WATCH_SKIP and not name.startswith("robosimstudio")
+    return not name.startswith(".") and name not in WATCH_SKIP and not library_name(name)
 
 
 @dataclass(frozen=True)
@@ -163,7 +171,7 @@ def helper_files(path: Path | str) -> list[Path]:
                     name.endswith(".py")
                     and not name.startswith(".")
                     # beside the scene file, a module named so is the library's (ScenePaths: its top-level name)
-                    and not (folder == path.parent and name.startswith("robosimstudio"))
+                    and not (folder == path.parent and library_name(name[:-3]))
                     and Path(entry.path) != path
                 ):
                     found.append(Path(entry.path))
@@ -175,17 +183,21 @@ def helper_files(path: Path | str) -> list[Path]:
 
 def hash_checked(path: Path | str) -> None:
     """Make a module's cached bytecode hash-checked, once: the import then checks it against the source's text, not
-    its whole-second mtime and size, and writes it so again when it does not match. A file that will not compile, or
-    a cache that cannot be written, is left to the import."""
+    its whole-second mtime and size, and writes it so again when it does not match. A file with no bytecode yet is
+    left alone -- nothing stale can be read, and nothing is written into the folder the person zips; its first
+    import writes one, made hash-checked before the import after. A file that will not compile, or a cache that
+    cannot be written, is left to the import."""
     path = str(path)
     try:
         cached = importlib.util.cache_from_source(path)
         with open(cached, "rb") as f:
             head = f.read(8)
-        if len(head) == 8 and int.from_bytes(head[4:8], "little") & 0b11 == 0b11:
-            return  # hash-based, and checked
+    except FileNotFoundError:
+        return
     except (OSError, ValueError):
-        pass
+        head = b""
+    if len(head) == 8 and int.from_bytes(head[4:8], "little") & 0b11 == 0b11:
+        return  # hash-based, and checked
     try:
         if py_compile.compile(path, doraise=False, quiet=2, invalidation_mode=CHECKED_HASH) is None:
             Path(importlib.util.cache_from_source(path)).unlink(missing_ok=True)  # will not compile: no old code stays
@@ -261,7 +273,7 @@ class ScenePaths:
                 and path not in self._baseline
                 and not any(part in ("site-packages", "dist-packages") for part in path.parts)
                 and not any(path.is_relative_to(lib) for lib in self._installed)
-                and not (top == "robosimstudio" or top.startswith("robosimstudio_"))
+                and not library_name(top)
             )
             self._verdicts[key] = verdict
         return verdict

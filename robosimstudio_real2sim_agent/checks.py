@@ -29,6 +29,7 @@ from __future__ import annotations
 
 import hashlib
 import json
+import shutil
 import time
 from pathlib import Path
 from typing import Any
@@ -408,6 +409,8 @@ class Recorder:
             self.com = None
         self.bodies = take_bodies(self.sim)
         self.last_capture = -1
+        self._probed: tuple | None = None
+        """The probe's step count, reset mark and frame: :meth:`start`'s frame 0 when the scene has not stepped since."""
 
     def _look(self) -> tuple[np.ndarray, np.ndarray, Any]:
         """The scene as the take films it now: the picture, the named ids, and the particles read for both."""
@@ -420,15 +423,30 @@ class Recorder:
         return rgb, seg, q
 
     def probe(self) -> None:
-        """Film one frame and keep nothing: a camera, a renderer or an id lookup that fails, fails here, before
-        anything the take would replace is touched."""
-        self._look()
+        """Film one frame, before anything the take would replace is touched: a camera, a renderer or an id lookup
+        that fails, fails here, and so does a video the encoder cannot make (ffmpeg is started on frame 0, and its
+        own errors arrive after that). The frame is kept for :meth:`start`."""
+        from robosimstudio.core.render.video import ffmpeg_exe
+
+        look = self._look()
+        height, width = np.asarray(look[0]).shape[:2]
+        if height % 2 or width % 2:
+            raise ValueError(
+                f"camera {self.cam.name!r} films {width}x{height}: a take's video needs an even width and height "
+                "(libx264 in yuv420p)"
+            )
+        exe = ffmpeg_exe()  # imageio-ffmpeg's raises when it has none
+        if shutil.which(exe) is None:
+            raise FileNotFoundError(f"no ffmpeg at {exe!r} to encode the take")
+        self._probed = (int(self.sim.step_count), reset_mark(self.sim), look)
 
     def start(self) -> None:
-        """Take the scene as it stands as the take's beginning: its step count from here, and frame 0."""
+        """Take the scene as it stands as the take's beginning: its step count from here, and frame 0 -- the
+        probe's, when the scene has not stepped since, rather than the same picture rendered again."""
         self._raw, self._mark, self.steps = int(self.sim.step_count), reset_mark(self.sim), 0
         self.started = time.perf_counter()
-        self.capture()
+        probed, self._probed = self._probed, None
+        self.capture(probed[2] if probed is not None and probed[:2] == (self._raw, self._mark) else None)
 
     def close(self) -> None:
         """Close the video writer and the id renderer; safe to call twice."""
@@ -448,10 +466,11 @@ class Recorder:
         if self.last_capture < 0 or self.steps - self.last_capture >= self.every:
             self.capture()
 
-    def capture(self) -> None:
+    def capture(self, look: tuple | None = None) -> None:
+        """Film the scene as it stands, or as ``look`` (:meth:`_look`'s) already filmed it."""
         sim = self.sim
         self._advance()
-        rgb, seg, q = self._look()
+        rgb, seg, q = look if look is not None else self._look()
         self.writer.append(rgb)
         self.segs.append(seg[::SEG_SCALE, ::SEG_SCALE].astype(np.uint8 if len(self.names) < 255 else np.int32))
         try:
@@ -892,7 +911,7 @@ def gate(
         was = parts_before.get(name)
         if was and len(was) == len(now):
             moved = float(np.linalg.norm(np.asarray(now) - np.asarray(was), axis=1).max())
-            drift[name] = max(drift.get(name, 0.0), 1000.0 * moved)
+            drift[name] = float(np.maximum(drift.get(name, 0.0), 1000.0 * moved))  # a NaN on either side stays
     from robosimstudio.core.render.particles import draws_points
 
     handles = getattr(getattr(getattr(sim, "scene", None), "handles", None), "deformables", None) or {}

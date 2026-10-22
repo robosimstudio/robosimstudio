@@ -26,13 +26,14 @@ is that folder's. `twins/` is not committed.
   `pending`.
 - The scene's own code is `scene.py` and every `.py` in its folder, two
   folders down -- but not under `run/`, `ref/`, `assets/`, `twins/`, a hidden
-  folder or one named `robosimstudio*`. A save to any of it rebuilds (the
-  first 500 files are watched), and a rebuild imports it afresh: a helper
-  module goes there, and a scratch script in `run/`. A rebuild re-imports the helper modules beside
-  `scene.py` (a module or a package in its directory) and takes back what the
-  file and its helpers registered (an entity class, a cell, a gripper, a
-  scenery), so an edit to a helper lands with the next save: no new name per
-  save, no restart.
+  folder or one named `robosimstudio*`, and not a module beside `scene.py`
+  named `robosimstudio*.py`, which is taken for the library's. A save to any
+  of it rebuilds (the first 500 files are watched), and a rebuild imports it
+  afresh: a helper module goes there, and a scratch script in `run/`. A
+  rebuild re-imports the helper modules beside `scene.py` (a module or a
+  package in its directory) and takes back what the file and its helpers
+  registered (an entity class, a cell, a gripper, a scenery), so an edit to a
+  helper lands with the next save: no new name per save, no restart.
 - The page works in `scene.py`'s directory: a file the scene or `eval` reads
   or writes by a relative path is beside `scene.py`.
 - A rebuild of a starter scene -- one YAM here, two on a bench in a twin's
@@ -47,11 +48,14 @@ is that folder's. `twins/` is not committed.
   first frame) compiles the renderer's shaders and can take minutes; later
   ones take seconds.
 - A command the page is too busy to start before `ctl` stops waiting for
-  its reply (30 s for most; `reload` 5.5 minutes, `catalog` 2, `snapshot`,
-  `compare`, `check` and `ref` 10, `play` and `eval` 15) is not run, and the
-  reply says so: `./ctl status --wait`, then send it again. One the page
-  started runs to its end; if that is after `ctl` stopped waiting, `ctl` says
-  it timed out and what the page is busy with.
+  its reply (30 s for most; `reload`, `quit`, `reset`, `pause` and `resume`
+  5.5 minutes, `catalog` 2, `snapshot`, `compare`, `check` and `ref` 10,
+  `play` and `eval` 15) is not run, and the reply says so and what to do:
+  after a build or a render, `./ctl status --wait`, then send it again; after
+  one of a routine's steps, send it again, and it goes in between two steps
+  (`status --wait` does not wait out a routine). One the page started runs
+  to its end; if that is after `ctl` stopped waiting, `ctl` says it timed out
+  and what the page is busy with.
 - The page listens on all interfaces (`0.0.0.0`, viser's default), so on a
   shared network firewall its port or use an SSH tunnel.
 
@@ -77,15 +81,29 @@ scene.add(rss.robot("yam_bimanual"))  # a scene needs something that moves befor
   stay, and its `rss.view` and `rss.draw` calls are harmless (one that drives
   the viewer `rss.viewer` returns is not).
 - Poses are in the work-surface frame. See [Frames and units](#frames-and-units).
-- The light, and what fills the frame past the room, are
-  `rss.Scene(..., render=RenderSpec(...))`, with
-  `from robosimstudio.core.render import RenderSpec`: `light_direction` (the
-  way the key light travels, world frame), `key_intensity`, `fill_lights`
-  (`(direction, intensity)` pairs), `ambient` (RGB), `shadows`, `environment`
-  (the path tracer's preset: `default`, `studio`, `lab`, `none`),
-  `environment_map` (an HDR panorama for the path tracer) and `background`
-  (RGB where nothing is hit). A field left unset keeps the house look. The
-  numbers do not carry across renderers: judge a change on the pair.
+- The light is `rss.Scene(..., render=...)`; left out, it is the house room.
+  To light a twin, start from the lab room and change what the path tracer
+  reads -- it draws every `snapshot`, `compare` and take:
+
+  ```python
+  from dataclasses import replace
+  from robosimstudio.core.render.room import LAB
+
+  scene = rss.Scene(..., render=replace(LAB, key_intensity=1.6, ambient=(1.2, 1.2, 1.2), scenery=""))
+  ```
+
+  Under `LAB` (`environment="lab"`) the light is one soft panel overhead and a
+  neutral dome: `key_intensity` scales the panel and `ambient` the dome, by
+  its mean (the dome stays neutral). `scenery` is what stands past the bench
+  (`"lab"`, this lab's slats and glazing; `""` for nothing), and `quality` is
+  `"preview"` (6 passes a frame) or `"final"` (12, less flicker in a take).
+  The path tracer does not read `light_direction`, `fill_lights`, `shadows`
+  or `background`, and draws nothing from `environment_map`: a window or a
+  backdrop the clip shows is a thing in the scene (a pane, a photo on a
+  slab), and a direction, a warmth or a shadow it cannot make goes in the
+  report. A `RenderSpec` given whole keeps none of the room -- each field it
+  leaves out is the renderer's own default -- hence `replace(LAB, ...)`. The
+  page draws its own way: judge the light on the pair.
 - Bind `routine` (a callable taking the built `sim`, and the page's `session`
   if it declares one, returning a generator), or `routines`, a dict of name to
   such callables, and the page grows a **Run** button per routine with a
@@ -116,7 +134,7 @@ scene.add(rss.robot("yam_bimanual"))  # a scene needs something that moves befor
 | `eval "CODE"` or `eval -` (stdin) `[--record NAME --every K --camera N] [--wait [--wait-limit S]]` | Run Python on the sim thread in `scene.py`'s namespace (`sim`, `scene`, `session`, `np`, `rss`, `live` -- the page's own `LiveServer` --, `server` -- its viser server --, and every name the file bound). What it binds, routines and `play` see until the next save starts the namespace over. Its value is its last line's, when that line is an expression; a generator plays on the page step by step; `--record` films it; `--wait` waits for it as `play --wait` does. |
 | `catalog [robots\|grippers\|cells\|assets]` | The names the registries know. |
 | `ref show PATH`, `ref hide` | A picture in the page's sidebar. |
-| `quit` | Stop the server. Like any command, on a page busy past `ctl`'s wait it is not run and says so: `./ctl status --wait`, then `quit`. |
+| `quit` | Stop the server, once a build, a render or a routine's step under way ends (it waits 5.5 minutes for that; past them it is not run, and says so). |
 
 `--json` after any command prints the reply raw.
 
@@ -159,9 +177,7 @@ studio's own Run buttons, which pause with the page and step every routine):
   live: a pass whose `next()` only yielded is stepped by the page, one that
   stepped the scene itself (`sim.run(30)` to settle) is not, so `reach`, settle,
   `reach` again works. `reach` raises when the hand does not get within its
-  `tolerance`; for a hand that contact will stop -- fingers closing on a lid,
-  a press, a pull -- `short = yield from reach(..., arrive=False)` ends where
-  the hand comes to rest and returns how far short it is [m];
+  `tolerance` (6 mm) in `settle` seconds;
 - any other routine drives the scene itself (`sim.run(1)` between yields): the
   page never steps it, and the arm panels are suspended while it plays, so
   they do not write the joints and the gripper under it.
