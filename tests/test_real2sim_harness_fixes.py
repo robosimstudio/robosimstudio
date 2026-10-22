@@ -205,7 +205,16 @@ class SceneCode(unittest.TestCase):
         from robosimstudio_real2sim_agent.scenefile import ScenePaths
 
         root = Path(tempfile.mkdtemp()).resolve()
-        for rel in ("scene.py", "rig.py", "parts/hinge/latch.py", "parts/a/b/deep.py", "assets/gen.py", "run/p.py"):
+        for rel in (
+            "scene.py",
+            "rig.py",
+            "robosimstudio_tools.py",
+            "parts/robosimstudio_x.py",
+            "parts/hinge/latch.py",
+            "parts/a/b/deep.py",
+            "assets/gen.py",
+            "run/p.py",
+        ):
             (root / rel).parent.mkdir(parents=True, exist_ok=True)
             (root / rel).write_text("")
         paths = ScenePaths(root)
@@ -213,7 +222,8 @@ class SceneCode(unittest.TestCase):
         watched = set(helper_files(root / "scene.py"))
         for file in sorted(root.rglob("*.py")):
             if file.name != "scene.py":
-                self.assertEqual(paths.is_scene(str(file), file.stem), file in watched, file.relative_to(root))
+                module = ".".join(file.relative_to(root).with_suffix("").parts)  # as `import` names it
+                self.assertEqual(paths.is_scene(str(file), module), file in watched, module)
 
     def test_a_watcher_is_unwatched_by_identity(self) -> None:
         from robosimstudio_real2sim_agent.scenefile import SceneRegistrations
@@ -732,7 +742,7 @@ class RoutineStepping(unittest.TestCase):
     def test_a_recording_under_an_old_take_name_does_not_count_as_written(self) -> None:
         live = _server()
         live.takes_written = ["take1", "take0"]
-        fake = types.SimpleNamespace(start=lambda: None, close=lambda: None, name="take1")
+        fake = types.SimpleNamespace(start=lambda: None, probe=lambda: None, close=lambda: None, name="take1")
         with mock.patch.object(server_mod.checks, "Recorder", lambda *a, **k: fake):
             live.start_script(iter(range(3)), name="again", record="take1")
         self.assertEqual(live.takes_written, ["take0"])
@@ -805,7 +815,7 @@ class RoutineStepping(unittest.TestCase):
 
         live.start_script(stubborn(), name="old")
         live._play()
-        fake = types.SimpleNamespace(start=lambda: None, close=lambda: None)
+        fake = types.SimpleNamespace(start=lambda: None, probe=lambda: None, close=lambda: None)
         with mock.patch.object(server_mod.checks, "Recorder", lambda *a, **k: fake):
             live.start_script(iter(range(3)), name="new", record="take2")  # ends the old one first
         self.assertIn("cleanup failed", live.last_error)
@@ -910,11 +920,15 @@ class BusyStatus(unittest.TestCase):
             ".hidden/x.py",
             "robosimstudio_materials/cloth.py",
             "notes.txt",
+            "robosimstudio_tools.py",
+            "parts/robosimstudio_x.py",
         ):
             (folder / rel).parent.mkdir(parents=True, exist_ok=True)
             (folder / rel).write_text("")
         watched = sorted(str(p.relative_to(folder)) for p in helper_files(live.path))
-        self.assertEqual(watched, ["lidlib.py", "parts/__init__.py", "parts/hinge/latch.py"])
+        self.assertEqual(
+            watched, ["lidlib.py", "parts/__init__.py", "parts/hinge/latch.py", "parts/robosimstudio_x.py"]
+        )
 
     def test_no_save_is_pending_on_a_page_that_does_not_watch(self) -> None:
         live = self._busy_server()
@@ -1308,6 +1322,18 @@ class TwinInsideAScene(unittest.TestCase):
         self.assertFalse((outer / "b").exists())
         with mock.patch("builtins.print"):
             self.assertEqual(ctl.main(["--run-dir", str(live / "run"), "new", "c"]), 0, "twins/ is no scene's code")
+
+
+class TwinInsideAServedFolder(unittest.TestCase):
+    def test_a_folder_a_page_served_from_is_a_scene_whatever_its_file_is_called(self) -> None:
+        live = Path(tempfile.mkdtemp())
+        (live / "ctl").write_text("")
+        served = live / "bench"
+        (served / "run").mkdir(parents=True)
+        (served / "run" / "serve.log").write_text("")
+        with mock.patch("builtins.print"):
+            code = ctl.main(["--run-dir", str(live / "run"), "new", "t", "--dir", str(served / "t")])
+        self.assertEqual(code, 1)
 
 
 class TwinFolder(unittest.TestCase):

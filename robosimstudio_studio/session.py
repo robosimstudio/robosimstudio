@@ -546,11 +546,10 @@ class StudioSession:
         except BaseException:
             # A page that cannot show its first scene is not served: what it made goes -- its panels and writers, and
             # its viewer, the port and a share tunnel -- so whoever opens another page gets that port.
-            for close in (self.teardown, self.viewer.close):
-                try:
-                    close()
-                except Exception:
-                    pass
+            try:
+                self.close()
+            except Exception:
+                pass
             raise
 
     def _open(self, task, episode: int) -> None:
@@ -2141,8 +2140,10 @@ class StudioSession:
             self.viewer.end_frame()
 
     def close(self) -> None:
-        self.teardown()
         try:
-            self.viewer.close()
-        except Exception:
-            pass
+            self.teardown()
+        finally:
+            try:
+                self.viewer.close()  # whatever the teardown did: the port and a share tunnel are let go
+            except Exception:
+                pass

@@ -5,13 +5,13 @@ When the file has run, ``scene`` is an ``rss.Scene``. That is all. The server
 builds it with ``scene.build(control_mode="joint_position")`` -- or takes the
 ``sim`` the file bound, if it bound one -- and a ``BUILD = {...}`` dict is
 passed to ``build`` as keyword arguments. ``rss.view``, ``rss.draw`` and
-``rss.viewer`` are no-ops that return None while the file runs, so the body
-of an example's ``main()``, pasted at module level, works with its
-``rss.view`` or ``rss.draw`` calls left in (one that drives the viewer
-``rss.viewer`` returns does not: ``viewer.scene`` is an attribute of None): the
-page is this process's, and a file that opened a second one would block on
-viser's tunnel. The file runs as ``scene``, not ``__main__``, so a
-``__main__`` guard does not fire, and an example's ``main()`` is not called.
+``rss.viewer`` are no-ops that return None while the file runs, so an example
+whose ``main()`` body is moved to module level works with its ``rss.view`` or
+``rss.draw`` calls left in (one that drives the viewer ``rss.viewer`` returns
+does not: ``viewer.scene`` is an attribute of None): the page is this
+process's, and a file that opened a second one would block on viser's tunnel.
+The file runs as ``scene``, not ``__main__``, so a ``__main__`` guard does not
+fire, and an example's ``main()`` is not called.
 
 Why the doors can be swapped with ``setattr``: ``robosimstudio/__init__.py``
 resolves its flat names through a :pep:`562` ``__getattr__`` that caches into
@@ -34,7 +34,9 @@ a helper beside it makes, and takes them back before the next run.
 
 from __future__ import annotations
 
+import importlib.util
 import os
+import py_compile
 import sys
 import sysconfig
 import time
@@ -42,6 +44,8 @@ from collections.abc import Callable
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any
+
+CHECKED_HASH = py_compile.PycInvalidationMode.CHECKED_HASH
 
 __all__ = [
     "DOORS",
@@ -53,6 +57,7 @@ __all__ = [
     "SceneRegistrations",
     "fallback_loaded",
     "fallback_scene",
+    "hash_checked",
     "helper_files",
     "run_scene_file",
     "stamp",
@@ -154,12 +159,38 @@ def helper_files(path: Path | str) -> list[Path]:
                 if entry.is_dir(follow_symlinks=False):
                     if scene_folder(name):
                         below.append(Path(entry.path))
-                elif name.endswith(".py") and not name.startswith(".") and Path(entry.path) != path:
+                elif (
+                    name.endswith(".py")
+                    and not name.startswith(".")
+                    # beside the scene file, a module named so is the library's (ScenePaths: its top-level name)
+                    and not (folder == path.parent and name.startswith("robosimstudio"))
+                    and Path(entry.path) != path
+                ):
                     found.append(Path(entry.path))
                     if len(found) >= WATCH_LIMIT:
                         return found
         level = below
     return found
+
+
+def hash_checked(path: Path | str) -> None:
+    """Make a module's cached bytecode hash-checked, once: the import then checks it against the source's text, not
+    its whole-second mtime and size, and writes it so again when it does not match. A file that will not compile, or
+    a cache that cannot be written, is left to the import."""
+    path = str(path)
+    try:
+        cached = importlib.util.cache_from_source(path)
+        with open(cached, "rb") as f:
+            head = f.read(8)
+        if len(head) == 8 and int.from_bytes(head[4:8], "little") & 0b11 == 0b11:
+            return  # hash-based, and checked
+    except (OSError, ValueError):
+        pass
+    try:
+        if py_compile.compile(path, doraise=False, quiet=2, invalidation_mode=CHECKED_HASH) is None:
+            Path(importlib.util.cache_from_source(path)).unlink(missing_ok=True)  # will not compile: no old code stays
+    except (OSError, ValueError):
+        pass
 
 
 def fallback_scene():

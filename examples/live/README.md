@@ -52,7 +52,7 @@ GPU box, pick an idle card with `ROBOSIMSTUDIO_DEVICE=cuda:N ./ctl up` (or
 `BUILD = {"device": "cuda:N"}` in `scene.py`), and use `--share` or an SSH tunnel
 (`ssh -L 8080:localhost:8080 <box>`). The page listens on all interfaces
 (viser's default), so on a shared network firewall the port or use the tunnel.
-`./ctl quit` stops the server.
+`./ctl quit` stops the server (on a page busy past its wait, after `./ctl status --wait`).
 
 The method is in `AGENTS.md`, so the prompt only has to say what to build; one
 line naming the clip or the photo is enough. The prompts below say more, for

@@ -110,7 +110,7 @@ class EvictHelpers(unittest.TestCase):
             module.__file__ = str(helper)
             with mock.patch.dict(sys.modules, {"fix_r4_lidlib": module}):
                 _bare_server(root).evict_helpers()
-            self.assertFalse(cached.exists())
+            self.assertTrue(_hash_checked(cached), "checked against the text at import, not the mtime")
 
     def test_a_build_that_fails_keeps_the_helpers_the_scene_up_was_built_from(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
@@ -146,7 +146,7 @@ class EvictHelpers(unittest.TestCase):
             cached.write_bytes(b"compiled from the text before a same-second save")
             os.utime(cached, ns=(helper.stat().st_mtime_ns + 10**8,) * 2)  # written after, read before
             _bare_server(root).evict_helpers()
-            self.assertFalse(cached.exists(), "nothing on disk says which text it was compiled from")
+            self.assertTrue(_hash_checked(cached), "nothing in a timestamp says which text it was compiled from")
 
     def test_a_helper_whose_import_failed_is_read_from_its_source_too(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
@@ -159,7 +159,12 @@ class EvictHelpers(unittest.TestCase):
             cached.write_bytes(b"compiled before it raised")  # and no module left in sys.modules to evict
             os.utime(cached, ns=(helper.stat().st_mtime_ns - 10**8,) * 2)
             _bare_server(root).evict_helpers()
-            self.assertFalse(cached.exists())
+            self.assertTrue(_hash_checked(cached), "checked against the text at import, not the mtime")
+
+
+def _hash_checked(cached: Path) -> bool:
+    head = cached.read_bytes()[:8]
+    return int.from_bytes(head[4:8], "little") & 0b11 == 0b11
 
 
 class FakeRecorder:
@@ -176,6 +181,10 @@ class FakeRecorder:
 
     def start(self) -> None:
         self.capture()
+
+    def probe(self) -> None:
+        if self.name == "dark":
+            raise RuntimeError("the path tracer failed")
 
     def maybe(self) -> None:
         if self.fail:
@@ -204,6 +213,16 @@ class ScriptQueue(unittest.TestCase):
         self.assertEqual(self.finished, ["another recording started", "another recording started"])
         self.live._play()
         self.assertEqual(next(new), 1)  # the new routine stepped, not the old one
+
+    def test_a_recording_whose_first_frame_fails_leaves_what_plays_and_its_take(self) -> None:
+        playing = iter(range(5))
+        self.live.start_script(playing, record="t1")
+        filming = self.live.recorder
+        self.finished.clear()
+        with self.assertRaises(RuntimeError):
+            self.live.start_script((s for s in range(3)), record="dark")
+        self.assertEqual((self.live.script, self.finished), ([playing], []))
+        self.assertIs(self.live.recorder, filming)
 
     def test_a_recording_that_cannot_start_leaves_what_plays_and_its_take(self) -> None:
         playing, new = iter(range(5)), (step for step in range(3))

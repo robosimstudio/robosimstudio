@@ -409,6 +409,21 @@ class Recorder:
         self.bodies = take_bodies(self.sim)
         self.last_capture = -1
 
+    def _look(self) -> tuple[np.ndarray, np.ndarray, Any]:
+        """The scene as the take films it now: the picture, the named ids, and the particles read for both."""
+        sim = self.sim
+        sim.sync()
+        frame = self.renderer.render(sim.state)[self.cam.name]
+        rgb = stills.render_still(sim, self.cam)
+        q = _particles(sim) if self.deformable_labels else None  # once a frame, for the ids and the samples both
+        seg = name_deformables(sim, self.cam, np.asarray(frame["seg"]).astype(np.int32), self.deformable_labels, q)
+        return rgb, seg, q
+
+    def probe(self) -> None:
+        """Film one frame and keep nothing: a camera, a renderer or an id lookup that fails, fails here, before
+        anything the take would replace is touched."""
+        self._look()
+
     def start(self) -> None:
         """Take the scene as it stands as the take's beginning: its step count from here, and frame 0."""
         self._raw, self._mark, self.steps = int(self.sim.step_count), reset_mark(self.sim), 0
@@ -436,11 +451,7 @@ class Recorder:
     def capture(self) -> None:
         sim = self.sim
         self._advance()
-        sim.sync()
-        frame = self.renderer.render(sim.state)[self.cam.name]
-        rgb = stills.render_still(sim, self.cam)
-        q = _particles(sim) if self.deformable_labels else None  # once a frame, for the ids and the samples both
-        seg = name_deformables(sim, self.cam, np.asarray(frame["seg"]).astype(np.int32), self.deformable_labels, q)
+        rgb, seg, q = self._look()
         self.writer.append(rgb)
         self.segs.append(seg[::SEG_SCALE, ::SEG_SCALE].astype(np.uint8 if len(self.names) < 255 else np.int32))
         try:
@@ -895,7 +906,8 @@ def gate(
         point_body = draws_points(handles.get(name)) if handles.get(name) is not None else False
         drift[name] = 1000.0 * float(np.percentile(moved, 95) if point_body else moved.max())
     unmeasured = [n for n in looked_at if n in have and n not in drift]
-    worst = max(drift.items(), key=lambda kv: kv[1]) if drift else ("", 0.0)
+    # a drift that is not a number is the worst there is: a thing that blew up did not stay put
+    worst = max(drift.items(), key=lambda kv: kv[1] if np.isfinite(kv[1]) else np.inf) if drift else ("", 0.0)
     add(
         "rest",
         worst[1] <= settle_mm,

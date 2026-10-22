@@ -25,9 +25,9 @@ every ``.py`` under its folder that is the scene's own code, two folders down
 (:func:`.scenefile.helper_files`) -- every :data:`SCAN_SECONDS`, taken
 before each build, and waiting for them to hold still for
 :data:`STABLE_SECONDS`, because editors write in two steps and the compile
-step catches whatever slips through. The helpers' cached bytecode is dropped
-before each build, so an edit within the second of the last one is read from
-the source.
+step catches whatever slips through. The helpers' cached bytecode is
+hash-checked, so an edit within the second of the last one is read from the
+source.
 
 The loop is the studio's own ``tick``, driven here rather than by
 ``StudioSession.run`` because ``run`` closes the page when it returns and
@@ -96,6 +96,7 @@ from .scenefile import (
     ScenePaths,
     SceneRegistrations,
     fallback_loaded,
+    hash_checked,
     helper_files,
     run_scene_file,
     stamp,
@@ -169,7 +170,8 @@ class LiveServer:
         self.url = f"http://localhost:{config.port}"
         """The page, on the port viser actually bound -- rewritten once the server is up."""
         self.share_url: str | None = None
-        # As long as the client's longest wait (ctl.TIMEOUTS): a reply the bus gave up on is lost to the client.
+        # A command waits on the main thread as long as its client said it would (`_on_request`); this is the
+        # wait for one that said nothing, and for a full `status`.
         self.bus = SimBus(timeout=900.0)
         self.socket = ControlSocket(self.sock_path, self._on_request)
         self.session: LiveSession | None = None
@@ -296,26 +298,21 @@ class LiveServer:
         loaded then -- the library, even when the file sits at the repository
         root -- is never touched), and only those whose file is under the scene
         file's directory: a helper beside ``scene.py``, or a package of them.
-        The helpers' cached bytecode goes too. Returns the modules forgotten,
-        by name, for a build that fails to put back.
+        The helpers' cached bytecode is made hash-checked. Returns the modules
+        forgotten, by name, for a build that fails to put back.
         """
         gone = self._scene_modules()
         files = set(helper_files(self.path) if files is None else files)
         for name, module in gone.items():
             del sys.modules[name]
             files.add(Path(module.__file__))
-        # Bytecode is trusted on the source's whole-second mtime and size, and nothing on disk says which text it
-        # was compiled from: an edit within the second of the one it was compiled from, to the same length, would
-        # import the old code. So every helper's goes, imported or not (one whose import failed after it compiled
-        # left its bytecode too); compiling a twin's few helpers again costs milliseconds. A file that will not go
-        # is left.
+        # Default bytecode is trusted on the source's whole-second mtime and size: an edit within the second of the
+        # one it was compiled from, to the same length, would import the old code. A helper's is made hash-checked
+        # instead -- the import checks it against the text, and rewrites it so when it does not match -- once per
+        # file, imported or not.
         for file in files:
-            if file.suffix != ".py":
-                continue
-            try:
-                Path(importlib.util.cache_from_source(str(file))).unlink(missing_ok=True)
-            except (OSError, ValueError):
-                pass
+            if file.suffix == ".py":
+                hash_checked(file)
         if gone:
             importlib.invalidate_caches()
         return gone
@@ -532,23 +529,27 @@ class LiveServer:
         if self.last_error not in (self.build_error, self._tick_error):
             self.last_error = self.build_error or self._tick_error
         if record:
-            # made first: a camera that is not there or a first frame that fails leaves what plays, and its take, be
+            # Made and tried first: a camera that is not there, or a frame that will not film, fails before what
+            # plays, and its take, are touched.
+            recorder = None
             try:
-                # made first: a camera that is not there fails here, and leaves what plays, and its take, be
                 recorder = checks.Recorder(self, record, camera=camera, every=every)
+                recorder.probe()
             except Exception:
-                getattr(gen, "close", lambda: None)()  # it will never play
+                if recorder is not None:
+                    recorder.close()
+                self._close(gen)  # it will never play
                 raise
-            # the new take films the new routine alone: what was queued ahead of it is dropped, not filmed into it;
-            # the take filming that goes first, its last frame the scene as they left it, before their cleanup runs;
-            # and the new one starts after that cleanup, from the scene the new routine starts from
+            # The new take films the new routine alone: what was queued ahead of it is dropped, not filmed into it.
+            # The take filming that is written first, its last frame the scene as they left it; then their cleanup
+            # runs; then the new take starts, from the scene the new routine starts from.
             self._finish_recorder("another recording started")
             self._end_scripts("dropped: another recording started")
             try:
-                recorder.start()  # its step count from here, and frame 0: the state before anything happened
+                recorder.start()  # its step count from here, and frame 0 (a frame like the one just filmed)
             except Exception:
                 recorder.close()
-                getattr(gen, "close", lambda: None)()
+                self._close(gen)
                 raise
             self.recorder = recorder
             self.last_take = {}  # filming now: until this one is written, no take is the last one
@@ -928,11 +929,16 @@ class LiveServer:
             print(
                 f"[live] {self.path.name} built but would not go into the page:\n{error}", file=sys.stderr, flush=True
             )
-            failed, loaded = loaded.sim, fallback_loaded()
+            # what the failed scene holds goes before the stand-in is built: its renderers (the page's teardown
+            # has closed what it opened over it), and, once nothing names it, its model and state
+            failed, loaded = loaded, None
             try:
-                failed.close()  # its arrays off the card before the stand-in's go on
+                failed.sim.close()
             except Exception:
                 pass
+            del failed
+            gc.collect()
+            loaded = fallback_loaded()
             self.ns, self.scene, self.sim = loaded.ns, loaded.scene, loaded.sim
             self.session = LiveSession(loaded.sim, config=self.config, host=self)
         self.serving = "stand-in" if error else "scene"

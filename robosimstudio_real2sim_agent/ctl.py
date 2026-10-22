@@ -23,8 +23,9 @@ pins it beside the scene file.
 ``up`` starts ``python -m robosimstudio_real2sim_agent.serve`` detached, in a
 session of its own (an agent's shell may exit at once), logging to
 ``<run-dir>/serve.log``, and prints the URL once the ready line appears;
-``quit`` stops it. If a cold first build outlasts the wait, the server keeps
-running and the log is named.
+``quit`` stops it (once the page is free to take it, as any command). If a
+cold first build outlasts the wait, the server keeps running and the log is
+named.
 
 A command that outlasts its timeout does not leave the agent guessing: the
 page answers ``status`` at once even while it is busy, so the timeout says
@@ -766,7 +767,8 @@ def cmd_up(args: argparse.Namespace, sock: Path) -> int:
             return 2
     except NoReply:
         print(
-            f"ctl: a server at {sock} is not answering; `quit` it, or start another page with its own --run-dir and --scene",
+            f"ctl: a server at {sock} is not answering even its status; stop that process (its pid is the first "
+            "word of serve.log.path in the run directory), or start another page with its own --run-dir and --scene",
             file=sys.stderr,
         )
         return 1
@@ -897,10 +899,12 @@ def cmd_new(args: argparse.Namespace) -> int:
 
     folder = Path(args.dir).resolve() if args.dir else live / "twins" / args.name
     for above in folder.parents[:WATCH_DEPTH]:
-        # inside another scene's own code, its page would watch, re-import and hash this twin as its own
-        if (above / "scene.py").is_file() and all(scene_folder(p) for p in folder.relative_to(above).parts):
+        # inside another scene's own code, its page would watch, re-import and hash this twin as its own: a folder
+        # with a scene.py, or one a page has served from (its run/), whatever its scene file is called
+        served = (above / "scene.py").is_file() or (above / "run" / "serve.log").is_file()
+        if served and all(scene_folder(p) for p in folder.relative_to(above).parts):
             print(
-                f"ctl: {folder} is inside the scene at {above / 'scene.py'}, whose page would take it for its own code; "
+                f"ctl: {folder} is inside the scene in {above}, whose page would take it for its own code; "
                 "make it under twins/ or elsewhere",
                 file=sys.stderr,
             )

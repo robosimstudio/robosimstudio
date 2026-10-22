@@ -17,7 +17,8 @@ is that folder's. `twins/` is not committed.
 - A file that does not build leaves the previous scene up. `./ctl status`
   prints the traceback. One that builds but will not go into the page leaves
   a bare scene (one YAM) standing in: `status` says `serving: stand-in`. If
-  even that will not go in, no scene is in the page (`serving: nothing`):
+  even that will not go in after a rebuild, no scene is in the page
+  (`serving: nothing`; at start-up the server exits instead, and `up` says so):
   `snapshot`, `compare`, `check`, `eval`, `play`, `run` and `reset` are
   refused until a save goes in, or `./ctl quit` and `./ctl up`. Until a save
   goes in, the replies of those that act on the scene carry `stale`, saying
@@ -71,9 +72,10 @@ scene.add(rss.robot("yam_bimanual"))  # a scene needs something that moves befor
 - `rss.view`, `rss.draw` and `rss.viewer` do nothing and return None while the
   file runs. An example builds its scene inside `main()`, which the page does
   not call (the file runs as `scene`, so a `__main__` guard does not fire):
-  paste the body of its `main()` into `scene.py` at module level, and its
-  `rss.view` and `rss.draw` calls are harmless; one that drives the viewer
-  `rss.viewer` returns is not.
+  copy the whole file into `scene.py`, move the body of its `main()` to
+  module level and drop the guard; its imports and helpers above `main()`
+  stay, and its `rss.view` and `rss.draw` calls are harmless (one that drives
+  the viewer `rss.viewer` returns is not).
 - Poses are in the work-surface frame. See [Frames and units](#frames-and-units).
 - Bind `routine` (a callable taking the built `sim`, and the page's `session`
   if it declares one, returning a generator), or `routines`, a dict of name to
@@ -87,7 +89,7 @@ scene.add(rss.robot("yam_bimanual"))  # a scene needs something that moves befor
 
 | Command | Does |
 | --- | --- |
-| `new NAME [--ref FILE ...] [--dir D]` | Make a twin's folder, `twins/NAME/` beside the run directory (or `D`): a starter `scene.py`, the files copied into `ref/`, `REPORT.md` with its four headings, and the folder's own `ctl`. Needs no page. |
+| `new NAME [--ref FILE ...] [--dir D]` | Make a twin's folder, `twins/NAME/` beside the run directory (or `D`): a starter `scene.py`, the files copied into `ref/`, `REPORT.md` with its four headings, and the folder's own `ctl`. Needs no page. Refused from a twin's own folder, and for a `D` inside another scene's own code (where that page would take the twin for its helpers). |
 | `up [--port N] [--scene F] [--share]` | Start a server on the file (default: the `scene.py` beside the run directory), wait for the page, and print its URL (the next free port if N is busy). With a page already up, names it; refuses if that page is on another scene file or lacks a requested `--share`. |
 | `status [--wait [--wait-limit S]]` | What is loaded, the names in it and where they are, the last error, the page's address, how the last routine ended (`last_script`), and `speed`: simulated seconds per wall second. While the page is building or rendering it answers at once with `busy` and for how long; during a routine's step, within 5 s. `--wait` returns once the page is not building or rendering and every save is built (a routine may still be playing: `play --wait` waits on one), giving up after `--wait-limit` seconds (3600). |
 | `reload` | Rebuild now. Saving the file does this too. |
@@ -105,7 +107,7 @@ scene.add(rss.robot("yam_bimanual"))  # a scene needs something that moves befor
 | `eval "CODE"` or `eval -` (stdin) `[--record NAME --every K --camera N] [--wait [--wait-limit S]]` | Run Python on the sim thread in `scene.py`'s namespace (`sim`, `scene`, `session`, `np`, `rss`, `live` -- the page's own `LiveServer` --, `server` -- its viser server --, and every name the file bound). What it binds, routines and `play` see until the next save starts the namespace over. Its value is its last line's, when that line is an expression; a generator plays on the page step by step; `--record` films it; `--wait` waits for it as `play --wait` does. |
 | `catalog [robots\|grippers\|cells\|assets]` | The names the registries know. |
 | `ref show PATH`, `ref hide` | A picture in the page's sidebar. |
-| `quit` | Stop the server. |
+| `quit` | Stop the server. Like any command, on a page busy past `ctl`'s wait it is not run and says so: `./ctl status --wait`, then `quit`. |
 
 `--json` after any command prints the reply raw.
 
