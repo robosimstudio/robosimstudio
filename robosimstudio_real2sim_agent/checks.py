@@ -59,16 +59,17 @@ TAKE_STILL_MM = 2.0
 
 
 # ------------------------------------------------------------------ the log
-def scene_hash(path: str | Path) -> str:
+def scene_hash(path: str | Path, files: list[Path] | None = None) -> str:
     """A hash of the scene file and its helpers, the files a save to which rebuilds
     (:func:`.scenefile.helper_files`): a twin's camera often lives in a helper module. The page takes it as each
-    build reads the files, and the log ties a reading to the scene it measured by it."""
+    build reads the files, and the log ties a reading to the scene it measured by it. ``files`` are the helpers,
+    when the caller has just walked for them."""
     path = Path(path)
     try:
         digest = hashlib.sha1(path.read_bytes())
     except OSError:
         return "missing"
-    for helper in helper_files(path):
+    for helper in helper_files(path) if files is None else files:
         try:
             digest.update(str(helper.relative_to(path.resolve().parent)).encode())
             digest.update(helper.read_bytes())

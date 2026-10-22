@@ -81,5 +81,16 @@ class TestClosingIsNotTimingOut(unittest.TestCase):
             bus.call(lambda: None)
 
 
+class CallWithin(unittest.TestCase):
+    def test_a_call_its_caller_gave_up_on_never_runs(self) -> None:
+        bus, ran = SimBus(timeout=30.0), []
+        bus.owner_thread = -1  # an owner that is not this thread, and is not pumping
+        with self.assertRaises(BusTimeout):
+            bus.call_within(0.1, ran.append, "late")
+        bus.owner_thread = None
+        bus.pump()
+        self.assertEqual(ran, [], "withdrawn when its caller stopped waiting, not run behind its back")
+
+
 if __name__ == "__main__":
     unittest.main()

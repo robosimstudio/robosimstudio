@@ -56,5 +56,6 @@ every save. **Read
 [`examples/live/AGENTS.md`](examples/live/AGENTS.md) whole before the first
 edit**: it is the method -- how to work the page, what a finished twin is
 (the robot moves things only through its fingers' contact), and what the report
-says. Every command, flag, output file and reading is in
-[`examples/live/REFERENCE.md`](examples/live/REFERENCE.md).
+says. Every command, output file and reading is in
+[`examples/live/REFERENCE.md`](examples/live/REFERENCE.md), and
+`./ctl <command> --help` lists every flag.

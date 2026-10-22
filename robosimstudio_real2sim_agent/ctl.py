@@ -105,11 +105,14 @@ VERBOSE = (
     "ended",
     "takes_written",
     "busy_routine",
-    "last_run",
+    "runs_ended",
     "pending_save",
     "server_log",
 )
 """Reply fields printed only under ``--json``: the raw numbers behind a ``report``."""
+NOTES = ("stdout", "value", "stale", "pending")
+"""What a command's own reply says that the wait after it keeps: what ``eval`` printed and returned, and that the
+scene it acted on was not the file's."""
 
 
 class ServerDied(RuntimeError):
@@ -508,23 +511,23 @@ def poll(sock: Path, done: Callable[[dict], Any], doing: Callable[[dict], str], 
 
 
 def wait_for_steps(sock: Path, reply: dict, limit: float) -> dict:
-    """After ``run N``: wait until the page says how that run ended (``last_run``), however slowly it steps.
+    """After ``run N``: wait until the page says how that run ended (``runs_ended``), however slowly it steps.
 
-    The page ends a run -- held -- when its steps are taken (``done``) and
-    when it is paused, cut short by a routine, a rebuild or a reset, or
-    replaced by another run; anything but ``done`` is an error saying which,
-    at what step.
+    The page ends a run when its steps are taken (``done``), and when it is
+    paused, cut short by a routine, a reset, a rebuild or a failing loop
+    pass, or replaced by another run; anything but ``done`` is an error
+    saying which, at what step.
     """
-    serial = reply.get("run")
+    serial = str(reply.get("run"))
     status = poll(
         sock,
-        lambda st: (st.get("last_run") or {}).get("serial") == serial,
+        lambda st: serial in (st.get("runs_ended") or {}),
         lambda st: f"running, step {st.get('step')} of {reply.get('target')}",
         limit,
     )
     if not status.get("ok"):
         return status
-    run = status["last_run"]
+    run = status["runs_ended"][serial]
     out = {"ok": run["how"] == "done", "step": run["step"], "time": status.get("time"), "finite": run.get("finite")}
     if run["how"] != "done":
         out["error"] = f"the run ended at step {run['step']} of {run['target']}: {run['how']}"
@@ -925,6 +928,7 @@ def main(argv=None) -> int:
         args.scene = args.scene or str(Path(os.path.abspath(args.run_dir)).parent / "scene.py")
         return cmd_up(args, sock)
     req, timeout = build_request(args, parser)
+    req["timeout"] = timeout  # the page withdraws a command this client has stopped waiting for
     waiting = getattr(args, "wait", False)
     streams = waiting and args.cmd in ("play", "eval")
     log = server_log(sock, Path(args.run_dir)) if streams else Path()
@@ -936,13 +940,14 @@ def main(argv=None) -> int:
                 reply = request(sock, req, timeout)  # the full status, now that it can be had
         else:
             reply = request(sock, req, timeout)
+        started = reply
         if args.cmd == "run" and reply.get("ok") and not args.no_wait:
             reply = wait_for_steps(sock, reply, args.wait_limit)
         if args.cmd in ("play", "eval") and waiting and reply.get("ok") and reply.get("serial"):
-            started = reply
             reply = wait_for_script(sock, reply, log, offset, args.wait_limit)
-            # what the command itself answered stays: an eval's printed output, the note that the scene is stale
-            reply.update({k: started[k] for k in ("stdout", "value", "stale", "pending") if started.get(k)})
+        if reply is not started:
+            # what the command itself answered stays: an eval's printed output, that the scene was not the file's
+            reply.update({k: started[k] for k in NOTES if started.get(k)})
     except NoServer:
         if args.cmd == "ref" and req.get("op") == "frames":
             # nothing about cutting stills needs the page; the stills go where the page would put them

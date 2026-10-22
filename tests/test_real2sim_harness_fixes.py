@@ -437,6 +437,7 @@ def _server() -> LiveServer:
     live.head_stepped, live._head_ready, live.last_take = False, None, {}
     live.ended, live.takes_written, live.serving = {}, [], "scene"
     live.runs, live.run_target, live.last_run, live.scene_id, live.watch_enabled = 0, 0, {}, "", False
+    live.runs_ended, live._walked = {}, (-1.0, [])
     live._arms_before, live.resets = {}, 0
     live.log_path, live._motions = "", {}
     live.build_error, live._tick_error = "", ""
@@ -504,6 +505,85 @@ class RunEndings(unittest.TestCase):
         live.cmd_run(100)
         live.cmd_run(5)
         self.assertEqual((live.last_run["serial"], live.last_run["how"]), (3, "another run started"))
+
+
+class RunEndingsKept(unittest.TestCase):
+    def test_an_earlier_runs_ending_is_kept_for_its_waiting_client(self) -> None:
+        live = RunEndings._page(self)  # type: ignore[arg-type]
+        live.cmd_run(600)
+        live.cmd_run(5)  # another client's run, ended before the first client polls again
+        live._end_run("done")
+        self.assertEqual(live.runs_ended[1]["how"], "another run started")
+        self.assertEqual(live.runs_ended[2]["how"], "done")
+
+    def test_a_failing_loop_pass_ends_the_run_saying_so(self) -> None:
+        live = RunEndings._page(self)  # type: ignore[arg-type]
+        live.cmd_run(120)
+
+        def tick() -> bool:
+            raise RuntimeError("the drain broke")
+
+        live.bus = types.SimpleNamespace(pump=lambda budget: 0)
+        live.session.tick, live.session.status = tick, ""
+        live._take_clicks = lambda: None  # type: ignore[method-assign]
+        live.refresh_live = lambda force=False: None  # type: ignore[method-assign]
+        live._refreshed = time.perf_counter()
+        with mock.patch("builtins.print"):
+            live.tick_once()
+        self.assertIn("the loop failed: RuntimeError: the drain broke", live.last_run["how"])
+
+    def test_a_run_of_no_steps_is_refused(self) -> None:
+        live = RunEndings._page(self)  # type: ignore[arg-type]
+        self.assertFalse(live.cmd_run(0)["ok"])
+        self.assertEqual(live.runs, 0)
+
+    def test_a_command_the_client_gave_up_on_is_not_run(self) -> None:
+        live = _server()
+
+        def call_within(timeout, fn, request):
+            self.assertLessEqual(timeout, 28.0, "the page gives up just before the client does")
+            raise server_mod.BusTimeout("dispatch was not serviced")
+
+        live.bus = types.SimpleNamespace(call_within=call_within, timeout=900.0)
+        reply = live._on_request({"cmd": "run", "steps": 120, "timeout": 30.0})
+        self.assertFalse(reply["ok"])
+        self.assertIn("`run` was not run", reply["error"])
+
+
+class StartUpStandIn(unittest.TestCase):
+    def test_a_scene_that_builds_but_will_not_go_in_at_start_up_is_stood_in_for(self) -> None:
+        from robosimstudio_studio.session import StudioConfig
+
+        folder = Path(tempfile.mkdtemp())
+        (folder / "scene.py").write_text("")
+        live = LiveServer(
+            scene_path=folder / "scene.py", sock_path=folder / "s.sock", run_dir=folder / "run", config=StudioConfig()
+        )
+        made: list[str] = []
+
+        class Session:
+            def __init__(self, sim, *, config, host) -> None:
+                if sim == "the twin":
+                    raise RuntimeError("adopt failed")
+                made.append(sim)
+                self.server = types.SimpleNamespace(get_port=lambda: 8080)
+
+            def begin_run(self) -> None:
+                pass
+
+        bare = types.SimpleNamespace(ns={}, scene="bare", sim="the bare scene", seconds=0.0)
+        live.load = lambda files=None: types.SimpleNamespace(ns={}, scene="twin", sim="the twin", seconds=1.0)  # type: ignore[method-assign]
+        live.refresh_live = lambda force=False: None  # type: ignore[method-assign]
+        self.addCleanup(registry.unwatch, live.registrations)
+        self.addCleanup(lambda: sys.path.remove(str(folder.resolve())) if str(folder.resolve()) in sys.path else None)
+        with (
+            mock.patch.object(server_mod, "LiveSession", Session),
+            mock.patch.object(server_mod, "fallback_loaded", lambda: bare),
+            mock.patch("builtins.print"),
+        ):
+            live.open_page()
+        self.assertEqual((made, live.serving, live.scene_id), (["the bare scene"], "stand-in", "bare"))
+        self.assertIn("adopt failed", live.last_error)
 
 
 class RoutineStepping(unittest.TestCase):
@@ -760,7 +840,7 @@ class BusyStatus(unittest.TestCase):
         live.session.status = ""
         live.refresh_live = lambda force=False: None  # type: ignore[method-assign]
         live.swap = lambda loaded: True  # type: ignore[method-assign]
-        live.load = lambda: build(helper)  # type: ignore[method-assign]
+        live.load = lambda files=None: build(helper)  # type: ignore[method-assign]
         return live, helper
 
     def test_a_helper_saved_while_the_scene_builds_is_built_next(self) -> None:
@@ -899,7 +979,7 @@ class BusyStatus(unittest.TestCase):
         live.scene_id = "old"
         self.assertTrue(live.reload("saved")["ok"])
         self.assertEqual(live.scene_id, before)
-        live.load = lambda: (_ for _ in ()).throw(SyntaxError("x"))  # type: ignore[method-assign]
+        live.load = lambda files=None: (_ for _ in ()).throw(SyntaxError("x"))  # type: ignore[method-assign]
         live.reload("saved")
         self.assertEqual(live.scene_id, before, "a save that did not build leaves the scene, and its hash, up")
 
@@ -1059,17 +1139,35 @@ class CtlWaits(unittest.TestCase):
         self.assertEqual(ctl.wait_until_free(self.sock, 30.0), {"ok": True, "busy": ""})
 
     def test_a_run_is_waited_for_through_a_busy_page_until_its_ending(self) -> None:
-        busy = {"ok": True, "busy": "rebuilding the scene file", "step": 90, "last_run": {}}
+        busy = {"ok": True, "busy": "rebuilding the scene file", "step": 90, "runs_ended": {}}
         ended = {"serial": 3, "how": "done", "step": 160, "target": 160, "finite": True}
         fake = _FakeStatus(
-            self.sock, [busy, busy, {"ok": True, "busy": "", "step": 160, "time": 2.7, "last_run": ended}]
+            self.sock, [busy, busy, {"ok": True, "busy": "", "step": 160, "time": 2.7, "runs_ended": {"3": ended}}]
         )
         self.addCleanup(fake.close)
         reply = ctl.wait_for_steps(self.sock, {"run": 3, "step": 40, "target": 160}, 60.0)
         self.assertEqual((reply["ok"], reply["step"], reply["finite"]), (True, 160, True))
 
+    def test_a_run_keeps_the_notes_its_own_reply_carried(self) -> None:
+        ended = {"serial": 1, "how": "done", "step": 5, "target": 5, "finite": True}
+
+        def answer(request: dict) -> dict:
+            if request["cmd"] == "run":
+                return {"ok": True, "run": 1, "step": 0, "target": 5, "stale": "the last save did not build"}
+            return {"ok": True, "busy": "", "step": 5, "time": 0.1, "runs_ended": {"1": ended}}
+
+        sock = self.tmp / "run.sock"
+        server = wire.ControlSocket(sock, answer)
+        server.start()
+        self.addCleanup(server.close)
+        printed: list[str] = []
+        with mock.patch("builtins.print", lambda *a, **k: printed.append(" ".join(map(str, a)))):
+            code = ctl.main(["--run-dir", str(self.tmp / "run"), "--sock", str(sock), "--json", "run", "5"])
+        self.assertEqual(code, 0)
+        self.assertEqual(json.loads(printed[-1])["stale"], "the last save did not build")
+
     def test_a_long_run_says_where_it_is_and_gives_up_at_its_limit(self) -> None:
-        fake = _FakeStatus(self.sock, [{"ok": True, "busy": "", "step": 45, "last_run": {}}])
+        fake = _FakeStatus(self.sock, [{"ok": True, "busy": "", "step": 45, "runs_ended": {}}])
         self.addCleanup(fake.close)
         said: list[str] = []
         clock = iter(range(0, 10_000, 4))

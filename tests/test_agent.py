@@ -461,13 +461,13 @@ class TestTheRunWait(unittest.TestCase):
 
     def setUp(self) -> None:
         self.path = Path(tempfile.mkdtemp(prefix="run-")) / "ctl.sock"
-        self.page = _FakePage(self.path, {"step": 0, "time": 0.0, "last_run": {}})
+        self.page = _FakePage(self.path, {"step": 0, "time": 0.0, "runs_ended": {}})
         self.addCleanup(self.page.close)
         self.run = {"ok": True, "run": 2, "step": 40, "target": 1040}
 
     def _ended(self, how: str, step: int, finite=None) -> None:
         self.page.status.update(
-            step=step, last_run={"serial": 2, "how": how, "step": step, "target": 1040, "finite": finite}
+            step=step, runs_ended={"2": {"serial": 2, "how": how, "step": step, "target": 1040, "finite": finite}}
         )
 
     def test_a_rebuild_under_the_run_ends_it(self) -> None:
@@ -490,7 +490,7 @@ class TestTheRunWait(unittest.TestCase):
         self.assertEqual(reply, {"ok": True, "step": 1040, "time": 0.0, "finite": True})
 
     def test_an_earlier_runs_ending_is_not_this_ones(self) -> None:
-        self.page.status.update(step=41, last_run={"serial": 1, "how": "done", "step": 40, "target": 40})
+        self.page.status.update(step=41, runs_ended={"1": {"serial": 1, "how": "done", "step": 40, "target": 40}})
         reply = ctl.wait_for_steps(self.path, self.run, 1.0)
         self.assertFalse(reply["ok"])
         self.assertIn("still running, step 41 of 1040", reply["error"])

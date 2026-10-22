@@ -91,6 +91,7 @@ class _Session:
 def _running(budget: int) -> LiveServer:
     host = LiveServer.__new__(LiveServer)
     host.script, host.run_budget, host.runs, host.run_target, host.last_run = [], budget, 1, 100, {}
+    host.runs_ended = {}
     host.session = _Session()
     host.sim = types.SimpleNamespace(step_count=50, state_is_finite=lambda: True)
     host._finish_recorder = lambda why: None  # type: ignore[method-assign]
@@ -116,7 +117,7 @@ class TestResetUnderARun(unittest.TestCase):
     def test_the_wait_says_the_run_was_reset(self) -> None:
         path = Path(tempfile.mkdtemp(prefix="run-")) / "ctl.sock"
         ended = {"serial": 1, "how": "cut short: reset", "step": 0, "target": 10, "finite": None}
-        page = _FakePage(path, {"step": 0, "time": 0.0, "last_run": ended})
+        page = _FakePage(path, {"step": 0, "time": 0.0, "runs_ended": {"1": ended}})
         self.addCleanup(page.close)
         reply = ctl.wait_for_steps(path, {"ok": True, "run": 1, "step": 0, "target": 10}, 30.0)
         self.assertFalse(reply["ok"])

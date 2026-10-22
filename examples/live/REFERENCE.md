@@ -45,6 +45,10 @@ is that folder's. `twins/` is not committed.
 - The first path-traced picture in a process (a snapshot, a compare, a take's
   first frame) compiles the renderer's shaders and can take minutes; later
   ones take seconds.
+- A command waits for the page as long as `ctl` waits for its reply (30 s;
+  10 minutes for `snapshot`, `compare`, `check` and `ref`, 15 for `play` and
+  `eval`); one the page could not take in that time, being busy, is not run,
+  and the reply says so.
 - The page listens on all interfaces (`0.0.0.0`, viser's default), so on a
   shared network firewall its port or use an SSH tunnel.
 
@@ -69,7 +73,8 @@ scene.add(rss.robot("yam_bimanual"))  # a scene needs something that moves befor
 - Bind `routine` (a callable taking the built `sim`, and the page's `session`
   if it declares one, returning a generator), or `routines`, a dict of name to
   such callables, and the page grows a **Run** button per routine with a
-  **Reset** beside them. A click plays the routine on the main thread as
+  **Reset** beside them (a `routines` entry named `routine` is shadowed by a
+  bound `routine`). A click plays the routine on the main thread as
   `./ctl play` does, and `status` lists them under `routines`. How a routine
   is stepped is in [Acting](#acting).
 
@@ -89,9 +94,9 @@ scene.add(rss.robot("yam_bimanual"))  # a scene needs something that moves befor
 | `log [--last N]` | Every compare, check, take and `snapshot --note` so far: what it left (PASS/FAIL, the picture: a snapshot's pair when it made one) and the `scene.py` it measured. |
 | `play [NAME] [--record TAKE --camera N --every K] [--wait [--wait-limit S]]` | Play a routine the scene file binds, as its button on the page does; `--record` films a frame every `K` control steps (4). `--wait` returns when it ends and its take is written, printing the page's log as it goes, exits 1 with the traceback if it failed, and gives up after `--wait-limit` seconds (3600). |
 | `show PATH [--label TEXT]`, `show --clear` | A picture on the page's board for the person watching. |
-| `run N [--no-wait] [--wait-limit S]` | Step N control steps, then hold, waiting until they are taken however slowly the scene steps (`--wait-limit`, 3600 s). Refused while a routine plays. A run cut short -- paused, a routine started, a save rebuilt the scene, a reset, another run -- ends held, and the reply is an error saying which, at what step; `status`'s `last_run` says how the last one ended. |
+| `run N [--no-wait] [--wait-limit S]` | Step N (at least 1) control steps, then hold, waiting until they are taken however slowly the scene steps (`--wait-limit`, 3600 s). Refused while a routine plays. A run cut short is an error saying how, at what step: paused, a routine started, a reset (also `check`'s), or a loop pass that failed end it held; a save that rebuilt the scene, `resume` or another run end it and leave the page to that. `status`'s `last_run` says how the last one ended. |
 | `pause`, `resume` | Pause or resume stepping. |
-| `reset` | Reset the scene. It also stops a playing routine and finishes its take; Pause is left as it was. |
+| `reset` | Reset the scene. It also stops a playing routine and finishes its take; Pause is left as it was, unless a `run N` was under way, which ends held. |
 | `eval "CODE"` or `eval -` (stdin) `[--record NAME --every K --camera N] [--wait [--wait-limit S]]` | Run Python on the sim thread in `scene.py`'s namespace (`sim`, `scene`, `session`, `np`, `rss`, `live` -- the page's own `LiveServer` --, `server` -- its viser server --, and every name the file bound). What it binds, routines and `play` see until the next save starts the namespace over. Its value is its last line's, when that line is an expression; a generator plays on the page step by step; `--record` films it; `--wait` waits for it as `play --wait` does. |
 | `catalog [robots\|grippers\|cells\|assets]` | The names the registries know. |
 | `ref show PATH`, `ref hide` | A picture in the page's sidebar. |
@@ -150,8 +155,9 @@ bind the routine in `scene.py` with a `session` parameter and `play` it. A
 routine of the second kind that yields 300 times running without stepping is
 stopped, with a line saying why. A routine that takes `session` and writes
 joints itself holds the panels off with `session.arms[...].suspend()`. The
-page returns to its previous state when the routine ends, and stays paused
-through a `reset` while paused.
+page returns to its previous state when the routine ends -- held, if the
+routine cut a `run N` short -- and stays paused through a `reset` while
+paused.
 
 ## Readings
 

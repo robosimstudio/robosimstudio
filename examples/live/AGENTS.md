@@ -139,8 +139,10 @@ How the page behaves is in REFERENCE (*How it works*, *The contract for
 `scene.py`*). What changes how you work:
 
 - Save and read; never restart the page to make an edit land. A save that
-  does not build leaves the scene before it up, and `snapshot`, `compare`,
-  `check`, `eval` and `play` say so until a save builds.
+  does not build leaves the scene before it up, and every command that acts
+  on the scene (`snapshot`, `compare`, `check`, `eval`, `play`, `run`,
+  `reset`) says so (`stale`) until a save builds; one sent before a save is
+  built says that (`pending`).
 - A script from `examples/` pastes into `scene.py` unchanged.
 - What the person drags on the page is what your next reading sees; if the
   scene looks moved, `./ctl reset` before judging it.

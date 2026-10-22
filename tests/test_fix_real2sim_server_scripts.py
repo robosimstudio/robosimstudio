@@ -58,6 +58,7 @@ def _bare_server(root: Path) -> LiveServer:
     live.head_stepped, live._head_ready = False, None
     live.ended, live.takes_written, live.serving = {}, [], "scene"
     live.runs, live.run_target, live.last_run, live.scene_id, live.watch_enabled = 0, 0, {}, "", False
+    live.runs_ended, live._walked = {}, (-1.0, [])
     live._arms_before, live.resets = {}, 0
     live.log_path, live._motions = "", {}
     live.scene_paths = ScenePaths(root)
@@ -93,7 +94,7 @@ class EvictHelpers(unittest.TestCase):
             with mock.patch.dict(sys.modules, mods):
                 gone = _bare_server(root).evict_helpers()
                 self.assertIn("fix_r35_pkgx", sys.modules)
-            self.assertEqual(gone, ["fix_r35_helper"])
+            self.assertEqual(list(gone), ["fix_r35_helper"])
 
     def test_an_evicted_helper_is_read_from_its_source_again(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
@@ -108,6 +109,30 @@ class EvictHelpers(unittest.TestCase):
             with mock.patch.dict(sys.modules, {"fix_r4_lidlib": module}):
                 _bare_server(root).evict_helpers()
             self.assertFalse(cached.exists())
+
+    def test_a_build_that_fails_keeps_the_helpers_the_scene_up_was_built_from(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp).resolve()
+            (root / "scene.py").write_text("")
+            (root / "lidlib.py").write_text("A = 1\n")
+            old = types.ModuleType("fix_r7_lidlib")
+            old.__file__ = str(root / "lidlib.py")
+            live = _bare_server(root)
+            live.registrations = types.SimpleNamespace(undo=lambda: [], redo=lambda taken: None)
+
+            def run(path):
+                new = types.ModuleType("fix_r7_lidlib")
+                new.__file__ = str(root / "lidlib.py")
+                sys.modules["fix_r7_lidlib"] = new  # the edited helper imported, then the scene fails
+                raise NameError("lid")
+
+            with (
+                mock.patch.dict(sys.modules, {"fix_r7_lidlib": old}),
+                mock.patch.object(server_mod, "run_scene_file", run),
+            ):
+                with self.assertRaises(NameError):
+                    live.load()
+                self.assertIs(sys.modules["fix_r7_lidlib"], old)
 
     def test_a_helper_whose_import_failed_is_read_from_its_source_too(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
@@ -184,6 +209,34 @@ class ScriptQueue(unittest.TestCase):
         self.assertEqual(self.finished, ["the script ended"])
         self.assertEqual(self.live.script, [queued], "the routine behind it plays on, not filmed into the take")
 
+    def test_a_take_is_filmed_to_the_reset_before_its_routine_cleans_up(self) -> None:
+        order: list[str] = []
+        self.live._finish_recorder = lambda why: order.append("take")  # type: ignore[method-assign]
+        self.live._end_scripts = lambda how: order.append("scripts")  # type: ignore[method-assign]
+        self.live.stop_scripts("reset")
+        self.assertEqual(order, ["take", "scripts"])
+
+    def test_a_take_written_whose_strip_fails_is_still_written(self) -> None:
+        live = self.live
+        live.recorder = types.SimpleNamespace(
+            name="t1", frames=[], finish=lambda: {"take": "t1", "frames": 3, "seconds": 0.1}
+        )
+        live.run_dir = Path(tempfile.mkdtemp())
+
+        def show(*args):
+            raise ValueError("timeline.json: Expecting property name")
+
+        live._show_take = show  # type: ignore[method-assign]
+        with (
+            mock.patch.object(server_mod.checks, "take_motion", lambda frames: {}),
+            mock.patch.object(server_mod.checks, "motion_line", lambda motion: ""),
+            mock.patch("builtins.print"),
+        ):
+            live._write_take("the script ended")
+        self.assertEqual(live.takes_written, ["t1"])
+        self.assertIn("was written, but putting it beside the clip failed", live.last_error)
+        self.assertIsNone(live.recorder)
+
     def test_a_failing_recording_leaves_the_routine_playing(self) -> None:
         gen = iter(range(5))
         self.live.start_script(gen, record="t1")
@@ -193,7 +246,7 @@ class ScriptQueue(unittest.TestCase):
         self.assertEqual(self.live.script, [gen])
         self.assertIsNone(self.live.recorder)
         self.assertTrue(recorder.closed)
-        self.assertEqual(self.live.last_error, "")
+        self.assertIn("the recording of 't1' failed", self.live.last_error, "status says why the take is missing")
         self.live._play()
         self.assertEqual(next(gen), 2)
 
