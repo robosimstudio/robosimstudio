@@ -143,17 +143,27 @@ print(sim.time)    # 3.5 (seconds simulated since the build)
 ```python
 print(cube.position)           # (x, y, z) in the world frame
 print(cube.pose)               # (x, y, z, qx, qy, qz, qw)
+print(cube.at)                 # (x, y, z) in the work-surface frame, the same frame at= uses
+print(cube.at_pose)            # pose in that frame
 print(cube.velocity)           # (vx, vy, vz, wx, wy, wz)
 print(sim["cube"].position)    # the same Ref, looked up by name
 print(sim.names())             # ['cube', 'table']
 
 state = sim.read()             # every pose in one read
 print(state.position("cube"))
+print(state.surface_position("cube"))
 ```
 
 - A `Ref` caches nothing. Each read goes to the live state.
-- Reads are in the world frame. On `bench_075` the work-surface origin is at
-  world `(0.6, 0, 0.75)`.
+- `position` and `pose` are in the world frame. On `bench_075` the work-surface
+  origin is at world `(0.6, 0, 0.75)`.
+- `at` and `at_pose` restate those numbers in the work-surface frame, so a cube
+  placed with `at=(0, 0, 0.2)` reads `cube.at` as `(0, 0, 0.2)` after `build()`
+  and before it moves. After it lands on that bench, `cube.at` is about
+  `(0, 0, 0.025)` while `cube.position` is about `(0.600, 0.000, 0.775)`.
+- `rss.in_surface(cell, xform)` lifts a surface-frame pose into the world;
+  `rss.from_surface(cell, xform)` is the inverse. `cell` may be a name
+  (`"bench_075"`), a `CellSpec`, or `None` for the world frame itself.
 - Cloth and soft bodies have no pose. Read their points with `ref.particle_q`,
   an `(n, 3)` array.
 

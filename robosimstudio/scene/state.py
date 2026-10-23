@@ -108,6 +108,33 @@ class WorldState:
         """One entity's world pose as ``(px, py, pz, qx, qy, qz, qw)``."""
         return self.handles.entity(name).pose(self.body_q)
 
+    def surface_pose(self, name: str) -> np.ndarray:
+        """:meth:`pose` restated in the cell's work-surface frame.
+
+        The same numbers a constructor's ``at=`` uses. See
+        :attr:`~robosimstudio.scene.ref.Ref.at_pose`.
+        """
+        from robosimstudio.scene.frames import from_surface
+
+        pose = tuple(float(v) for v in self.pose(name))
+        return np.asarray(from_surface(self._cell(), pose), dtype=np.float64)
+
+    def surface_position(self, name: str) -> np.ndarray:
+        """Just the translation of :meth:`surface_pose`."""
+        return self.surface_pose(name)[:3]
+
+    def _cell(self):
+        """The cell this reading's scene stands in, or ``None`` for the world frame."""
+        name = self.handles.scene_name or ""
+        if not name:
+            return None
+        from robosimstudio.scene.registry import get_cell
+
+        try:
+            return get_cell(name)
+        except KeyError:
+            return None
+
     def settled_position(self, name: str) -> np.ndarray:
         """Where an entity was when the episode started [m]."""
         return self.handles.entity(name).position(self.settled_body_q)

@@ -22,16 +22,32 @@ from robosimstudio.specs import IDENTITY, CellSpec, Xform
 
 __all__ = ["compose", "from_surface", "in_surface", "point_from_surface", "surface_frame"]
 
+Cell = CellSpec | str | None
+"""A cell as these helpers take it: a spec, a registered name, or ``None`` for the world frame."""
 
-def surface_frame(scene: CellSpec | None) -> Xform:
+
+def _cell(scene: Cell) -> CellSpec | None:
+    """Resolve a cell name, treating ``None`` and an empty name as no cell (the world frame)."""
+    if scene is None or scene == "":
+        return None
+    if isinstance(scene, str):
+        from robosimstudio.scene.registry import get_cell
+
+        return get_cell(scene)
+    return scene
+
+
+def surface_frame(scene: Cell = None) -> Xform:
     """The scene's work-surface frame as a world transform.
 
     ``None`` -- a task compiled without a scene -- is the world frame itself, so
     a coordinate stated "in the surface frame" of no scene is simply a world
     coordinate. That is what lets the frame be introduced without rewriting the
-    suites that have not moved onto it yet.
+    suites that have not moved onto it yet. A registered cell name is looked up
+    the same way :func:`~robosimstudio.scene.registry.get_cell` does.
     """
-    return IDENTITY if scene is None else scene.surface_frame
+    spec = _cell(scene)
+    return IDENTITY if spec is None else spec.surface_frame
 
 
 def compose(parent: Xform, child: Xform) -> Xform:
@@ -41,12 +57,12 @@ def compose(parent: Xform, child: Xform) -> Xform:
     )
 
 
-def in_surface(scene: CellSpec | None, xform: Xform) -> Xform:
+def in_surface(scene: Cell, xform: Xform) -> Xform:
     """A surface-frame transform, as world coordinates."""
     return compose(surface_frame(scene), xform)
 
 
-def from_surface(scene: CellSpec | None, xform: Xform) -> Xform:
+def from_surface(scene: Cell, xform: Xform) -> Xform:
     """A world transform, restated in the scene's work-surface frame.
 
     The inverse of :func:`in_surface`, and the one a *suite* reaches for. A port
@@ -61,7 +77,7 @@ def from_surface(scene: CellSpec | None, xform: Xform) -> Xform:
     return tuple(float(v) for v in xform_from_matrix(inverse @ transform_matrix(np.asarray(xform))))
 
 
-def point_from_surface(scene: CellSpec | None, point) -> tuple[float, float, float]:
+def point_from_surface(scene: Cell, point) -> tuple[float, float, float]:
     """A world position, restated in the surface frame. Rotation-free convenience."""
     x, y, z = (float(v) for v in tuple(point)[:3])
     return from_surface(scene, (x, y, z, 0.0, 0.0, 0.0, 1.0))[:3]
