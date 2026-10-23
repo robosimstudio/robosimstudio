@@ -16,7 +16,21 @@ from __future__ import annotations
 from robosimstudio.scene.ref import Ref
 
 from .draw import Viewer, draw, view, viewer
+from .layouts import clone, layouts, place
 from .scene import Robot, Scene, robot
 from .sim import Sim
 
-__all__ = ["Ref", "Robot", "Scene", "Sim", "Viewer", "draw", "robot", "view", "viewer"]
+__all__ = [
+    "Ref",
+    "Robot",
+    "Scene",
+    "Sim",
+    "Viewer",
+    "clone",
+    "draw",
+    "layouts",
+    "place",
+    "robot",
+    "view",
+    "viewer",
+]
