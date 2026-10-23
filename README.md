@@ -2,7 +2,7 @@
 
 [Tech report](https://arxiv.org/abs/2610.18835) | [Project Page](https://robosimstudio.github.io/) | [Examples](examples/README.md)
 
-RoboSimStudio is an open, interactive GPU simulation toolkit for rebuilding real
+RoboSimStudio is an open, interactive simulation toolkit for rebuilding real
 robot manipulation tasks in simulation, by hand or with a coding agent.
 
 <p align="center">
@@ -22,14 +22,15 @@ We provide an [installation guide](https://github.com/robosimstudio/robosimstudi
 
 ```
 Set up environment for https://github.com/robosimstudio/robosimstudio
-and create a simulation environment for [Your task instruction]
-based on the video at [Your Video Path].
+and create a simulation environment for [Your task instruction] with Robot [Robot URDF]
+based on the video at [Your Video Path] / demonstration at [Robot Demonstration].
 ```
 
 > [!TIP]
-> 1. Use **Codex Astra** for better scene construction.
-> 2. Use **Claude Code** for better robot motion.
-> 3. Keep a **human in the loop** to keep the agent from cheating (a weld, a teleport or a spring where a grasp should be).
+> 1. RoboSimStudio supports human video, ego-centric video, robot video and teleoperation.
+> 2. Use **Codex Astra** for better scene construction.
+> 3. Use **Claude Code** for better robot motion.
+> 4. Keep a **human in the loop** to sometimes remind the agent to reconstruct the physics and geometry.
 
 ## Acknowledgements
 
@@ -39,7 +40,6 @@ RoboSimStudio is hugely inspired and built on [Newton](https://github.com/newton
 [SuperDex](https://github.com/facebookresearch/project_superdex).
 [viser](https://github.com/viser-project/viser), 
 [Isaac Lab](https://github.com/isaac-sim/IsaacLab),
-[Isaac Lab Arena](https://github.com/isaac-sim/IsaacLab-Arena),
 [PyRoKi](https://github.com/chungmin99/pyroki),
 [Genesis](https://github.com/Genesis-Embodied-AI/Genesis).
 Robot models come from
