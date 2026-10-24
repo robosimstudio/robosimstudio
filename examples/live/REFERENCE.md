@@ -344,16 +344,20 @@ scene = rss.Scene(cell="bench_075")
 cube = scene.add(rss.box(name="cube", half=(0.025,) * 3, at=(0, 0, 0.2)))
 sim = scene.build()
 sim.run(150).sync()
-print(cube.position)    # (0.600, 0.000, 0.775)
+print(cube.position)    # (0.600, 0.000, 0.775) in the world
+print(cube.at)          # (0.000, 0.000, 0.025) in the work-surface frame
 
 cell = rss.get_cell("bench_075")
 print(cell.center, cell.surface_z)    # (0.6, 0.0, 0.0) 0.75
+print(rss.surface_frame("bench_075")) # (0.6, 0.0, 0.75, 0, 0, 0, 1)
 ```
 
-The cube was placed 200 mm above the middle of the bench. It reads in the world
-frame: `bench_075` is a 750 mm bench centred at world `x = 0.6`, and the cube
-rests with its centre 25 mm above the top. The same spec moves to another bench
-unchanged.
+The cube was placed 200 mm above the middle of the bench. `position` reads in
+the world frame: `bench_075` is a 750 mm bench centred at world `x = 0.6`, and
+the cube rests with its centre 25 mm above the top. `at` restates that in the
+work-surface frame, the same numbers `at=` used. The same spec moves to another
+bench unchanged. `rss.in_surface` and `rss.from_surface` convert a full pose
+either way; `rss.point_from_surface` converts a position.
 
 | Cell | Work surface |
 | --- | --- |

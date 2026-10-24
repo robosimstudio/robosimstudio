@@ -32,7 +32,7 @@ from __future__ import annotations
 
 from .assets import Added, load_asset
 from .compiler import CannotReplicate, CompiledScene, compile_scene
-from .frames import in_surface, surface_frame
+from .frames import from_surface, in_surface, point_from_surface, surface_frame
 from .handles import ArmHandle, DeformableHandle, EntityHandle, RegionHandle, SceneHandles
 from .registry import CELLS, ENTITIES, get_cell, get_entity, list_cells, register_cell, register_entity
 from .request import BuildRequest, SceneRequest
@@ -51,11 +51,13 @@ __all__ = [
     "SceneHandles",
     "SceneRequest",
     "compile_scene",
+    "from_surface",
     "get_cell",
     "get_entity",
     "in_surface",
     "list_cells",
     "load_asset",
+    "point_from_surface",
     "register_cell",
     "register_entity",
     "surface_frame",

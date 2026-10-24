@@ -102,6 +102,10 @@ _EXPORTS: dict[str, str] = {
     "Viewer": "robosimstudio.sim",
     "compile_scene": "robosimstudio.scene",
     "load_asset": "robosimstudio.scene",
+    "from_surface": "robosimstudio.scene",
+    "in_surface": "robosimstudio.scene",
+    "point_from_surface": "robosimstudio.scene",
+    "surface_frame": "robosimstudio.scene",
     # Writing a new kind of thing.
     "Entity": "robosimstudio.scene.entity",
     "register_entity": "robosimstudio.scene",

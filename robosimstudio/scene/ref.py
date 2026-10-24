@@ -121,6 +121,41 @@ class Ref:
         return self.pose[:3]
 
     @property
+    def at_pose(self) -> np.ndarray:
+        """:attr:`pose` restated in the cell's work-surface frame.
+
+        The same frame a constructor's ``at=`` uses, so ``rss.box(..., at=p)``
+        then ``ref.at_pose`` after :meth:`~robosimstudio.sim.Scene.build` (and
+        before anything moves) reads ``p`` back. ``pose`` stays world, because
+        that is what the solver holds.
+
+        Raises:
+            ValueError: If it owns no body, the same as :attr:`pose`.
+        """
+        from robosimstudio.scene.frames import from_surface
+
+        pose = tuple(float(v) for v in self.pose)
+        return np.asarray(from_surface(self._cell(), pose), dtype=np.float64)
+
+    @property
+    def at(self) -> np.ndarray:
+        """Just the translation of :attr:`at_pose`: where it is, in the frame ``at=`` used."""
+        return self.at_pose[:3]
+
+    def _cell(self):
+        """The cell this ref's scene stands in, or ``None`` for the world frame."""
+        handles = getattr(self._scene, "handles", None)
+        name = getattr(handles, "scene_name", "") or ""
+        if not name:
+            return None
+        from robosimstudio.scene.registry import get_cell
+
+        try:
+            return get_cell(name)
+        except KeyError:
+            return None
+
+    @property
     def velocity(self) -> np.ndarray:
         """The spatial velocity of its first body, live: ``(vx, vy, vz, wx, wy, wz)``."""
         bodies = self.bodies
