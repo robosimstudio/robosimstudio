@@ -424,6 +424,43 @@ class Scene:
             sim.reset()
         return sim
 
+    def clone(self) -> Scene:
+        """An independent copy: same cell, physics and things; its own refs.
+
+        Building the copy does not rebind this scene's handles. See
+        :func:`robosimstudio.sim.layouts.clone`.
+        """
+        from .layouts import clone
+
+        return clone(self)
+
+    def place(self, name: str, *, at: Sequence[float] | None = None, yaw: float | None = None) -> Scene:
+        """Move one thing, in the work-surface frame, before the next :meth:`build`.
+
+        See :func:`robosimstudio.sim.layouts.place`.
+        """
+        from .layouts import place
+
+        return place(self, name, at=at, yaw=yaw)
+
+    def layouts(
+        self,
+        n: int,
+        *,
+        seed: int = 0,
+        xy: float | dict[str, float] = 0.0,
+        yaw: float | dict[str, float] = 0.0,
+        z: float | dict[str, float] = 0.0,
+        names: Sequence[str] | None = None,
+    ) -> tuple[Scene, ...]:
+        """``n`` independent clones with named things jittered in the work-surface frame.
+
+        See :func:`robosimstudio.sim.layouts.layouts`.
+        """
+        from .layouts import layouts
+
+        return layouts(self, n, seed=seed, xy=xy, yaw=yaw, z=z, names=names)
+
     def with_physics(self, **changes: Any) -> Scene:
         """Amend the arrangement in place and return ``self``, so it chains.
 

@@ -276,6 +276,9 @@ uv run --extra gap scripts/bench_run.py --task-root my_tasks --task push/cube \
 
 The benchmark's own task suites are not in this release yet.
 
+A scene assembled by hand, with no document, uses `rss.layouts` for the same
+kind of spatial draw: see [Spatial layouts](../00_getting_started/README.md#spatial-layouts).
+
 **See also:**
 
 - [Policies](../07_policies/README.md) for the graphs that solve a task

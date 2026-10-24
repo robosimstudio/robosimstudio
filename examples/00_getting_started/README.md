@@ -122,6 +122,36 @@ What `at` places depends on the kind:
 [Frames and units](../live/REFERENCE.md#frames-and-units) gives their sizes and
 the quaternion order.
 
+## Spatial layouts
+
+A scene you have already placed can be drawn into many nearby ones, still in
+the work-surface frame. `rss.layouts` clones the scene and jitters named free
+bodies; the original is left alone, and each clone can be built on its own.
+
+```python
+scene = rss.Scene(cell="bench_075")
+scene.add(rss.box(name="cube", half=(0.025,) * 3, at=(0.0, 0.10, 0.03)))
+scene.add(rss.sphere(name="ball", radius=0.03, at=(0.05, -0.05, 0.03)))
+scene.add(rss.robot("panda"))
+
+for k, variant in enumerate(rss.layouts(scene, n=8, seed=0, xy=0.05, yaw=0.3)):
+    sim = variant.build()
+    print(k, variant.request.entities[0].pose)
+```
+
+- `xy=0.05` draws each free body's x and y uniformly from ±50 mm around where
+  you placed it. `yaw=0.3` is the same for heading, in radians.
+- A mapping names the things it applies to: `xy={"cube": 0.04, "ball": 0.08}`.
+- `names=("cube",)` restricts which things move. Welded scenery and a robot
+  standing at its own mount stay put unless you `rss.place` them first.
+- Positions that would leave a bounded bench are clipped to it.
+- `rss.place(scene, "cube", at=(0.05, 0.0, 0.03), yaw=0.2)` moves one thing
+  without drawing; `scene.clone()` is an independent copy whose refs the
+  original's `build` will not rebind.
+
+A task document's `:sampler` is the same idea one layer up, for numbered
+episodes. See [Episodes](../06_tasks/README.md#episodes-and-samplers).
+
 ## Stepping
 
 ```python
