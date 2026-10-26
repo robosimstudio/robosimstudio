@@ -11,6 +11,7 @@ robot manipulation tasks in simulation, by hand or with a coding agent.
 
 ---
 ### News
+- **[2026/10/26]** 🦆 Real2Sim your room from one photo with Codex, then play with a walking Microduck in it: [**microduck-with-rss**](https://github.com/KeplerC/microduck-with-rss).
 - **[2026/10/21]** 🔥 We have released many-demo collection with physics on the CPU and GL rendering: 500 demos in 4.2 min on one GPU. 
 - **[2026/10/20]** 🔥 We have added fifteen kinds of material, among them rope, knots, paper, bags, brushes, tape, cutting, granular, liquid, dough and water, each with an example at [**Materials**](examples/).
 - **[2026/10/18]** 🔥 RoboSimStudio runs on CPU-only machines. Get started [**Here**](examples/install.md).
