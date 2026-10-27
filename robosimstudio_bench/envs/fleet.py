@@ -550,15 +550,9 @@ class FleetEnv:
             return {self.worlds.shape(int(i), w): int(v) for i, v in labels.items() for w in worlds} or None
 
         def cell() -> Any:
-            name = handles.scene_name
-            if not name:
-                return None
-            from robosimstudio.scene.registry import get_cell
+            from robosimstudio.scene.registry import find_cell
 
-            try:
-                return get_cell(name)
-            except KeyError:
-                return None
+            return find_cell(handles.scene_name)
 
         return {
             "finishes": finishes,

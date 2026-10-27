@@ -26,6 +26,7 @@ __all__ = [
     "ENTITIES",
     "entity_engines",
     "entity_key",
+    "find_cell",
     "get_cell",
     "get_entity",
     "list_cells",
@@ -157,6 +158,18 @@ def register_entity(name: str, *, engine: str = ANY_ENGINE) -> Callable[[type], 
 
 def get_cell(name: str) -> CellSpec:
     return CELLS.get(name)
+
+
+def find_cell(name: str) -> CellSpec | None:
+    """The cell registered as ``name``, or ``None`` for no name or one not registered: what a compiled scene's
+    ``handles.scene_name`` is read through by a page or a renderer, where a cell a task directory declared may not be
+    registered (:data:`CELLS`'s hint) and a missing one should not stop the picture."""
+    if not name:
+        return None
+    try:
+        return CELLS.get(name)
+    except KeyError:
+        return None
 
 
 def get_entity(name: str, *, engine: str = ANY_ENGINE) -> type:

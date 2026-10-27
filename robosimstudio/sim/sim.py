@@ -462,15 +462,9 @@ class Sim(EnvBase):
         """
 
         def cell() -> Any:
-            name = self.scene.handles.scene_name
-            if not name:
-                return None
-            from robosimstudio.scene.registry import get_cell
+            from robosimstudio.scene.registry import find_cell
 
-            try:
-                return get_cell(name)
-            except KeyError:
-                return None
+            return find_cell(self.scene.handles.scene_name)
 
         handles = self.scene.handles
         return {

@@ -780,12 +780,13 @@ class StudioSession:
 
     def _aim_home(self, sim) -> None:
         """Start a browser's view on the middle of ``sim``'s work surface: for a scene in another place than the last,
-        and only in the browsers yet to connect, so an open one keeps its view through a rebuild and the view a page
-        aimed outlasts a rebuild in the same place."""
+        so the view a page aimed outlasts a rebuild in the same place. The first scene turns the browsers already open
+        too -- one that connected while it compiled is on Newton's camera -- and a later one only those yet to
+        connect, so an open one keeps its view through a rebuild."""
         cell = cell_of(sim)
         name = cell.name if cell is not None else ""
         if name != self._aimed_at:
-            aim_camera(self.viewer, *home_view(cell), move=False)
+            aim_camera(self.viewer, *home_view(cell), move=self._aimed_at is None)
             self._aimed_at = name
 
     def _bench(self, what: str = "this"):

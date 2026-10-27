@@ -905,6 +905,7 @@ def main(argv: list[str] | None = None) -> int:
         raise SystemExit("no leader arm was named: pass --leader <arm>:<port>, e.g. --leader right:/dev/ch340-<serial>")
     preflight(ports, args.out, mode)
 
+    from robosimstudio.sim.draw import aim_camera, cell_of, home_view
     from robosimstudio_studio.garments import viewer_studio
 
     sim = build_scene(args.embodiment, args.cell)
@@ -913,6 +914,7 @@ def main(argv: list[str] | None = None) -> int:
     try:
         plan = plan_for(sim, ports)
         viewer.set_model(sim.model)
+        aim_camera(viewer, *home_view(cell_of(sim)))
         poser = Poser(sim, viewer)
         poser.show({})
         calibrator = Calibrator(sim, poser, plan, args.out, mode=mode)

@@ -60,15 +60,12 @@ def title_page(server: Any, title: str = PAGE_TITLE) -> None:
 
 
 def cell_of(sim: Any) -> Any:
-    """The registered cell ``sim`` is staged in, or ``None``: ``cell`` on a build request, ``scene`` on a task's --
-    the same fact under the two names the rename left."""
-    request = getattr(sim, "request", None)
-    name = getattr(request, "scene", "") or getattr(request, "cell", "")
-    if not name:
-        return None
-    from robosimstudio.scene.registry import get_cell
+    """The registered cell ``sim`` was staged in, or ``None``: its compiled scene's ``handles.scene_name``, read as a
+    renderer reads it (:func:`~robosimstudio.scene.registry.find_cell`), so a cell not registered here is none."""
+    from robosimstudio.scene.registry import find_cell
 
-    return get_cell(name)
+    handles = getattr(getattr(sim, "scene", None), "handles", None)
+    return find_cell(getattr(handles, "scene_name", ""))
 
 
 def home_view(cell: Any) -> tuple[tuple[float, float, float], tuple[float, float, float]]:

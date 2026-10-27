@@ -43,7 +43,8 @@ def _connects(viewer) -> SimpleNamespace:
 
 
 def _bench(name: str = "bench_075") -> SimpleNamespace:
-    return SimpleNamespace(model=_model(), name="page", request=SimpleNamespace(cell=name))
+    """A built scene as the page reads it: a model, and the cell its compiled scene was staged in."""
+    return SimpleNamespace(model=_model(), name="page", scene=SimpleNamespace(handles=SimpleNamespace(scene_name=name)))
 
 
 class TestNewtonsOwnCameraOrbitsEmptyAir(unittest.TestCase):
@@ -84,10 +85,14 @@ class TestAPageOpensOnTheWorkSurface(unittest.TestCase):
         finally:
             page.close()
 
-    def test_a_scene_in_no_cell_looks_at_the_origin(self) -> None:
+    def test_a_scene_in_no_registered_cell_looks_at_the_origin(self) -> None:
         from robosimstudio.sim.draw import HOME_EYE, cell_of, home_view
 
         self.assertIsNone(cell_of(SimpleNamespace(model=None)))
+        self.assertIsNone(cell_of(_bench("")))
+        self.assertIsNone(
+            cell_of(_bench("a_cell_its_task_directory_declares")), "not registered here: no cell, no raise"
+        )
         eye, look_at = home_view(None)
         self.assertEqual((0.0, 0.0, 0.0), look_at)
         self.assertEqual(HOME_EYE, eye)
@@ -96,7 +101,7 @@ class TestAPageOpensOnTheWorkSurface(unittest.TestCase):
 class TestTheStudioAimsOnlyWhenTheSceneMoves(unittest.TestCase):
     """The live page swaps scenes under an open browser, and its camera stays where it was left."""
 
-    def test_a_rebuild_keeps_an_open_view_and_a_pages_aim_and_another_cell_rehomes_new_browsers(self) -> None:
+    def test_the_first_scene_turns_an_open_browser_a_rebuild_keeps_it_and_another_cell_rehomes_new_ones(self) -> None:
         from robosimstudio.scene.registry import get_cell
         from robosimstudio.sim.draw import aim_camera
         from robosimstudio_studio.garments import viewer_studio
@@ -106,10 +111,14 @@ class TestTheStudioAimsOnlyWhenTheSceneMoves(unittest.TestCase):
         studio = SimpleNamespace(viewer=viewer, _aimed_at=None)
         try:
             viewer.set_model(_model())
+            open_browser = _browser()  # connected while the first scene compiled, so on Newton's camera
+            viewer._server.get_clients = lambda: {1: open_browser}
             StudioSession._aim_home(studio, _bench("bench_075"))
             self.assertEqual("bench_075", studio._aimed_at)
-            open_browser = _browser()
-            viewer._server.get_clients = lambda: {1: open_browser}
+            first = get_cell("bench_075")
+            np.testing.assert_allclose(
+                open_browser.camera.look_at, (first.center[0], first.center[1], first.surface_z), atol=1e-9
+            )
 
             aim_camera(viewer, (0.95, -0.1, 1.1), (0.53, -0.12, 0.76))  # a page's own view, as page(studio) aims it
             StudioSession._aim_home(studio, _bench("bench_075"))  # a save that rebuilt the same place
