@@ -185,7 +185,7 @@ class TestTheRoutineFoldsTheTowel(unittest.TestCase):
 
 class TestThePage(unittest.TestCase):
     def test_the_page_opens_looking_at_the_towel_and_offers_the_fold(self) -> None:
-        """viser's default view is from outside the room the studio draws, so the page sets its own."""
+        """The page's own view is closer than the work surface's, on the towel, from across the bench."""
         from types import SimpleNamespace
 
         import robosimstudio as rss
@@ -201,15 +201,15 @@ class TestThePage(unittest.TestCase):
         sim, kwargs = opened[0]
         try:
             self.assertEqual(["Fold the towel"], list(kwargs["routines"]))
-            camera = SimpleNamespace()
-            kwargs["page"](SimpleNamespace(server=SimpleNamespace(initial_camera=camera)))
+            aimed = []
+            kwargs["page"](SimpleNamespace(aim_camera=lambda eye, look_at: aimed.append((eye, look_at))))
+            ((eye, look_at),) = aimed
             middle = sim["towel"].particle_q.mean(axis=0)
-            np.testing.assert_allclose(camera.look_at, middle, atol=0.01)
-            eye = np.asarray(camera.position) - middle
+            np.testing.assert_allclose(look_at, middle, atol=0.01)
+            eye = np.asarray(eye) - middle
             self.assertGreater(eye[0], 0.3, "from the bench's open side, across from the arms")
             self.assertGreater(eye[2], 0.2, "and from above")
             self.assertLess(float(np.linalg.norm(eye)), 0.6)
-            self.assertEqual((0.0, 0.0, 1.0), tuple(camera.up))
         finally:
             sim.close()
 

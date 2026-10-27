@@ -22,12 +22,7 @@ def page(sim):
     stripe = sim["stripe"].entity
 
     def build(studio) -> None:
-        def aim(client) -> None:  # from behind the arms, over the bar and the sponge
-            client.camera.position, client.camera.look_at = bar.EYE, bar.LOOK
-
-        studio.server.on_client_connect(aim)
-        for client in studio.server.get_clients().values():
-            aim(client)
+        studio.aim_camera(bar.EYE, bar.LOOK)  # from behind the arms, over the bar and the sponge
         with studio.gui.add_folder("Sponge"):
             reading = studio.gui.add_markdown("")
             picture = studio.gui.add_image(bar.contact_map(stripe), format="png")

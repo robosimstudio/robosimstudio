@@ -20,10 +20,28 @@ from __future__ import annotations
 import json
 from typing import Any
 
-__all__ = ["PAGE_TITLE", "Viewer", "draw", "title_page", "view", "viewer"]
+import numpy as np
+
+__all__ = [
+    "HOME_EYE",
+    "PAGE_TITLE",
+    "Viewer",
+    "aim_camera",
+    "cell_of",
+    "draw",
+    "home_view",
+    "title_page",
+    "view",
+    "viewer",
+]
 
 PAGE_TITLE = "RoboSimStudio"
 """What the browser tab says, on every page this package serves."""
+
+HOME_EYE = (1.6, -0.8, 1.1)
+"""Where a page's camera starts, from the middle of the work surface it looks at [m]: out past the surface's open
+``+x`` side, which a robot standing at its own mount faces, to one side and above, 2.1 m off -- a bench and both
+arms of a pair in a desktop window."""
 
 
 def title_page(server: Any, title: str = PAGE_TITLE) -> None:
@@ -39,6 +57,48 @@ def title_page(server: Any, title: str = PAGE_TITLE) -> None:
     server._websock_server.queue_message(
         _messages.RunJavascriptMessage(source=f"document.title = {json.dumps(title)};")
     )
+
+
+def cell_of(sim: Any) -> Any:
+    """The registered cell ``sim`` is staged in, or ``None``: ``cell`` on a build request, ``scene`` on a task's --
+    the same fact under the two names the rename left."""
+    request = getattr(sim, "request", None)
+    name = getattr(request, "scene", "") or getattr(request, "cell", "")
+    if not name:
+        return None
+    from robosimstudio.scene.registry import get_cell
+
+    return get_cell(name)
+
+
+def home_view(cell: Any) -> tuple[tuple[float, float, float], tuple[float, float, float]]:
+    """``(eye, look_at)`` a page opens on: the middle of ``cell``'s work surface, from :data:`HOME_EYE` off it. With
+    no cell, the world origin."""
+    if cell is None:
+        look_at = (0.0, 0.0, 0.0)
+    else:
+        look_at = (float(cell.center[0]), float(cell.center[1]), float(cell.surface_z))
+    return tuple(a + b for a, b in zip(look_at, HOME_EYE, strict=True)), look_at
+
+
+def aim_camera(viewer: Any, eye: Any, look_at: Any, *, move: bool = True) -> None:
+    """Put a page's camera at ``eye``, looking at ``look_at``, world frame and ``+z`` up: where every browser that
+    connects starts, and the point its view orbits and zooms about. ``move`` turns the browsers already open too.
+
+    ``viewer`` is Newton's ``ViewerViser``, and this goes through its camera
+    request rather than ``server.initial_camera``: Newton 1.7 opens on a camera of
+    its own, 10 m out along ``+x`` and level, orbiting a point 5 m in front of it --
+    4.4 m past a bench, in empty air -- and sends that to each browser as it
+    connects, over whatever ``initial_camera`` says.
+    """
+    eye, look_at = (np.asarray(v, dtype=np.float64).reshape(3) for v in (eye, look_at))
+    up = np.array((0.0, 0.0, 1.0))
+    if move:
+        viewer._set_camera_request(eye, look_at, up)  # initial_camera too, and every open browser
+        return
+    viewer._camera_request = (eye, look_at, up)
+    initial = viewer._server.initial_camera
+    initial.position, initial.look_at, initial.up = eye, look_at, up
 
 
 class Viewer:
@@ -83,6 +143,7 @@ class Viewer:
         self._viewer = ViewerViser(port=port, label=label or getattr(sim, "name", "") or PAGE_TITLE, share=share)
         title_page(self._viewer._server)
         self._viewer.set_model(sim.model)
+        aim_camera(self._viewer, *home_view(cell_of(sim)))
         # Newton greys its Reset out until something is registered, and calls it from should_step() or
         # show(), on the loop's own thread.
         reset = getattr(sim, "reset", None)
@@ -103,6 +164,11 @@ class Viewer:
     def gui(self):
         """``server.gui`` -- add sliders, numbers and buttons here."""
         return self.server.gui
+
+    def aim_camera(self, eye: Any, look_at: Any) -> None:
+        """Put the page's camera at ``eye``, looking at ``look_at``, world frame: in every browser, open or yet to
+        connect (:func:`aim_camera`). The page opens on the middle of the work surface (:func:`home_view`)."""
+        aim_camera(self._viewer, eye, look_at)
 
     def is_running(self) -> bool:
         """Whether the page is still open. The loop condition."""
@@ -274,7 +340,9 @@ def view(
                 rss.view(sim, page=page)
 
             ``studio.gui`` and ``studio.scene`` are viser's own, so a component
-            written against a bare ``ViserServer`` works here unchanged.
+            written against a bare ``ViserServer`` works here unchanged. The page
+            opens on the middle of the work surface; ``studio.aim_camera(eye,
+            look_at)`` puts the camera elsewhere.
         routines: A **Run** button for each: one callable, or a dict of name to
             callable. ``routine(sim, session)`` returns a generator that yields
             once per control step and drives the arms through their panels --

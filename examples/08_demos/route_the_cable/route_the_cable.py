@@ -203,8 +203,7 @@ def main():
     sim = scene.build(control_mode="joint_position")
 
     def page(studio):
-        studio.server.initial_camera.position = (0.95, -0.10, 1.10)  # from the bench's open side
-        studio.server.initial_camera.look_at = (0.53, -0.12, 0.76)
+        studio.aim_camera((0.95, -0.10, 1.10), (0.53, -0.12, 0.76))  # from the bench's open side
 
     rss.view(sim, page=page, routines={"Route the cable": routine})
 

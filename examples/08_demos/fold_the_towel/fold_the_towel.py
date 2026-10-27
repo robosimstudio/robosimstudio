@@ -246,9 +246,7 @@ def main() -> None:
     x, y, z = (float(v) for v in sim["towel"].particle_q.mean(axis=0))  # the towel's middle, in the world
 
     def page(studio):
-        camera = studio.server.initial_camera  # where a browser's view starts, rather than outside the room
-        camera.up, camera.look_at = (0.0, 0.0, 1.0), (x, y, z)
-        camera.position = (x + 0.45, y, z + 0.35)  # from the bench's open side, across from the arms
+        studio.aim_camera((x + 0.45, y, z + 0.35), (x, y, z))  # from the bench's open side, across from the arms
 
     rss.view(sim, page=page, routines={"Fold the towel": routine})
 

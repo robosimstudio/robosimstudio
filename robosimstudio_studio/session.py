@@ -88,7 +88,7 @@ import numpy as np
 
 from robosimstudio.core.profile import parse_modes
 from robosimstudio.core.render.palette import GROUND
-from robosimstudio.scene.registry import get_cell
+from robosimstudio.sim.draw import aim_camera, cell_of, home_view
 from robosimstudio.specs import RecordSpec, TaskSpec
 
 from . import seams
@@ -647,6 +647,8 @@ class StudioSession:
         self._stage: Any = None
         self._backdrop: Any = None
         """The stand-in work-surface node, when the furniture is hidden."""
+        self._aimed_at: str | None = None
+        """The cell whose work surface a browser's view starts on: ``""`` for a scene in none, ``None`` before one."""
         self.episode_id = int(episode)
         self.panels: list[Panel] = []
         self.arms: dict[str, PanelArm] = {}
@@ -755,6 +757,7 @@ class StudioSession:
         # rather than off the model.
         self._set_scenery_visible(self.show_scenery)
         self.viewer.set_model(sim.model)
+        self._aim_home(sim)
         # After set_model, whose clear retires the previous scene's garments:
         # which deformables exist, their colours and their fabric thicknesses are
         # all properties of the scene just compiled.
@@ -774,6 +777,16 @@ class StudioSession:
         self._apply_stage()
         self.build_panels()
         self.build_gui()
+
+    def _aim_home(self, sim) -> None:
+        """Start a browser's view on the middle of ``sim``'s work surface: for a scene in another place than the last,
+        and only in the browsers yet to connect, so an open one keeps its view through a rebuild and the view a page
+        aimed outlasts a rebuild in the same place."""
+        cell = cell_of(sim)
+        name = cell.name if cell is not None else ""
+        if name != self._aimed_at:
+            aim_camera(self.viewer, *home_view(cell), move=False)
+            self._aimed_at = name
 
     def _bench(self, what: str = "this"):
         """The page's benchmark half, imported on first use.
@@ -1490,11 +1503,7 @@ class StudioSession:
     # -------------------------------------------------------------------- view
     def _scene_spec(self):
         """The registered place this task is staged in, or ``None``."""
-        request = getattr(self.env, "request", None) if self.env is not None else None
-        # ``scene`` on a TaskSpec, ``cell`` on a BuildRequest: the same fact
-        # under the two names the rename left, and a page shows either.
-        name = getattr(request, "scene", "") or getattr(request, "cell", "")
-        return get_cell(name) if name else None
+        return cell_of(self.env) if self.env is not None else None
 
     def _scenery_shapes(self) -> np.ndarray:
         """Every shape belonging to the scene's own furniture.
@@ -1672,6 +1681,12 @@ class StudioSession:
         self._next_frame = time.perf_counter()
         self._rate_frames = 0
         self._rate_window = time.perf_counter()
+
+    def aim_camera(self, eye: Any, look_at: Any) -> None:
+        """Put the page's camera at ``eye``, looking at ``look_at``, world frame: in every browser, open or yet to
+        connect, until a scene in another place goes into the page. Named to match
+        :meth:`robosimstudio.Viewer.aim_camera`; the page opens on the middle of the work surface."""
+        aim_camera(self.viewer, eye, look_at)
 
     @property
     def scene(self) -> Any:
