@@ -128,15 +128,18 @@ _EXPORTS: dict[str, str] = {
     # Saying what it is.
     "ActuationSpec": "robosimstudio.specs",
     "ArmSpec": "robosimstudio.specs",
+    "ArticulatedSpec": "robosimstudio.specs",
     "AssetSpec": "robosimstudio.specs",
     "CameraSpec": "robosimstudio.specs",
     "CellSpec": "robosimstudio.specs",
     "EmbodimentSpec": "robosimstudio.specs",
+    "JointSpec": "robosimstudio.specs",
     "ObjectSpec": "robosimstudio.specs",
     "RegionSpec": "robosimstudio.specs",
     "ShapeSpec": "robosimstudio.specs.asset",
     "StaticSpec": "robosimstudio.specs",
     # Constructors, each beside the domain it describes.
+    "articulated": "robosimstudio.domains.articulated",
     "body": "robosimstudio.domains.rigid",
     "box": "robosimstudio.domains.rigid",
     "capsule": "robosimstudio.domains.rigid",

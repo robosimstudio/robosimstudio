@@ -26,6 +26,6 @@ checkable within a band. Pure functions of explicit inputs are checkable exactly
 
 from __future__ import annotations
 
-from . import coverage, motion, regions
+from . import coverage, joints, motion, regions
 
-__all__ = ["coverage", "motion", "regions"]
+__all__ = ["coverage", "joints", "motion", "regions"]

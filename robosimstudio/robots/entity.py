@@ -337,11 +337,14 @@ class EntityEmbodiment(Entity):
                     **({} if mount is None else {"xform": mount}),
                 )
             elif path.suffix.lower() == ".urdf":
+                joints_before = builder.joint_count
                 builder.add_urdf(
                     source,
                     scale=self.spec.asset.scale,
                     floating=False,
-                    collapse_fixed_joints=self.spec.collapse_fixed_joints,
+                    # Collapsed below, folding only this import's fixed joints:
+                    # the importer's own flag folds the whole builder.
+                    collapse_fixed_joints=False,
                     enable_self_collisions=self.spec.import_self_collisions,
                     # The URDF's own <inertial> tags, not a recomputation from
                     # geometry. A benchmark's robot is characterised by the
@@ -358,6 +361,10 @@ class EntityEmbodiment(Entity):
                     joint_damping_mode="drive",
                     **({} if mount is None else {"xform": mount}),
                 )
+                if self.spec.collapse_fixed_joints:
+                    from robosimstudio.scene.build.imports import collapse_own_fixed_joints
+
+                    collapse_own_fixed_joints(builder, joints_before)
             else:
                 raise ValueError(f"embodiment {self.spec.name!r}: unsupported asset {path.suffix!r}")
         finally:

@@ -30,3 +30,18 @@ def _articulated_in_region(position: np.ndarray, region: dict, *, origin=(0.0, 0
 
 handler("height", kinds=("",), substrates=("articulated",), summary="World z of a jointed body.")(body_height)
 handler("speed", kinds=("",), substrates=("articulated",), summary="Linear speed of a jointed body.")(linear_speed)
+
+
+@handler(
+    "opening",
+    kinds=("joint",),
+    substrates=("articulated",),
+    summary="A joint's coordinate as a fraction of its limits, read off its bodies.",
+)
+def _joint_opening(joint: dict) -> dict:
+    lower, upper = float(joint["lower"]), float(joint["upper"])
+    span = upper - lower
+    if not np.isfinite(span) or span <= 0.0:
+        raise ValueError(f"joint {joint.get('name', '?')!r} has no finite travel ({lower}, {upper}) to open along")
+    coordinate = float(joint["coordinate"])
+    return {"fraction": (coordinate - lower) / span, "coordinate": coordinate}

@@ -21,8 +21,10 @@ to state what the label said.
 from __future__ import annotations
 
 import os
+import re
 import tempfile
 import xml.etree.ElementTree as ET
+from collections.abc import Iterable
 from pathlib import Path
 from typing import Any
 
@@ -33,16 +35,304 @@ from robosimstudio.core.builder import rekey_custom_attributes
 __all__ = [
     "add_mjcf_collapsed",
     "add_usd_stage",
+    "all_joints_fixed",
+    "articulate",
     "clear_texture_tints",
+    "collapse_own_fixed_joints",
+    "collapsed_body",
+    "draw_material_subsets",
     "expose_declared_colliders",
     "is_textured",
     "is_transparent",
+    "open_session_stage",
+    "select_engine_variant",
+    "split_articulations",
     "strip_free_bodies",
     "texture_box_geoms",
 ]
 
 
-def expose_declared_colliders(source: str, *, verbose: bool = False) -> tuple[Any, dict[str, list[str]]]:
+def open_session_stage(source: str | Path) -> Any:
+    """Open a stage whose every edit lands on a throwaway session layer.
+
+    Opened with an explicit anonymous session layer, and that is not a detail.
+    ``Usd.Stage.Open(path)`` gives a stage with **no** session layer, so
+    ``SetEditTarget(GetSessionLayer())`` falls back to the *root* layer -- and
+    root layers are shared process-wide by Sdf's layer cache. Editing there
+    mutates the checked-in asset for every stage opened afterwards (measured:
+    a second call found 0 instanceable prims because the first had already
+    cleared them, and the root layer came back ``dirty``). Nothing writes it to
+    disk, but a scene built later in the same process would silently get
+    different collision geometry.
+
+    Raises:
+        ValueError: If the stage cannot be opened, or USD will not take the
+            session layer as the edit target.
+    """
+    from pxr import Sdf, Usd
+
+    source = str(source)
+    root = Sdf.Layer.FindOrOpen(source)
+    if not root:
+        raise ValueError(f"could not open USD stage {source!r}")
+    session = Sdf.Layer.CreateAnonymous("robosimstudio_session")
+    stage = Usd.Stage.Open(root, session, Usd.Stage.LoadAll)
+    if not stage:
+        raise ValueError(f"could not open USD stage {source!r}")
+    stage.SetEditTarget(session)
+    if stage.GetEditTarget().GetLayer() != session:
+        raise ValueError(
+            f"USD refused the anonymous session layer for {source!r}; refusing to edit the root layer, "
+            "which is shared process-wide and would change every scene built after this one"
+        )
+    return stage
+
+
+#: The physics-engine variant sets a SimReady asset carries on its default prim.
+#: Each holds ``Enabled``/``Disabled``, and the asset ships with PhysX enabled.
+ENGINE_VARIANT_SETS = ("PhysX", "Newton", "MuJoCo")
+
+
+def select_engine_variant(stage: Any, engine: str = "Newton", *, verbose: bool = False) -> list[str]:
+    """Enable the stage's own variant for ``engine`` and disable the other engines'.
+
+    NVIDIA's SimReady assets carry one variant set per physics engine on the
+    default prim, and ship with ``PhysX = Enabled``. The PhysX variant asks for
+    an ``sdf`` collider approximation on every mesh; the Newton variant asks for
+    the authored mesh (``none``). A stage that declares a variant for the engine
+    it is being built for is saying which claims hold there, so this takes it --
+    the same rule as an object's USD import: the stage says which flavour it is.
+
+    A stage with no variant set named ``engine`` is not touched. Edits go to the
+    stage's edit target, which :func:`open_session_stage` makes a throwaway layer.
+
+    Returns:
+        ``"<set>=<selection>"`` for each selection changed.
+    """
+    prim = stage.GetDefaultPrim()
+    if not prim:
+        return []
+    sets = prim.GetVariantSets()
+    if engine not in sets.GetNames():
+        return []
+    changed = []
+    for name in sets.GetNames():
+        if name not in ENGINE_VARIANT_SETS:
+            continue
+        want = "Enabled" if name == engine else "Disabled"
+        variant_set = sets.GetVariantSet(name)
+        if want not in variant_set.GetVariantNames() or variant_set.GetVariantSelection() == want:
+            continue
+        variant_set.SetVariantSelection(want)
+        changed.append(f"{name}={want}")
+        if verbose:
+            print(f"[usd] variant {name} = {want}")
+    return changed
+
+
+def articulate(stage: Any, *, verbose: bool = False) -> list[str]:
+    """Give a stage whose joints belong to no articulation one root, on its default prim.
+
+    ``add_usd`` gathers joints into articulations by ``PhysicsArticulationRootAPI``;
+    a joint under no root is parsed and then left out of every articulation, and
+    ``finalize`` refuses the model ("joint(s) not belonging to any
+    articulation"). PhysX builds such a stage as loose maximal-coordinate joints,
+    so the export is valid for Isaac and unbuildable here. 854 of the 969
+    multi-body SimReady assets are in this state: a bottle and its cap held by a
+    fixed joint, a file cabinet's ten drawers and doors.
+
+    One root on the default prim makes the whole stage one articulation, which is
+    what an object asset is. A stage that already declares a root anywhere is
+    left alone -- it has said where its articulations are -- and so is one whose
+    joints are all disabled or excluded from articulation.
+
+    Returns:
+        The path the root was applied to, or nothing.
+    """
+    from pxr import Usd, UsdPhysics
+
+    prims = list(Usd.PrimRange(stage.GetPseudoRoot(), Usd.TraverseInstanceProxies()))
+    if any(prim.HasAPI(UsdPhysics.ArticulationRootAPI) for prim in prims):
+        return []
+    jointed = False
+    for prim in prims:
+        if not prim.IsA(UsdPhysics.Joint):
+            continue
+        joint = UsdPhysics.Joint(prim)
+        if joint.GetJointEnabledAttr().Get() is False or joint.GetExcludeFromArticulationAttr().Get():
+            continue
+        jointed = True
+        break
+    root = stage.GetDefaultPrim()
+    if not jointed or not root:
+        return []
+    UsdPhysics.ArticulationRootAPI.Apply(root)
+    if verbose:
+        print(f"[usd] applied ArticulationRootAPI to {root.GetPath()}")
+    return [str(root.GetPath())]
+
+
+def split_articulations(stage: Any, *, fix_one_tree: bool = False, verbose: bool = False) -> dict[str, list[str]]:
+    """Make each articulation the stage declares a tree Newton can build.
+
+    Newton's importer builds an articulation as one tree hanging from one root,
+    and refuses anything else ("Multiple roots found", "contains a cycle"). PhysX
+    builds both, so SimReady ships both:
+
+    ``a loop``
+        A pair of pliers or a four-bar linkage. The joint that closes each loop
+        is excluded from articulation; Newton then adds it after the tree as a
+        joint of no articulation, which MuJoCo enforces as an equality.
+    ``several trees under one root``
+        A storage box whose lid has no hinge joint, a tray and its separate cover.
+        The one root is replaced by a root on each tree's root body, so each tree
+        is its own articulation.
+
+    With ``fix_one_tree`` and several trees, none jointed to the world, the
+    heaviest is named, for the caller to import fixed and the rest free (a jar
+    bolted down, its lid loose): :func:`add_usd_stage` does that in two imports,
+    since ``add_usd(floating=...)`` holds for every tree at once. A weld authored
+    on the stage would not do: Newton leaves a fixed joint to a lone body out of
+    every articulation.
+
+    Every edit is on the stage's edit target; open it with
+    :func:`open_session_stage`.
+
+    Returns:
+        The paths edited, under ``"loop_joints_excluded"`` and
+        ``"articulation_roots_split"``, and the bodies of the tree to fix under
+        ``"fixed_tree"``.
+    """
+    from pxr import Sdf, Usd, UsdPhysics
+
+    changed: dict[str, list[str]] = {"loop_joints_excluded": [], "articulation_roots_split": [], "fixed_tree": []}
+    prims = list(Usd.PrimRange(stage.GetPseudoRoot(), Usd.TraverseInstanceProxies()))
+    bodies = [str(p.GetPath()) for p in prims if p.HasAPI(UsdPhysics.RigidBodyAPI)]
+    if not bodies:
+        return changed
+    is_body = set(bodies)
+
+    def owner(targets) -> str:
+        # A joint names a body or anything under it (SimReady names the mesh); no body is the world.
+        path = Sdf.Path(targets[0]) if targets else Sdf.Path.emptyPath
+        while not path.isEmpty and path != Sdf.Path.absoluteRootPath:
+            if str(path) in is_body:
+                return str(path)
+            path = path.GetParentPath()
+        return ""
+
+    joints = []
+    for prim in prims:
+        if not prim.IsA(UsdPhysics.Joint):
+            continue
+        joint = UsdPhysics.Joint(prim)
+        if joint.GetJointEnabledAttr().Get() is False or joint.GetExcludeFromArticulationAttr().Get():
+            continue
+        parent, child = owner(joint.GetBody0Rel().GetTargets()), owner(joint.GetBody1Rel().GetTargets())
+        if parent or child:
+            joints.append((prim, parent, child))
+
+    group = {b: b for b in bodies}
+    anchored: set[str] = set()
+
+    def find(b: str) -> str:
+        while group[b] != b:
+            group[b] = group[group[b]]
+            b = group[b]
+        return b
+
+    # A body that two joints both call their child is where a loop closes, so
+    # those joints go last and the second of them is the one excluded: what
+    # remains has one parent per body, which is the tree the importer walks.
+    incoming: dict[str, int] = {}
+    for _, _, child in joints:
+        incoming[child] = incoming.get(child, 0) + 1
+    tree_edges = []
+    joined: set[tuple[str, str]] = set()
+    for prim, parent, child in sorted(joints, key=lambda j: incoming.get(j[2], 0) > 1):
+        # A second joint between two bodies already joined is no loop: an MJCF-style
+        # humanoid states a shoulder as three hinges on one pair, which the
+        # importer merges into one joint of three DOFs.
+        if (parent, child) in joined or (child, parent) in joined:
+            continue
+        joined.add((parent, child))
+        ends = [find(b) for b in (parent, child) if b]
+        world = not (parent and child)
+        closes = (ends[0] in anchored) if world else (ends[0] == ends[1] or {ends[0], ends[1]} <= anchored)
+        if closes and not prim.IsInstanceProxy():
+            UsdPhysics.Joint(prim).CreateExcludeFromArticulationAttr(True)
+            changed["loop_joints_excluded"].append(str(prim.GetPath()))
+            continue
+        tree_edges.append((parent, child))
+        if world:
+            anchored.add(ends[0])
+        else:
+            group[ends[0]] = ends[1]
+            if ends[0] in anchored:
+                anchored.add(ends[1])
+
+    trees: dict[str, list[str]] = {}
+    for b in bodies:
+        trees.setdefault(find(b), []).append(b)
+    children = {child for parent, child in tree_edges if parent}
+
+    def tree_root(tree: str) -> str:
+        members = trees[tree]
+        jointed_to_world = [child or parent for parent, child in tree_edges if not (parent and child)]
+        return next(
+            (b for b in members if b in jointed_to_world), next((b for b in members if b not in children), members[0])
+        )
+
+    def apply_roots(over: list[str]) -> None:
+        for tree in over:
+            root = stage.GetPrimAtPath(tree_root(tree))
+            if not root.HasAPI(UsdPhysics.ArticulationRootAPI):
+                UsdPhysics.ArticulationRootAPI.Apply(root)
+                changed["articulation_roots_split"].append(str(root.GetPath()))
+
+    for prim in prims:
+        if not prim.HasAPI(UsdPhysics.ArticulationRootAPI) or prim.HasAPI(UsdPhysics.RigidBodyAPI):
+            continue
+        under = prim.GetPath()
+        covered = sorted({find(b) for b in bodies if Sdf.Path(b).HasPrefix(under)}, key=bodies.index)
+        if len(covered) > 1 and not prim.IsInstanceProxy():
+            prim.RemoveAPI(UsdPhysics.ArticulationRootAPI)
+            apply_roots(covered)
+
+    free = [tree for tree in sorted(trees, key=bodies.index) if tree not in anchored]
+    if fix_one_tree and len(trees) > 1 and len(free) == len(trees):
+
+        def mass(tree: str) -> float:
+            return sum(
+                float(UsdPhysics.MassAPI(stage.GetPrimAtPath(b)).GetMassAttr().Get() or 0.0) for b in trees[tree]
+            )
+
+        apply_roots(free)
+        changed["fixed_tree"] = list(trees[max(free, key=lambda tree: (mass(tree), len(trees[tree])))])
+    if verbose:
+        for kind, paths in changed.items():
+            for path in paths:
+                print(f"[usd] {kind}: {path}")
+    return changed
+
+
+def all_joints_fixed(stage: Any) -> bool:
+    """Whether the stage has joints and every enabled one is a fixed joint.
+
+    Such a stage is one object in several parts -- a bottle and its cap, a
+    socket and its faceplate -- and collapses to a single body.
+    """
+    from pxr import Usd, UsdPhysics
+
+    kinds = {
+        prim.GetTypeName()
+        for prim in Usd.PrimRange(stage.GetPseudoRoot(), Usd.TraverseInstanceProxies())
+        if prim.IsA(UsdPhysics.Joint) and UsdPhysics.Joint(prim).GetJointEnabledAttr().Get() is not False
+    }
+    return bool(kinds) and kinds == {"PhysicsFixedJoint"}
+
+
+def expose_declared_colliders(source: Any, *, verbose: bool = False) -> tuple[Any, dict[str, list[str]]]:
     """Open a stage with the colliders it declares actually reachable by ``add_usd``.
 
     **An Isaac export can declare a collider in two ways ``add_usd`` cannot
@@ -82,7 +372,8 @@ def expose_declared_colliders(source: str, *, verbose: bool = False) -> tuple[An
     and render-only instances (the table's ``visuals``) keep their instancing.
 
     Args:
-        source: Path to the USD stage.
+        source: Path to the USD stage, or a stage :func:`open_session_stage`
+            opened, to edit further.
         verbose: Print each prim changed.
 
     Returns:
@@ -92,30 +383,9 @@ def expose_declared_colliders(source: str, *, verbose: bool = False) -> tuple[An
     Raises:
         ValueError: If the stage cannot be opened.
     """
-    from pxr import Sdf, Usd, UsdGeom, UsdPhysics
+    from pxr import Usd, UsdGeom, UsdPhysics
 
-    # Opened with an explicit anonymous session layer, and that is not a detail.
-    # ``Usd.Stage.Open(path)`` gives a stage with **no** session layer, so
-    # ``SetEditTarget(GetSessionLayer())`` falls back to the *root* layer -- and
-    # root layers are shared process-wide by Sdf's layer cache. Editing there
-    # mutates the checked-in asset for every stage opened afterwards (measured:
-    # a second call found 0 instanceable prims because the first had already
-    # cleared them, and the root layer came back ``dirty``). Nothing writes it to
-    # disk, but a scene built later in the same process would silently get
-    # different collision geometry.
-    root = Sdf.Layer.FindOrOpen(source)
-    if not root:
-        raise ValueError(f"could not open USD stage {source!r}")
-    session = Sdf.Layer.CreateAnonymous("robosimstudio_expose_declared_colliders")
-    stage = Usd.Stage.Open(root, session, Usd.Stage.LoadAll)
-    if not stage:
-        raise ValueError(f"could not open USD stage {source!r}")
-    stage.SetEditTarget(session)
-    if stage.GetEditTarget().GetLayer() != session:
-        raise ValueError(
-            f"USD refused the anonymous session layer for {source!r}; refusing to edit the root layer, "
-            "which is shared process-wide and would change every scene built after this one"
-        )
+    stage = source if isinstance(source, Usd.Stage) else open_session_stage(source)
 
     # Collected before anything is edited: clearing `instanceable` restructures
     # the composed scene graph, and mutating it mid-traversal skips prims.
@@ -150,16 +420,20 @@ def expose_declared_colliders(source: str, *, verbose: bool = False) -> tuple[An
     return stage, {"deinstanced": deinstanced, "collision_applied": applied}
 
 
-#: Module-local alias, because ``add_usd_stage`` takes a keyword of the same name.
+#: Module-local aliases, because ``add_usd_stage`` takes keywords of the same names.
 _expose_declared_colliders = expose_declared_colliders
+_articulate = articulate
 
 
 def add_usd_stage(
     builder: newton.ModelBuilder,
-    source: str,
+    source: str | Path,
     *,
-    collapse_fixed_joints: bool = False,
+    collapse_fixed_joints: bool | str = False,
     expose_declared_colliders: bool = False,
+    engine_variant: str | None = "Newton",
+    articulate: bool = True,
+    material_subsets: bool = False,
     verbose: bool = False,
     **kwargs: Any,
 ) -> dict[str, Any]:
@@ -170,34 +444,220 @@ def add_usd_stage(
     there is nothing to work around -- but the re-key still has to happen, and a
     caller should not have to know that.
 
+    The stage is opened on a session layer and given the fixups below before the
+    import; when none of them changes anything the path itself is imported, as
+    before they existed.
+
     Args:
         builder: Builder to import into.
         source: Path to the USD stage.
         collapse_fixed_joints: Fold the stage's fixed joints. Worth doing on an
             Isaac export, whose robot carries a wrist flange and a gripper base
             welded on: keeping them hands the solver zero-DOF articulations to
-            maintain for nothing.
+            maintain for nothing. ``"if_all_fixed"`` folds them only when every
+            joint is fixed, so a multi-part prop becomes one body and a jointed
+            one keeps its parts.
         expose_declared_colliders: Make the stage's declared colliders reachable
             by the importer -- colliders inside instance prototypes, and
             ``CollisionAPI`` declared on an Xform rather than on the mesh under
             it, are both otherwise dropped silently. See
             :func:`expose_declared_colliders` for what that costs on a gripper.
+        engine_variant: The physics-engine variant to select where the stage
+            offers one (:func:`select_engine_variant`); ``None`` keeps the
+            stage's own selection.
+        articulate: Give joints that belong to no articulation one root
+            (:func:`articulate`), and make each articulation a tree
+            (:func:`split_articulations`); with ``floating=False`` and an asset
+            in several separate trees, the heaviest is the one fixed.
+        material_subsets: Draw a mesh collider bound to several materials in
+            one visual shape per material (:func:`draw_material_subsets`).
         verbose: Forwarded to the import and the re-key.
         **kwargs: Forwarded to :meth:`newton.ModelBuilder.add_usd`.
 
     Returns:
         ``parse_usd``'s own result dict.
+
+    Raises:
+        ValueError: If the stage's jointed bodies form more than one tree under
+            one articulation root, or close a loop, naming the stage.
     """
+    stage = open_session_stage(source)
+    changed: dict[str, list[str]] = {}
+    if engine_variant:
+        changed["variant"] = select_engine_variant(stage, engine_variant, verbose=verbose)
+    if articulate:
+        changed["articulation_root"] = _articulate(stage, verbose=verbose)
+        changed.update(split_articulations(stage, fix_one_tree=kwargs.get("floating") is False, verbose=verbose))
+    fixed_tree = changed.pop("fixed_tree", [])
+    # Folded after the import, keeping every joint already in the builder:
+    # ``add_usd(collapse_fixed_joints=True)`` collapses the WHOLE builder, so a
+    # prop imported after a fixed-base cabinet folded the cabinet into the world
+    # and renumbered every body built before it.
+    if collapse_fixed_joints == "if_all_fixed":
+        fold_own = all_joints_fixed(stage)
+    else:
+        fold_own = bool(collapse_fixed_joints)
+    joints_before, shapes_before = builder.joint_count, builder.shape_count
     if expose_declared_colliders:
-        source, changed = _expose_declared_colliders(source, verbose=verbose)
+        _, exposed = _expose_declared_colliders(stage, verbose=verbose)
+        changed.update(exposed)
         if verbose:
-            counts = ", ".join(f"{len(v)} {k}" for k, v in changed.items())
+            counts = ", ".join(f"{len(v)} {k}" for k, v in exposed.items())
             print(f"[usd] exposed declared colliders: {counts}")
-    results = builder.add_usd(source, collapse_fixed_joints=collapse_fixed_joints, verbose=verbose, **kwargs)
-    collapse = (results or {}).get("collapse_results")
-    if collapse:
-        rekey_custom_attributes(builder, collapse, verbose=verbose)
-    return results or {}
+    target = stage if any(changed.values()) else str(source)
+    try:
+        if fixed_tree:
+            results = _add_usd_one_tree_fixed(builder, stage, fixed_tree, verbose=verbose, **kwargs)
+        else:
+            results = builder.add_usd(target, collapse_fixed_joints=False, verbose=verbose, **kwargs)
+    except ValueError as error:
+        if "Multiple roots" in str(error):
+            raise ValueError(
+                f"{source}: the stage's jointed bodies form more than one tree under one articulation root -- "
+                "some part is joined to nothing (an authoring gap in the asset, e.g. a lid with no hinge joint)"
+            ) from error
+        if "contains a cycle" in str(error):
+            raise ValueError(
+                f"{source}: the stage's joints close a loop (a pair of pliers, a four-bar linkage), and an "
+                "articulation is a tree; Newton builds no loop-closing joint"
+            ) from error
+        raise
+    results = dict(results or {})
+    if fold_own:
+        collapse = collapse_own_fixed_joints(builder, joints_before, verbose=verbose)
+        results["path_body_map"] = {
+            path: collapsed_body(collapse, int(body)) for path, body in (results.get("path_body_map") or {}).items()
+        }
+        results["collapse_results"] = collapse
+    if material_subsets:
+        results["material_subset_shapes"] = draw_material_subsets(
+            builder, stage, range(shapes_before, builder.shape_count)
+        )
+    return results
+
+
+def _add_usd_one_tree_fixed(builder: newton.ModelBuilder, stage: Any, fixed: list[str], **kwargs: Any) -> dict:
+    """Import ``stage`` with the bodies in ``fixed`` on a fixed base and every other body free.
+
+    Two imports of the one stage, each ignoring what the other takes; geometry on
+    no body comes with the first.
+    """
+    from pxr import Sdf, Usd, UsdGeom, UsdPhysics
+
+    prims = list(Usd.PrimRange(stage.GetPseudoRoot(), Usd.TraverseInstanceProxies()))
+    bodies = [str(p.GetPath()) for p in prims if p.HasAPI(UsdPhysics.RigidBodyAPI)]
+    unbodied = [
+        str(p.GetPath())
+        for p in prims
+        if p.IsA(UsdGeom.Gprim) and not any(p.GetPath().HasPrefix(Sdf.Path(b)) for b in bodies)
+    ]
+
+    def under(paths: list[str]) -> list[str]:
+        # With a ".*", so the importer reads it as a pattern rather than an Sdf path.
+        return [re.escape(path) + "(/.*)?$" for path in paths]
+
+    ignored = list(kwargs.pop("ignore_paths", None) or [])
+    kwargs.pop("floating", None)
+    results = dict(
+        builder.add_usd(
+            stage, floating=False, ignore_paths=ignored + under([b for b in bodies if b not in fixed]), **kwargs
+        )
+        or {}
+    )
+    rest = builder.add_usd(stage, floating=True, ignore_paths=ignored + under(fixed + unbodied), **kwargs) or {}
+    for key, value in rest.items():
+        if isinstance(value, dict) and isinstance(results.get(key), dict):
+            results[key] = {**results[key], **value}
+    return results
+
+
+def draw_material_subsets(builder: newton.ModelBuilder, stage: Any, shapes: Iterable[int]) -> list[int]:
+    """Draw each mesh bound to several materials in one visual shape per material.
+
+    Newton splits a *visual* mesh into one shape per bound ``GeomSubset``, but a
+    mesh that is also a collider is drawn as one shape with one material -- the
+    collider itself when it collides as the mesh, or the ``_visual`` copy kept
+    beside an approximated one -- so a kettle with a metal body and a wooden
+    handle in one mesh renders all metal. SimReady makes every mesh its own
+    collider. Here each such drawn shape is replaced, on its body, by the visual
+    path's per-subset meshes; hidden, it still collides if it did.
+
+    Args:
+        builder: The builder, after the import.
+        stage: The stage the import read.
+        shapes: The shapes the import added.
+
+    Returns:
+        The shapes added.
+    """
+    from newton._src.usd._visuals import _UsdVisuals
+    from pxr import UsdGeom
+
+    from robosimstudio.scene.build.bodies import preserve_body_inertia
+
+    visuals = _UsdVisuals(stage)
+    visible = int(newton.ShapeFlags.VISIBLE)
+    cfg = builder.default_shape_cfg.copy()
+    cfg.density = 0.0
+    cfg.has_shape_collision = False
+    cfg.has_particle_collision = False
+    added: list[int] = []
+    for shape in list(shapes):
+        if builder.shape_type[shape] != newton.GeoType.MESH or not builder.shape_flags[shape] & visible:
+            continue
+        label = str(builder.shape_label[shape])
+        path = label.removesuffix("_visual")
+        prim = stage.GetPrimAtPath(path) if path.startswith("/") else None
+        submeshes = visuals.get_visual_material_subset_meshes(prim) if prim and prim.IsA(UsdGeom.Mesh) else []
+        if len(submeshes) < 2:
+            continue
+        body = int(builder.shape_body[shape])
+        with preserve_body_inertia(builder, body):
+            for subset, mesh in submeshes:
+                added.append(
+                    builder.add_shape_mesh(
+                        body,
+                        xform=builder.shape_transform[shape],
+                        scale=builder.shape_scale[shape],
+                        mesh=mesh,
+                        cfg=cfg,
+                        color=None,
+                        label=subset,
+                    )
+                )
+        builder.shape_flags[shape] = int(builder.shape_flags[shape]) & ~visible
+    return added
+
+
+def collapse_own_fixed_joints(builder: newton.ModelBuilder, joints_before: int, *, verbose: bool = False) -> dict:
+    """Fold the fixed joints added since ``joints_before``, and re-key the custom attributes.
+
+    ``builder.collapse_fixed_joints()`` with no ``joints_to_keep`` folds every
+    fixed joint in the builder, including the world weld of anything imported
+    earlier: its body is merged into the world and every later body renumbered,
+    while the entity that built it keeps the old index. Each importer's own
+    ``collapse_fixed_joints=True`` is that whole-builder call.
+
+    Args:
+        builder: The builder, right after an import.
+        joints_before: ``builder.joint_count`` before that import.
+        verbose: Forwarded to the collapse and the re-key.
+
+    Returns:
+        The collapse's own result dict.
+    """
+    results = builder.collapse_fixed_joints(verbose=verbose, joints_to_keep=list(range(joints_before)))
+    rekey_custom_attributes(builder, results, verbose=verbose)
+    return results
+
+
+def collapsed_body(results: dict, body: int) -> int:
+    """Where ``body`` went in a collapse: its own new index, or the one it merged into."""
+    merged = results.get("body_merged_parent") or {}
+    remap = results.get("body_remap") or {}
+    while body in merged:
+        body = int(merged[body])
+    return int(remap.get(body, body))
 
 
 def clear_texture_tints(builder: newton.ModelBuilder, shapes=None) -> int:
@@ -568,7 +1028,8 @@ def add_mjcf_collapsed(
 
     ``add_mjcf(collapse_fixed_joints=True)`` throws away the remap tables the
     collapse returns, so the re-key cannot be applied to its result. Importing
-    uncollapsed and collapsing explicitly keeps them.
+    uncollapsed and collapsing explicitly keeps them, and folds only this
+    import's joints (:func:`collapse_own_fixed_joints`).
 
     Args:
         builder: Builder to import into.
@@ -583,10 +1044,9 @@ def add_mjcf_collapsed(
     """
     if "collapse_fixed_joints" in kwargs:
         raise ValueError("add_mjcf_collapsed collapses itself; drop the collapse_fixed_joints argument")
+    joints_before = builder.joint_count
     builder.add_mjcf(source, verbose=verbose, collapse_fixed_joints=False, **kwargs)
-    results = builder.collapse_fixed_joints(verbose=verbose)
-    rekey_custom_attributes(builder, results, verbose=verbose)
-    return results
+    return collapse_own_fixed_joints(builder, joints_before, verbose=verbose)
 
 
 def strip_free_bodies(scene_xml: str | Path) -> str:

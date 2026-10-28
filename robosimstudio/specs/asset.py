@@ -605,6 +605,96 @@ class StaticSpec:
 
 
 @dataclass(frozen=True, kw_only=True)
+class JointSpec:
+    """One named joint of an :class:`ArticulatedSpec`: where it starts, and how it is driven.
+
+    Every field but :attr:`name` is ``None`` by default, and ``None`` keeps what
+    the asset authored. That is why this is not a :class:`JointDriveSpec`, whose
+    defaults are numbers: a cabinet's drawer arrives with its travel limits and
+    its drive gains in the file, and a spec that only wanted to start the drawer
+    open must not also zero its limits.
+
+    Attributes:
+        name: The joint's name, as the entity's handle lists it (SimReady's
+            ``joint_drawer_01_joint_00`` is ``drawer_01``).
+        q: Start coordinate, in the joint's own units (m for a prismatic joint,
+            rad for a revolute one). An episode's ``joint_q`` overrides it.
+        damping: Passive joint damping.
+        friction: Static joint friction.
+        armature: Added rotor inertia.
+        target_ke: Drive stiffness towards the target coordinate. Setting it
+            drives the joint, from :attr:`q` unless a controller writes a target.
+        target_kd: Drive damping.
+    """
+
+    name: str
+    q: float | None = None
+    damping: float | None = None
+    friction: float | None = None
+    armature: float | None = None
+    target_ke: float | None = None
+    target_kd: float | None = None
+
+
+@dataclass(frozen=True, kw_only=True)
+class ArticulatedSpec:
+    """A jointed object: a cabinet with drawers, a box with a hinged lid, a door.
+
+    Its parts are the asset's rigid bodies and its joints the asset's own, so the
+    asset is a USD stage that declares them -- NVIDIA's SimReady assets are the
+    case it was written for. A stage whose joints belong to no articulation is
+    given one root on import (:func:`~robosimstudio.scene.build.imports.articulate`).
+
+    Attributes:
+        name: Entity name.
+        category: What it is, for goals written against categories. The name
+            less a trailing ``_<digits>`` when empty, as for :class:`ObjectSpec`.
+        asset: The USD stage.
+        pose: Position of the asset's origin, in the scene's work-surface frame
+            unless :attr:`world_xform`. SimReady assets put the origin at the base.
+        quat: Orientation, xyzw.
+        world_xform: :attr:`pose` is world coordinates; see :class:`ObjectSpec`.
+        fixed_base: Bolt the root part to the world (a cabinet, a door frame).
+            ``False`` leaves the root on a free joint, so the whole thing can be
+            carried (a box with a hinged lid). An asset in separate parts that no
+            joint holds together -- a jar and its lid, a rack and its boxes -- is
+            one entity with each part its own articulation: ``True`` bolts the
+            heaviest and frees the rest, ``False`` frees them all.
+        joints: Per-joint start coordinates and drive overrides, by name.
+        self_collide: Let the parts collide with each other. Off by default: a
+            drawer sits inside its cabinet's collider, and colliding the two
+            jams it on the first step.
+        color: Display RGB for every part, or ``None`` for the asset's own.
+        finish: How the parts reflect light, or ``None``; see :class:`ObjectSpec`.
+    """
+
+    sim: SimRequirements | None = None
+    """What this thing needs of physics, or ``None`` for the entity class's default."""
+
+    stage: ClassVar[str] = "objects"
+    name: str
+    category: str = ""
+    asset: AssetSpec
+    pose: Vec3 = (0.0, 0.0, 0.0)
+    quat: Quat = (0.0, 0.0, 0.0, 1.0)
+    world_xform: bool = False
+    fixed_base: bool = True
+    joints: tuple[JointSpec, ...] = ()
+    self_collide: bool = False
+    color: Vec3 | None = None
+    finish: Finish | None = None
+    entity: str = "articulated_object"
+
+    def __post_init__(self) -> None:
+        if not self.category:
+            head, _, tail = self.name.rpartition("_")
+            object.__setattr__(self, "category", head if head and tail.isdigit() else self.name)
+        names = [joint.name for joint in self.joints]
+        if len(set(names)) != len(names):
+            raise ValueError(f"articulated {self.name!r}: a joint is named twice in {names}")
+
+
+@dataclass(frozen=True, kw_only=True)
 class RegionSpec:
     """A goal region, in the frame of whatever it is attached to.
 

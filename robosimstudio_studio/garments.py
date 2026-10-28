@@ -622,6 +622,24 @@ def scene_repaints_live(scene) -> bool:
     return any(bool(getattr(entity, "recolors_live", False)) for entity in entities)
 
 
+def authored_uvs(data: dict) -> np.ndarray | None:
+    """A logged mesh's own UVs, when it came with its own texture to put on them; else ``None``.
+
+    An imported asset -- a USD stage's bound albedo, a glTF's base colour --
+    arrives with a texture and the UVs it was painted against, and its finish
+    inherits that texture. Box-projecting over those UVs smears the image across
+    the mesh as if it were a tile. A palette finish's tile on a mesh that brought
+    no texture keeps the box projection, which is what a tile wants.
+    """
+    uvs = data.get("uvs")
+    if data.get("texture") is None or uvs is None:
+        return None
+    uvs = np.asarray(uvs, dtype=np.float32)
+    if uvs.ndim != 2 or uvs.shape[1] != 2 or len(uvs) != len(data["points"]):
+        return None
+    return uvs
+
+
 class ViewerStudio(newton.viewer.ViewerViser):
     """``ViewerViser`` that draws declared garments as garments.
 
@@ -1058,8 +1076,10 @@ class ViewerStudio(newton.viewer.ViewerViser):
         points, faces = data["points"], data["indices"]
         uvs = None
         if finish.texture:
-            points, faces = unweld(points, faces)
-            uvs = box_projected_uvs(points, faces)
+            uvs = authored_uvs(data)
+            if uvs is None:
+                points, faces = unweld(points, faces)
+                uvs = box_projected_uvs(points, faces)
         return glb_for(points, faces, color, finish, uvs=uvs, smooth=True)
 
     def _log_particles(self, state) -> None:

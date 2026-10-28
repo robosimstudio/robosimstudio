@@ -75,7 +75,7 @@ class Island:
 
     @property
     def is_robot(self) -> bool:
-        return any(get_domain(node.domain).role == "robot" for node in self.nodes)
+        return any("robot" in node.roles for node in self.nodes)
 
     @property
     def is_deformable(self) -> bool:

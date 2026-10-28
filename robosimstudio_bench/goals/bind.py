@@ -387,6 +387,31 @@ def _handle(snapshot: Snapshot, operand: Operand) -> str:
     return operand.name
 
 
+@reader(substrate="articulated", kind="joint", form="feature")
+def _articulated_joint(snapshot: Snapshot, operand: Operand) -> dict[str, Any]:
+    """One named joint of a jointed object: where it is and how far it may travel.
+
+    Read off where the joint's two bodies are (``JointHandle.coordinate_from_bodies``),
+    because a snapshot carries ``body_q`` and no joint coordinates.
+    """
+    if operand.feature is None:
+        raise BindError(f"{operand.ref} does not name a declared joint feature")
+    handle = snapshot.handles.entity(operand.name)
+    joints = getattr(handle, "joints", None)
+    if not joints:
+        raise BindError(f"{operand.ref} hangs off {operand.name!r}, whose handle names no joints")
+    name = str(operand.feature.payload.get("joint", operand.feature.name))
+    if name not in joints:
+        raise BindError(f"{operand.ref}: {operand.name!r} has no joint {name!r}; it has {sorted(joints)}")
+    joint = joints[name]
+    return {
+        "name": name,
+        "coordinate": joint.coordinate_from_bodies(np.asarray(snapshot.body_q)),
+        "lower": joint.lower,
+        "upper": joint.upper,
+    }
+
+
 @reader(substrate="articulated")
 def _articulated(snapshot: Snapshot, operand: Operand) -> np.ndarray:
     """A jointed body's own frame -- its root, not any of its parts."""

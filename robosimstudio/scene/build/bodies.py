@@ -9,11 +9,11 @@ Adding a shape to a body adds mass to it, and a stated mass is the source's:
 from __future__ import annotations
 
 import contextlib
-from collections.abc import Iterator
+from collections.abc import Iterable, Iterator
 
 import newton
 
-__all__ = ["preserve_body_inertia", "set_body_mass"]
+__all__ = ["approximate_imported_colliders", "preserve_body_inertia", "set_body_mass"]
 
 
 @contextlib.contextmanager
@@ -114,3 +114,30 @@ def set_body_mass(builder: newton.ModelBuilder, body: int, mass: float) -> float
         inverse = np.linalg.inv(square).reshape(-1)
     builder.body_inv_inertia[body] = type(builder.body_inv_inertia[body])(inverse)
     return before
+
+
+def approximate_imported_colliders(
+    builder: newton.ModelBuilder, shapes: Iterable[int], method: str, *, keep_visual: bool = False
+) -> None:
+    """Replace the mesh colliders among ``shapes`` with ``method``'s approximation, masses held.
+
+    For a stage that authors its masses: the approximation's shapes would
+    otherwise add their own mass on top (:func:`preserve_body_inertia`). A USD
+    stage asks for an approximation per collider (``physics:approximation``);
+    this is the caller's answer instead -- SimReady authors ``"none"`` on every
+    collider, a triangle mesh, which MuJoCo's own contacts collide as its convex
+    hull, so a crate on a shelf rack starts inside the shelf's hull. ``"coacd"``
+    keeps the shelf's concavity in convex pieces.
+    """
+    targets = [
+        s
+        for s in shapes
+        if builder.shape_type[s] == newton.GeoType.MESH
+        and (builder.shape_flags[s] & int(newton.ShapeFlags.COLLIDE_SHAPES))
+    ]
+    if not targets:
+        return
+    with contextlib.ExitStack() as held:
+        for body in sorted({int(builder.shape_body[s]) for s in targets}):
+            held.enter_context(preserve_body_inertia(builder, body))
+        builder.approximate_meshes(method=method, shape_indices=targets, keep_visual_shapes=keep_visual)

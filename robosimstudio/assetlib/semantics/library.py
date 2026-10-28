@@ -306,6 +306,22 @@ register_kind(
 )
 
 
+# ------------------------------------------------------------- jointed objects
+register_kind(
+    FeatureKind(
+        name="joint",
+        summary="One named joint of a jointed object -- a drawer's slide, a door's hinge.",
+        optional={"joint": "the joint's name in the entity's handle, when the feature is named otherwise"},
+        contracts=(
+            "read from where the joint's two bodies are, not from a joint coordinate a snapshot does not carry",
+            "an opening is a fraction of the joint's own travel, so a drawer and a door answer the same question",
+        ),
+        substrates=("articulated",),
+        provenance="SimReady's cabinets: ten named drawer and door joints per asset.",
+    )
+)
+
+
 KIND_NAMES: tuple[str, ...] = (
     "anchor",
     "axis",
@@ -314,6 +330,7 @@ KIND_NAMES: tuple[str, ...] = (
     "cavity",
     "face",
     "grasp_box",
+    "joint",
     "landmark",
     "loop",
     "panel",

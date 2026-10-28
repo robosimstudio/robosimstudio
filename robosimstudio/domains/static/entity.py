@@ -344,13 +344,12 @@ class EntityStatic(WeldedFixture, Entity):
             # branches below always see ``body == -1`` and the world xform.
             body, xform = self._shape_frame()
             if path.suffix.lower() in (".xml", ".mjcf"):
-                builder.add_mjcf(
-                    stripped or source,
-                    xform=xform,
-                    scale=self.spec.asset.scale,
-                    collapse_fixed_joints=self.spec.collapse_fixed_joints,
-                    verbose=False,
-                )
+                # Collapsed through the helper, which folds only this import's
+                # fixed joints; the importer's own flag folds the whole builder.
+                if self.spec.collapse_fixed_joints:
+                    add_mjcf_collapsed(builder, stripped or source, xform=xform, scale=self.spec.asset.scale)
+                else:
+                    builder.add_mjcf(stripped or source, xform=xform, scale=self.spec.asset.scale, verbose=False)
                 # The MJCF sibling of the USD fixups below: the importer binds a
                 # material's texture only to mesh geoms, so an arena that labels
                 # anything with a textured primitive arrives unable to state it.

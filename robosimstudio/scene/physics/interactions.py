@@ -204,8 +204,10 @@ def build_graph(
         # promotion survives and belongs here rather than there: a fixture the
         # *cell* owns is the work surface, which is a fact about the scene and
         # not about the kind of thing.
+        # An entity may say its own role: a jointed cabinet is in the articulated
+        # domain, whose role is the robot's, and is not the robot.
         info = get_domain(domain)
-        role = "surface" if info.world_fixed and name in scene_statics else info.role
+        role = "surface" if info.world_fixed and name in scene_statics else (getattr(entity, "role", "") or info.role)
         roles: set[str] = {role}
 
         node = Node(

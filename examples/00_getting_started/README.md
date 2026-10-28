@@ -95,7 +95,11 @@ Notes:
 - Every thing has a `name`. Names are unique in a scene, and `scene.add` raises
   on a duplicate.
 - The rigid constructors also take `mass`, `friction`, `color` and `quat`.
-- `rss.body` reads `.obj`, `.stl`, `.ply`, `.glb`, `.gltf` and `.dae` files.
+- `rss.body` reads `.obj`, `.stl`, `.ply`, `.glb`, `.gltf` and `.dae` files, and
+  USD stages (`.usd`, `.usda`, `.usdc`, `.usdz`; the `[usd]` extra). A USD prop
+  in several parts held by fixed joints is built as one body.
+- `rss.articulated` builds a jointed object (a cabinet, a door) from a USD stage;
+  see [Import a SimReady asset](../04_extending/README.md#import-a-simready-asset).
 - A scene holds one robot. A two-arm pair such as `yam_bimanual` is one robot.
 - A scene needs at least one thing that moves, or `build()` raises.
 

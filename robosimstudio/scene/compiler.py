@@ -671,17 +671,15 @@ def _build_base(
     # --- 1. scenery -------------------------------------------------------
     overrides = dict(binding.static_overrides)
     # In a replicated build the placeable statics -- the ones that take a
-    # kinematic body of their own -- build AFTER the robot (step 2b), and this
-    # is not a style choice. An embodiment imported with ``add_mjcf_collapsed``
-    # collapses the fixed joints of the WHOLE builder, and a fixture welded to
-    # the world by a fixed joint is exactly what that folds away: its body is
-    # merged into the world, every body after it is renumbered, and the entity
-    # goes on holding the index it was given -- which is now the robot's first
-    # link. Measured on a tool-hanging scene at two worlds: the
-    # pegboard's per-world placement moved ``left_link_1`` onto the pegboard.
-    # Nothing that imports after the robot collapses the builder, so a static
-    # built there keeps its body. The single-world build keeps the order it
-    # always had; a world-hung static owns no body for a collapse to take.
+    # kinematic body of their own -- build AFTER the robot (step 2b). That order
+    # was a guard: ``add_mjcf_collapsed`` used to collapse the fixed joints of
+    # the WHOLE builder, and a fixture welded to the world by a fixed joint is
+    # exactly what that folds away: its body merged into the world, every body
+    # after it renumbered, and the entity holding an index that was now the
+    # robot's first link (measured on a tool-hanging scene at two worlds: the
+    # pegboard's per-world placement moved ``left_link_1`` onto the pegboard).
+    # Every collapse now folds only its own import's joints
+    # (``collapse_own_fixed_joints``); the order stays, so body numbering does.
     deferred: list = []
     for declared in (s for s in ordered if build_stage(s) == "scenery"):
         # This pairing may import a different file for a static -- the stripped

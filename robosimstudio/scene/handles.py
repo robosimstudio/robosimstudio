@@ -29,7 +29,15 @@ import numpy as np
 from robosimstudio.core.render.finish import Finish
 from robosimstudio.solvers import ObbGrasp
 
-__all__ = ["ArmHandle", "DeformableHandle", "EntityHandle", "RegionHandle", "SceneHandles"]
+__all__ = [
+    "ArmHandle",
+    "ArticulatedHandle",
+    "DeformableHandle",
+    "EntityHandle",
+    "JointHandle",
+    "RegionHandle",
+    "SceneHandles",
+]
 
 
 @dataclass
@@ -87,6 +95,117 @@ class EntityHandle:
 
     def position(self, body_q: np.ndarray) -> np.ndarray:
         return self.pose(body_q)[:3]
+
+
+@dataclass
+class JointHandle:
+    """One named joint of an articulated object, and how to read where it is.
+
+    Implements :class:`~robosimstudio.assetlib.semantics.substrates.Jointed`.
+    Indices are the **template's**, like every handle's; a replicated build
+    reads one world through its views.
+
+    Attributes:
+        name: The joint's name in its entity (``drawer_01``).
+        joint: Index into the model's joints.
+        kind: ``"prismatic"`` or ``"revolute"``.
+        q_start: Its coordinate in ``joint_q``.
+        qd_start: Its DOF in ``joint_qd``.
+        parent: Parent body, -1 for the world.
+        child: Child body.
+        axis: The joint axis in the joint frame.
+        X_p: Joint frame in the parent body, xyz + xyzw.
+        X_c: Joint frame in the child body.
+        lower: Lower travel [m or rad].
+        upper: Upper travel.
+    """
+
+    name: str
+    joint: int
+    kind: str
+    q_start: int
+    qd_start: int
+    parent: int
+    child: int
+    axis: tuple[float, float, float]
+    X_p: tuple[float, ...]
+    X_c: tuple[float, ...]
+    lower: float
+    upper: float
+
+    def coordinate(self, joint_q: np.ndarray) -> float:
+        """The joint's coordinate in a ``joint_q`` vector [m or rad]."""
+        return float(np.asarray(joint_q).reshape(-1)[self.q_start])
+
+    @property
+    def limits(self) -> tuple[float, float]:
+        return (self.lower, self.upper)
+
+    def coordinate_from_bodies(self, body_q: np.ndarray) -> float:
+        """The joint's coordinate from where its two bodies are [m or rad].
+
+        What a snapshot can answer, which carries ``body_q`` and not ``joint_q``:
+        the child's joint frame in the parent's, projected on the axis -- the
+        offset along it for a prismatic joint, the turn about it for a revolute
+        one. Exact for a joint whose motion is all along its axis, which is what
+        both kinds are.
+        """
+        from robosimstudio.core.math import transform_matrix
+
+        body_q = np.asarray(body_q, dtype=np.float64)
+        parent = transform_matrix(body_q[self.parent]) if self.parent >= 0 else np.eye(4)
+        world_p = parent @ transform_matrix(self.X_p)
+        world_c = transform_matrix(body_q[self.child]) @ transform_matrix(self.X_c)
+        relative = np.linalg.inv(world_p) @ world_c
+        axis = np.asarray(self.axis, dtype=np.float64)
+        axis = axis / np.linalg.norm(axis)
+        if self.kind == "prismatic":
+            return float(relative[:3, 3] @ axis)
+        rotation = relative[:3, :3]
+        # The turn about the axis: sin from the skew part, cos from the trace,
+        # both measured in the plane the axis is normal to.
+        sin = 0.5 * float(
+            axis
+            @ np.array(
+                [rotation[2, 1] - rotation[1, 2], rotation[0, 2] - rotation[2, 0], rotation[1, 0] - rotation[0, 1]]
+            )
+        )
+        cos = 0.5 * (float(np.trace(rotation)) - 1.0)
+        return float(np.arctan2(sin, cos))
+
+    def fraction(self, value: float) -> float:
+        """``value`` as a fraction of the travel, 0 at :attr:`lower` and 1 at :attr:`upper`."""
+        span = self.upper - self.lower
+        if not np.isfinite(span) or span <= 0.0:
+            raise ValueError(
+                f"joint {self.name!r} has no finite travel ({self.lower}, {self.upper}) to be a fraction of"
+            )
+        return float((value - self.lower) / span)
+
+
+@dataclass
+class ArticulatedHandle(EntityHandle):
+    """An articulated object's place in the model: its parts and its joints by name.
+
+    :attr:`body` is the root part, so everything that reads one body (a pose, a
+    region) reads the object's base.
+
+    Attributes:
+        parts: Part name -> body index (SimReady's ``drawer_01_obj_00`` is ``drawer_01``).
+        joints: Joint name -> :class:`JointHandle`.
+        fixed_base: Whether the root part is bolted to the world.
+    """
+
+    parts: dict[str, int] = field(default_factory=dict)
+    joints: dict[str, JointHandle] = field(default_factory=dict)
+    fixed_base: bool = True
+
+    def joint(self, name: str) -> JointHandle:
+        """One joint by name, or a ``KeyError`` naming the ones there are."""
+        try:
+            return self.joints[name]
+        except KeyError:
+            raise KeyError(f"{self.name!r} has no joint {name!r}; it has {sorted(self.joints)}") from None
 
 
 @dataclass

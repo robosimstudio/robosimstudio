@@ -70,10 +70,12 @@ from robosimstudio.core.render.finish import Finish
 from robosimstudio.core.render.spec import RenderSpec
 
 from .asset import (
+    ArticulatedSpec,
     AssetSpec,
     BodySpec,
     ContactMaterialSpec,
     JointDriveSpec,
+    JointSpec,
     ObjectSpec,
     RegionSpec,
     ShapeSpec,
@@ -174,6 +176,7 @@ __all__ = [
     "ActuationSpec",
     "ArmSpec",
     "ArrangementSpec",
+    "ArticulatedSpec",
     "AssetSpec",
     "BackendInfo",
     "BackendSpec",
@@ -198,6 +201,7 @@ __all__ = [
     "IslandRecord",
     "JobSpec",
     "JointDriveSpec",
+    "JointSpec",
     "ObjectSpec",
     "ParamRule",
     "ParamSchema",
