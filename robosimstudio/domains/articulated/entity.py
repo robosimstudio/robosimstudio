@@ -33,7 +33,7 @@ import newton
 import numpy as np
 import warp as wp
 
-from robosimstudio.core.math import transform_matrix, xform_from_matrix
+from robosimstudio.core.math import compose_xforms, transform_matrix, xform_from_matrix
 from robosimstudio.domains.rigid.entity import episode_pose
 from robosimstudio.domains.static.welded import WeldedFixture
 from robosimstudio.paths import resolve_asset
@@ -56,11 +56,6 @@ def joint_name(label: str) -> str:
     leaf = label.rsplit("/", maxsplit=1)[-1]
     found = re.fullmatch(r"joint_(.+)_joint_\d+", leaf)
     return found.group(1) if found else leaf
-
-
-def _compose(a, b) -> np.ndarray:
-    """``a * b`` for two xyz + xyzw transforms."""
-    return np.asarray(xform_from_matrix(transform_matrix(a) @ transform_matrix(b)), dtype=np.float64)
 
 
 class EntityArticulated(WeldedFixture, Entity):
@@ -91,6 +86,11 @@ class EntityArticulated(WeldedFixture, Entity):
         self._dofs: dict[str, int] = {}
         self._travel: dict[str, tuple[float, float]] = {}
         self._loose: list[dict] = []
+        self._driven: list[str] = []
+        self._world_base: dict[int, np.ndarray] = {}
+        self._span: tuple[int, int, int, int] = (0, 0, 0, 0)
+        self._joint_handles: tuple[object, dict] | None = None
+        self._articulation_of: tuple[object, np.ndarray] | None = None
         self.root_offset = np.array([0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 1.0])
         """The root part's pose in the frame :attr:`pose` places, read off the import."""
         self.parts: dict[str, int] = {}
@@ -117,7 +117,7 @@ class EntityArticulated(WeldedFixture, Entity):
         The root's, not the spec's origin's, because this is what a fleet's wave
         writes into the root's free-joint coordinates.
         """
-        return _compose(self._asset_pose(episode, base), self.root_offset)
+        return compose_xforms(self._asset_pose(episode, base), self.root_offset)
 
     def _asset_pose(self, episode, base: np.ndarray | None = None) -> np.ndarray:
         """Where the asset's origin stands for one episode, in world coordinates."""
@@ -169,11 +169,21 @@ class EntityArticulated(WeldedFixture, Entity):
         if builder.body_count == bodies_before or not roots:
             raise ValueError(f"articulated {spec.name!r}: {path.name} declares no rigid body")
         # In several separate parts (a jar and its lid) on a fixed base, the import
-        # welded the heaviest and left the rest free: that weld is the base.
-        welded = [j for j in roots if int(builder.joint_type[j]) != int(newton.JointType.FREE)]
-        if spec.fixed_base and not welded:
-            raise ValueError(f"articulated {spec.name!r}: {path.name} imported with no part fixed to the world")
-        root = welded[0] if spec.fixed_base else roots[0]
+        # welded the heaviest and left the rest free: that weld is the base. Only a
+        # weld can be placed per world (MuJoCo's mocap) and only a free joint takes
+        # seven coordinates, so a root that is neither -- a door hinged straight to
+        # the world -- or a second weld is refused rather than placed wrong.
+        free = [j for j in roots if int(builder.joint_type[j]) == int(newton.JointType.FREE)]
+        welded = [j for j in roots if int(builder.joint_type[j]) == int(newton.JointType.FIXED)]
+        other = [builder.joint_label[j] for j in roots if j not in free and j not in welded]
+        wanted = 1 if spec.fixed_base else 0
+        if other or len(welded) != wanted:
+            raise ValueError(
+                f"articulated {spec.name!r}: {path.name} imported {len(welded)} part(s) welded to the world and "
+                f"{len(other)} jointed to it otherwise {other}; fixed_base={spec.fixed_base} places "
+                f"{'one weld' if spec.fixed_base else 'free parts only'}, with every other part free"
+            )
+        root = welded[0] if spec.fixed_base else free[0]
         roots = [root, *(j for j in roots if j != root)]
         self.body = int(builder.joint_child[root])
         self.articulation = int(builder.joint_articulation[root])
@@ -216,11 +226,23 @@ class EntityArticulated(WeldedFixture, Entity):
             if int(builder.joint_type[j]) in _JOINT_KINDS and int(builder.joint_articulation[j]) >= 0:
                 name = joint_name(builder.joint_label[j])
                 self.joints[name if name not in self.joints else builder.joint_label[j].rsplit("/", maxsplit=1)[-1]] = j
+        self._span = (
+            int(builder.joint_q_start[joints_before]),
+            int(builder.joint_coord_count),
+            int(builder.joint_qd_start[joints_before]),
+            int(builder.joint_dof_count),
+        )
         self._apply_joint_specs(builder)
         self._write_joint_starts(builder.joint_q, episode, lambda q: q)
+        for name in self._driven:
+            builder.joint_target_q[self._coords[name]] = self.built_q[name]
 
     def _apply_joint_specs(self, builder: newton.ModelBuilder) -> None:
         """Write each :class:`~robosimstudio.specs.JointSpec`'s overrides onto the joint it names."""
+        self._travel = {
+            name: (float(builder.joint_limit_lower[d]), float(builder.joint_limit_upper[d]))
+            for name, d in ((name, int(builder.joint_qd_start[j])) for name, j in self.joints.items())
+        }
         for joint in self.spec.joints:
             if joint.name not in self.joints:
                 raise ValueError(
@@ -230,7 +252,7 @@ class EntityArticulated(WeldedFixture, Entity):
             dof = int(builder.joint_qd_start[j])
             coord = int(builder.joint_q_start[j])
             if joint.q is not None:
-                self._check_travel(joint.name, joint.q, builder, "its JointSpec")
+                self._check_travel(joint.name, joint.q, "its JointSpec")
             for field, array in (
                 ("damping", builder.joint_damping),
                 ("friction", builder.joint_friction),
@@ -247,10 +269,12 @@ class EntityArticulated(WeldedFixture, Entity):
                     builder.joint_target_q[coord] = float(joint.q)
         coords = {name: int(builder.joint_q_start[j]) for name, j in self.joints.items()}
         stated = {joint.name: joint.q for joint in self.spec.joints if joint.q is not None}
-        self._travel = {
-            name: (float(builder.joint_limit_lower[d]), float(builder.joint_limit_upper[d]))
-            for name, d in ((name, int(builder.joint_qd_start[j])) for name, j in self.joints.items())
-        }
+        # Every joint a position drive holds, the asset's own included: its target
+        # follows the start, or a drawer started open is pulled shut by a drive
+        # still aimed where the asset rested.
+        self._driven = [
+            name for name, j in self.joints.items() if builder.joint_target_ke[builder.joint_qd_start[j]] > 0.0
+        ]
         # An asset can rest a part outside its own joint's travel (a sterilization
         # tray's locks rest at 0 between limits of 0.09 and 2.09 rad); started
         # there, the first step's limit force flings the part. It starts at the
@@ -279,20 +303,15 @@ class EntityArticulated(WeldedFixture, Entity):
                 raise ValueError(
                     f"episode joint_q names {self.spec.name!r}.{name}, which is not one of its joints {sorted(starts)}"
                 )
-            low, high = self._travel[name]
-            if not low <= float(value) <= high:
-                raise ValueError(
-                    f"episode joint_q starts {self.spec.name!r}.{name} at {value}, outside its travel [{low}, {high}]"
-                )
+            self._check_travel(name, value, "the episode's joint_q")
             starts[name] = float(value)
         return starts
 
-    def _check_travel(self, name: str, value: float, builder: newton.ModelBuilder, where: str) -> None:
-        dof = int(builder.joint_qd_start[self.joints[name]])
-        low, high = float(builder.joint_limit_lower[dof]), float(builder.joint_limit_upper[dof])
+    def _check_travel(self, name: str, value: float, where: str) -> None:
+        low, high = self._travel[name]
         if not low <= float(value) <= high:
             raise ValueError(
-                f"articulated {self.spec.name!r}: {where} starts {name} at {value}, outside [{low}, {high}]"
+                f"articulated {self.spec.name!r}: {where} starts {name} at {value}, outside its travel [{low}, {high}]"
             )
 
     def _write_joint_starts(self, joint_q, episode, coord) -> None:
@@ -301,10 +320,41 @@ class EntityArticulated(WeldedFixture, Entity):
 
     # -------------------------------------------------------------- phase 2
     def handle(self, model):
-        from robosimstudio.scene.handles import ArticulatedHandle, JointHandle, split_shape_flags
+        from robosimstudio.scene.handles import ArticulatedHandle, split_shape_flags
 
         shapes = self.range.shape_indices
         visual, collision = split_shape_flags(model, shapes)
+        joints = self._joints_of(model)
+        return ArticulatedHandle(
+            name=self.name,
+            category=self.spec.category,
+            body=self.body,
+            bodies=tuple(int(b) for b in self.range.body_indices),
+            coord_start=self.coord_start,
+            shapes=shapes,
+            visual_shapes=visual,
+            collision_shapes=collision,
+            static=self.spec.fixed_base,
+            parts=dict(self.parts),
+            joints=dict(joints),
+            fixed_base=self.spec.fixed_base,
+        )
+
+    def published_states(self, snapshot) -> dict[str, float]:
+        """Each joint's coordinate, ``<joint>.q``, read off where its two bodies are."""
+        if snapshot is None or self.model is None:
+            return {}
+        body_q = np.asarray(snapshot.body_q)
+        return {
+            f"{name}.q": joint.coordinate_from_bodies(body_q) for name, joint in self._joints_of(self.model).items()
+        }
+
+    def _joints_of(self, model) -> dict:
+        """Each joint's :class:`~robosimstudio.scene.handles.JointHandle`, read off ``model`` once."""
+        if self._joint_handles is not None and self._joint_handles[0] is model:
+            return self._joint_handles[1]
+        from robosimstudio.scene.handles import JointHandle
+
         axis = model.joint_axis.numpy()
         X_p, X_c = model.joint_X_p.numpy(), model.joint_X_c.numpy()
         lower, upper = model.joint_limit_lower.numpy(), model.joint_limit_upper.numpy()
@@ -327,28 +377,8 @@ class EntityArticulated(WeldedFixture, Entity):
                 lower=float(lower[dof]),
                 upper=float(upper[dof]),
             )
-        return ArticulatedHandle(
-            name=self.name,
-            category=self.spec.category,
-            body=self.body,
-            bodies=tuple(int(b) for b in self.range.body_indices),
-            coord_start=self.coord_start,
-            shapes=shapes,
-            visual_shapes=visual,
-            collision_shapes=collision,
-            static=self.spec.fixed_base,
-            parts=dict(self.parts),
-            joints=joints,
-            fixed_base=self.spec.fixed_base,
-        )
-
-    def published_states(self, snapshot) -> dict[str, float]:
-        """Each joint's coordinate, ``<joint>.q``, read off where its two bodies are."""
-        if snapshot is None or self.model is None:
-            return {}
-        body_q = np.asarray(snapshot.body_q)
-        handle = self.handle(self.model)
-        return {f"{name}.q": joint.coordinate_from_bodies(body_q) for name, joint in handle.joints.items()}
+        self._joint_handles = (model, joints)
+        return joints
 
     # ---------------------------------------------------------------- tuning
     def tunables(self, pipeline=None):
@@ -372,6 +402,24 @@ class EntityArticulated(WeldedFixture, Entity):
         return tuple(out)
 
     # -------------------------------------------------------------- phase 5
+    def place_from_document(self, pipeline, spec: ArticulatedSpec, *, world: int, document: str) -> None:
+        """Take world ``world``'s base pose from the document it runs, for :meth:`reset`.
+
+        A fleet calls this before the wave's resets, only for a world whose
+        document is not the one built; its wave has already written a free root
+        from that document's pose, and the reset that follows places the weld,
+        the loose parts and the kinematics from it too.
+        """
+        del pipeline
+        if spec.asset != self.spec.asset:
+            raise ValueError(
+                f"articulated {self.spec.name!r}: document {document!r} makes it from {spec.asset}, "
+                f"not the {self.spec.asset} this model was built from"
+            )
+        self._world_base[int(world)] = np.concatenate(
+            [np.asarray(spec.pose, dtype=np.float64), np.asarray(spec.quat, dtype=np.float64)]
+        )
+
     def reset(self, pipeline, episode, *, world: int = 0) -> None:
         """Place this world's copy for ``episode`` and start every joint where it says.
 
@@ -381,59 +429,60 @@ class EntityArticulated(WeldedFixture, Entity):
         with both before anything reads it. A fleet's wave has already run its
         own kinematics by the time it calls this, so the last step is not one a
         caller can be relied on for.
+
+        Only this object's own block of coordinates and rates is read and
+        written, once per state, as :meth:`EntityRigid.reset
+        <robosimstudio.domains.rigid.entity.EntityRigid.reset>` does: a fleet
+        resets every world.
         """
         worlds = self.worlds
         model = self.stepping_model or self.model
-        asset = self._asset_pose(episode)
-        pose = _compose(asset, self.root_offset)
+        asset = self._asset_pose(episode, self._world_base.pop(int(world), None))
+        pose = compose_xforms(asset, self.root_offset)
         if self.spec.fixed_base:
             self.place_welded(pipeline, pose, world=world)
-        coord = (lambda c: worlds.coord(c, world)) if worlds is not None else (lambda c: c)
-        dof = (lambda d: worlds.dof(d, world)) if worlds is not None else (lambda d: d)
+        q0, q1, d0, d1 = self._span
+        shift_q = worlds.coord(q0, world) - q0 if worlds is not None else 0
+        shift_d = worlds.dof(d0, world) - d0 if worlds is not None else 0
         starts = self.joint_starts(episode)
         for state in (pipeline.state_0, pipeline.state_1):
             if state is None:
                 continue
-            joint_q = state.joint_q.numpy()
+            block = state.joint_q[q0 + shift_q : q1 + shift_q]
+            joint_q = block.numpy()
             if not self.spec.fixed_base:
-                c = coord(self.coord_start)
-                joint_q[c : c + 7] = pose[:7]
+                joint_q[self.coord_start - q0 : self.coord_start - q0 + 7] = pose[:7]
             for part in self._loose:
-                c = coord(part["coord"])
-                joint_q[c : c + 7] = _compose(asset, part["offset"])[:7]
+                c = part["coord"] - q0
+                joint_q[c : c + 7] = compose_xforms(asset, part["offset"])[:7]
             for name, value in starts.items():
-                joint_q[coord(self._coords[name])] = value
-            state.joint_q.assign(joint_q)
-            joint_qd = state.joint_qd.numpy()
-            for name in starts:
-                joint_qd[dof(self._dofs[name])] = 0.0
-            for d in ([] if self.spec.fixed_base else [self._root_dof]) + [part["dof"] for part in self._loose]:
-                joint_qd[dof(d) : dof(d) + 6] = 0.0
-            state.joint_qd.assign(joint_qd)
+                joint_q[self._coords[name] - q0] = value
+            block.assign(joint_q)
+            state.joint_qd[d0 + shift_d : d1 + shift_d].zero_()
         targets = getattr(pipeline.control, "joint_target_q", None) if getattr(pipeline, "control", None) else None
-        driven = [joint.name for joint in self.spec.joints if joint.target_ke is not None]
-        if targets is not None and driven:
-            values = targets.numpy()
-            for name in driven:
-                values[coord(self._coords[name])] = starts[name]
-            targets.assign(values)
+        if targets is not None and self._driven:
+            block = targets[q0 + shift_q : q1 + shift_q]
+            values = block.numpy()
+            for name in self._driven:
+                values[self._coords[name] - q0] = starts[name]
+            block.assign(values)
         self._forward(model, pipeline, world)
 
     def _forward(self, model, pipeline, world: int) -> None:
         """This world's articulation's forward kinematics, into both states."""
         state_0, state_1 = pipeline.state_0, pipeline.state_1
+        if self._articulation_of is None or self._articulation_of[0] is not model:
+            # Read once per model: which articulation each joint is in never changes.
+            self._articulation_of = (model, model.joint_articulation.numpy())
+        articulation = self._articulation_of[1]
         roots = [self._root_joint] + [part["joint"] for part in self._loose]
         if self.worlds is not None:
             roots = [self.worlds.joint(j, world) for j in roots]
-        articulations = model.joint_articulation.numpy()
-        indices = wp.array([int(articulations[j]) for j in roots], dtype=int, device=model.device)
+        indices = wp.array([int(articulation[j]) for j in roots], dtype=int, device=model.device)
         newton.eval_fk(model, state_0.joint_q, state_0.joint_qd, state_0, indices=indices)
         if state_1 is None:
             return
-        bodies = [
-            self.worlds.body(int(b), world) if self.worlds is not None else int(b) for b in self.range.body_indices
-        ]
+        b0, b1 = self.range.bodies
+        first = self.worlds.body(b0, world) if self.worlds is not None else b0
         for name in ("body_q", "body_qd"):
-            src, dst = getattr(state_0, name).numpy(), getattr(state_1, name).numpy()
-            dst[bodies] = src[bodies]
-            getattr(state_1, name).assign(dst)
+            wp.copy(getattr(state_1, name), getattr(state_0, name), first, first, b1 - b0)

@@ -117,7 +117,9 @@ gap = [
 # The collision-aware planner behind `motion="plan"`. [cu12] adds cuda-core,
 # which compiles its kernels at first use.
 curobo = ["nvidia-curobo[cu12]"]
-dev = ["ruff==0.16.1", "pyyaml"]
+# newton-usd-schemas is what add_usd needs to import a stage with physics on it
+# (the SimReady tests); usd-core itself comes with the default rtx group.
+dev = ["ruff==0.16.1", "pyyaml", "newton-usd-schemas"]
 
 # What `uv sync` and `uv run` install from a checkout without being asked
 # (default-groups below): the [rtx] extra, so a GPU that can path trace does.

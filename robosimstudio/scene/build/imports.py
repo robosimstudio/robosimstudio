@@ -241,9 +241,11 @@ def split_articulations(stage: Any, *, fix_one_tree: bool = False, verbose: bool
             b = group[b]
         return b
 
-    # A body that two joints both call their child is where a loop closes, so
-    # those joints go last and the second of them is the one excluded: what
-    # remains has one parent per body, which is the tree the importer walks.
+    # A body that two joints both call their child is where a loop most likely
+    # closes, so those joints go last and, when one does close a loop, it is the
+    # one excluded. Two joints onto one child from otherwise separate trees close
+    # none and both stay: the importer sorts joints as an undirected graph and
+    # turns one of them around.
     incoming: dict[str, int] = {}
     for _, _, child in joints:
         incoming[child] = incoming.get(child, 0) + 1
@@ -527,6 +529,13 @@ def add_usd_stage(
         collapse = collapse_own_fixed_joints(builder, joints_before, verbose=verbose)
         results["path_body_map"] = {
             path: collapsed_body(collapse, int(body)) for path, body in (results.get("path_body_map") or {}).items()
+        }
+        # A folded joint is gone; every other is renumbered past the ones folded before it.
+        remap = collapse.get("joint_remap") or {}
+        results["path_joint_map"] = {
+            path: int(remap[int(joint)])
+            for path, joint in (results.get("path_joint_map") or {}).items()
+            if int(joint) in remap
         }
         results["collapse_results"] = collapse
     if material_subsets:

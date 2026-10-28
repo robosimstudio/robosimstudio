@@ -260,6 +260,12 @@ def build_stage(spec: Any) -> str:
     return str(getattr(spec, "stage", "") or "extras")
 
 
+def _category_of(name: str) -> str:
+    """An object's category from its name when none is declared: ``hammer_0`` is a ``hammer``."""
+    head, _, tail = name.rpartition("_")
+    return head if head and tail.isdigit() else name
+
+
 @dataclass(frozen=True, kw_only=True)
 class ObjectSpec:
     """One manipulable rigid body.
@@ -509,8 +515,7 @@ class ObjectSpec:
         this branch.
         """
         if not self.category:
-            head, _, tail = self.name.rpartition("_")
-            object.__setattr__(self, "category", head if head and tail.isdigit() else self.name)
+            object.__setattr__(self, "category", _category_of(self.name))
 
 
 @dataclass(frozen=True, kw_only=True)
@@ -687,8 +692,7 @@ class ArticulatedSpec:
 
     def __post_init__(self) -> None:
         if not self.category:
-            head, _, tail = self.name.rpartition("_")
-            object.__setattr__(self, "category", head if head and tail.isdigit() else self.name)
+            object.__setattr__(self, "category", _category_of(self.name))
         names = [joint.name for joint in self.joints]
         if len(set(names)) != len(names):
             raise ValueError(f"articulated {self.name!r}: a joint is named twice in {names}")

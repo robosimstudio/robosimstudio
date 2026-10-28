@@ -21,6 +21,7 @@ from __future__ import annotations
 import tempfile
 import unittest
 from pathlib import Path
+from unittest import mock
 
 import newton
 import numpy as np
@@ -353,6 +354,16 @@ class TestAnAskedApproximationIsApplied(_Stages):
         ]
         self.assertEqual([int(newton.GeoType.BOX)], [int(builder.shape_type[s]) for s in colliding])
         self.assertAlmostEqual(float(builder.body_mass[entity.body]), NEWTON_MASS, places=5)
+
+    def test_it_is_applied_once(self) -> None:
+        # A second pass over the first's hulls, with no mass held, is what the
+        # rigid build's own approximation would have been for a USD prop.
+        spec = ObjectSpec(name="prop", asset=AssetSpec(path=str(self.box), approximate="bounding_box"), obb_grasp=False)
+        original = newton.ModelBuilder.approximate_meshes
+        with mock.patch.object(newton.ModelBuilder, "approximate_meshes", autospec=True, side_effect=original) as calls:
+            EntityRigid(spec).build_into(newton.ModelBuilder(), None)
+        asked = [c for c in calls.call_args_list if c.kwargs.get("method") == "bounding_box"]
+        self.assertEqual(1, len(asked), "the importer's own pass is the stage's convexHull; this one is the spec's")
 
 
 if __name__ == "__main__":

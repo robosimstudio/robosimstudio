@@ -119,7 +119,7 @@ def set_body_mass(builder: newton.ModelBuilder, body: int, mass: float) -> float
 def approximate_imported_colliders(
     builder: newton.ModelBuilder, shapes: Iterable[int], method: str, *, keep_visual: bool = False
 ) -> None:
-    """Replace the mesh colliders among ``shapes`` with ``method``'s approximation, masses held.
+    """Replace the mesh and convex-mesh colliders among ``shapes`` with ``method``'s approximation, masses held.
 
     For a stage that authors its masses: the approximation's shapes would
     otherwise add their own mass on top (:func:`preserve_body_inertia`). A USD
@@ -132,12 +132,12 @@ def approximate_imported_colliders(
     targets = [
         s
         for s in shapes
-        if builder.shape_type[s] == newton.GeoType.MESH
+        if builder.shape_type[s] in (newton.GeoType.MESH, newton.GeoType.CONVEX_MESH)
         and (builder.shape_flags[s] & int(newton.ShapeFlags.COLLIDE_SHAPES))
     ]
     if not targets:
         return
     with contextlib.ExitStack() as held:
-        for body in sorted({int(builder.shape_body[s]) for s in targets}):
+        for body in sorted({int(builder.shape_body[s]) for s in targets} - {-1}):
             held.enter_context(preserve_body_inertia(builder, body))
         builder.approximate_meshes(method=method, shape_indices=targets, keep_visual_shapes=keep_visual)

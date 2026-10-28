@@ -16,6 +16,7 @@ reset runs against a stub pipeline, and nothing is stepped.
 
 from __future__ import annotations
 
+import dataclasses
 import tempfile
 import unittest
 import warnings
@@ -155,7 +156,7 @@ class TestTheSpecStartsAndDrivesItsJoints(_Cabinet):
             _spec(self.path, joints=(JointSpec(name="drawer_01"), JointSpec(name="drawer_01")))
 
     def test_a_start_outside_the_travel_is_refused(self) -> None:
-        with self.assertRaisesRegex(ValueError, r"starts drawer_01 at 0.5, outside \[0.0, 0.3"):
+        with self.assertRaisesRegex(ValueError, r"starts drawer_01 at 0.5, outside its travel \[0.0, 0.3"):
             _built(_spec(self.path, joints=(JointSpec(name="drawer_01", q=0.5),)))
 
 
@@ -212,6 +213,30 @@ class TestAJointIsReadFromItsBodies(_Cabinet):
         published = entity.published_states(SimpleNamespace(body_q=state.body_q.numpy()))
         self.assertAlmostEqual(0.2, published["drawer_01.q"], places=5)
         self.assertAlmostEqual(0.0, published["door_01.q"], places=5)
+
+
+class TestATurnPastHalfIsReadOnItsTravel(unittest.TestCase):
+    def test_a_lid_open_past_pi_reads_its_own_angle(self) -> None:
+        from robosimstudio.core.math import quat_from_axis_angle
+        from robosimstudio.scene.handles import JointHandle
+
+        lid = JointHandle(
+            name="lid",
+            joint=0,
+            kind="revolute",
+            q_start=0,
+            qd_start=0,
+            parent=-1,
+            child=0,
+            axis=(0.0, 0.0, 1.0),
+            X_p=(0, 0, 0, 0, 0, 0, 1),
+            X_c=(0, 0, 0, 0, 0, 0, 1),
+            lower=0.0,
+            upper=3.5,
+        )
+        for angle in (0.2, 3.3, 3.5):
+            body_q = np.array([[0.0, 0.0, 0.0, *quat_from_axis_angle((0.0, 0.0, 1.0), angle)]])
+            self.assertAlmostEqual(angle, lid.coordinate_from_bodies(body_q), places=6)
 
 
 def _wp(values: np.ndarray):
@@ -328,6 +353,72 @@ class TestALooseAssetIsOneEntityOfFreeParts(unittest.TestCase):
         one = entity.worlds.body_view(pipeline.state_0.body_q.numpy(), 1)
         np.testing.assert_allclose(one[handle.parts["jar_01"]][:3], (0.9, -0.3, 0.05), atol=1e-5)
         np.testing.assert_allclose(one[handle.parts["lid_01"]][:3], (0.9, -0.3, 0.11), atol=1e-5)
+
+
+class TestAWorldDocumentMovesItsBase(TestAResetPlacesOneWorld):
+    def test_the_reset_after_it_places_from_that_document(self) -> None:
+        entity, _, pipeline = self._fleet(_spec(self.path))
+        moved = dataclasses.replace(entity.spec, pose=(-0.4, 0.6, 0.0))
+        entity.place_from_document(pipeline, moved, world=1, document="moved")
+        entity.reset(pipeline, {}, world=1)
+        one = entity.worlds.body_view(pipeline.state_0.body_q.numpy(), 1)
+        np.testing.assert_allclose(one[entity.body][:3], (-0.4, 0.6, BODY_Z), atol=1e-5)
+        # Taken for that wave only: the next reset is from the spec's own pose again.
+        entity.reset(pipeline, {}, world=1)
+        one = entity.worlds.body_view(pipeline.state_0.body_q.numpy(), 1)
+        np.testing.assert_allclose(one[entity.body][:3], (*POSE[:2], BODY_Z), atol=1e-5)
+
+    def test_a_document_making_it_from_another_asset_is_refused(self) -> None:
+        entity, _, pipeline = self._fleet(_spec(self.path))
+        other = dataclasses.replace(entity.spec, asset=AssetSpec(path="elsewhere.usda"))
+        with self.assertRaisesRegex(ValueError, "elsewhere.usda"):
+            entity.place_from_document(pipeline, other, world=1, document="other")
+
+
+class TestAnAuthoredDriveHoldsTheStart(unittest.TestCase):
+    """A drawer whose asset drives it towards 0: started open, its target is where it starts."""
+
+    @classmethod
+    def setUpClass(cls) -> None:
+        cls._dir = tempfile.TemporaryDirectory()
+        cls.path = write_stage(
+            Path(cls._dir.name) / "driven.usda",
+            [
+                Part("body_01", (0.0, 0.0, BODY_Z), (0.2, 0.2, 0.3)),
+                Part("drawer_01", (0.25, 0.0, 0.4), (0.05, 0.15, 0.05)),
+            ],
+            [Joint("drawer_01", "prismatic", "body_01", "drawer_01", (0.25, 0.0, 0.4), "X", (0.0, 0.3), drive=50.0)],
+        )
+
+    @classmethod
+    def tearDownClass(cls) -> None:
+        cls._dir.cleanup()
+
+    def test_the_built_target_is_the_start(self) -> None:
+        entity, model = _built(_spec(self.path, joints=(JointSpec(name="drawer_01", q=0.15),)))
+        drawer = entity.handle(model).joints["drawer_01"]
+        self.assertGreater(float(model.joint_target_ke.numpy()[drawer.qd_start]), 0.0, "the asset's drive")
+        self.assertAlmostEqual(0.15, float(model.joint_target_q.numpy()[drawer.q_start]), places=6)
+
+    def test_a_reset_moves_the_target_with_the_episode(self) -> None:
+        entity, model = _built(_spec(self.path))
+        pipeline = _Pipeline(model)
+        entity.reset(pipeline, {"joint_q": {"cabinet": {"drawer_01": 0.2}}})
+        drawer = entity.handle(model).joints["drawer_01"]
+        self.assertAlmostEqual(0.2, float(pipeline.control.joint_target_q.numpy()[drawer.q_start]), places=6)
+
+
+class TestARootItCannotPlaceIsRefused(unittest.TestCase):
+    def test_a_door_hinged_to_the_world(self) -> None:
+        with tempfile.TemporaryDirectory() as folder:
+            path = write_stage(
+                Path(folder) / "door.usda",
+                [Part("door_01", (0.0, 0.0, 0.5), (0.02, 0.4, 0.5))],
+                [Joint("door_01", "revolute", "", "door_01", (0.0, -0.4, 0.5), "Z", (0.0, 90.0))],
+            )
+            for fixed_base in (True, False):
+                with self.subTest(fixed_base=fixed_base), self.assertRaisesRegex(ValueError, "jointed to it otherwise"):
+                    _built(_spec(path, name="door", fixed_base=fixed_base))
 
 
 class TestItIsNotTheRobot(_Cabinet):

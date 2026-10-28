@@ -152,10 +152,11 @@ class EntityRigid(Entity):
             return
         path = resolve_asset(self.spec.asset)
         xform = wp.transform(tuple(float(v) for v in pose[:3]), wp.quat(*[float(v) for v in pose[3:7]]))
+        approximated = False
         if path.suffix.lower() in (".usd", ".usda", ".usdc", ".usdz"):
             # Sets self.body and, for a free object, the joint coordinates --
             # which body it even is depends on what the stage declares.
-            self._build_usd(builder, path, xform)
+            approximated = self._build_usd(builder, path, xform)
         elif path.suffix.lower() in (".obj", ".stl", ".ply", ".glb", ".gltf", ".dae"):
             if self.spec.static:
                 body = self._add_welded_link(builder, xform)
@@ -276,7 +277,7 @@ class EntityRigid(Entity):
                     copy_shape_material(builder, visual_shape, proxy_shape)
         else:
             raise ValueError(f"object {self.spec.name!r}: unsupported asset {path.suffix!r}")
-        if self.spec.asset.approximate:
+        if self.spec.asset.approximate and not approximated:
             targets = list(range(self.range.shapes[0], builder.shape_count))
             builder.approximate_meshes(
                 method=self.spec.asset.approximate,
@@ -352,7 +353,7 @@ class EntityRigid(Entity):
             builder.shape_flags[shape] = int(builder.shape_flags[shape]) & ~int(newton.ShapeFlags.COLLIDE_SHAPES)
             builder.shape_color[shape] = tuple(float(channel) for channel in color)
 
-    def _build_usd(self, builder: newton.ModelBuilder, path, xform) -> None:
+    def _build_usd(self, builder: newton.ModelBuilder, path, xform) -> bool:
         """Import one object from a USD stage, either flavour.
 
         **The stage says which flavour it is.** A stage carrying
@@ -376,6 +377,10 @@ class EntityRigid(Entity):
             builder: The builder to import into.
             path: The resolved stage path.
             xform: Where this episode wants the object.
+
+        Returns:
+            Whether it already applied ``asset.approximate``, which a stage that
+            describes its body does here, masses held.
         """
         # pxr is the [usd] extra, so it is imported where it is used.
         from pxr import Usd, UsdPhysics
@@ -420,14 +425,20 @@ class EntityRigid(Entity):
                     f"one in loose parts (a jar and its lid)"
                 )
             self.body = bodies[0]
+            if self.body < 0:
+                raise ValueError(
+                    f"object {self.spec.name!r}: {path.name} welds its parts to the world, so they fold into it; "
+                    f"build it as an ArticulatedSpec with fixed_base=True"
+                )
             if self.body < before:
                 raise ValueError(f"object {self.spec.name!r}: {path.name} reused body {self.body}")
             from robosimstudio.core.math import transform_matrix, xform_from_matrix
 
             placed = transform_matrix([float(v) for v in xform])
             offset = np.linalg.inv(placed) @ transform_matrix([float(v) for v in builder.body_q[self.body]])
-            if not np.allclose(offset, np.eye(4), atol=1.0e-7):
-                self.body_offset = np.asarray(xform_from_matrix(offset), dtype=np.float64)
+            self.body_offset = (
+                None if np.allclose(offset, np.eye(4), atol=1.0e-7) else np.asarray(xform_from_matrix(offset))
+            )
             if self.spec.asset.approximate:
                 from robosimstudio.scene.build.bodies import approximate_imported_colliders
 
@@ -440,7 +451,7 @@ class EntityRigid(Entity):
             joint = builder.joint_count - 1
             self.coord_start = int(builder.joint_q_start[joint])
             self.dof_start = int(builder.joint_qd_start[joint])
-            return
+            return True
 
         import newton.usd
 
@@ -464,6 +475,7 @@ class EntityRigid(Entity):
             cfg=cfg,
             label=self.spec.name,
         )
+        return False
 
     def _placed(self, pose: np.ndarray) -> np.ndarray:
         """One start pose in world coordinates, respecting who placed it.
@@ -513,11 +525,9 @@ class EntityRigid(Entity):
         """Where the body's frame is when the asset stands at ``pose`` (:attr:`body_offset`)."""
         if self.body_offset is None:
             return pose
-        from robosimstudio.core.math import transform_matrix, xform_from_matrix
+        from robosimstudio.core.math import compose_xforms
 
-        return np.asarray(
-            xform_from_matrix(transform_matrix(pose) @ transform_matrix(self.body_offset)), dtype=np.float64
-        )
+        return compose_xforms(pose, self.body_offset)
 
     @property
     def declared_q(self) -> np.ndarray:

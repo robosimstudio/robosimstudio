@@ -53,7 +53,9 @@ class Joint:
     """One joint from ``parent`` to ``child``, at ``anchor`` in the asset frame.
 
     ``kind`` is ``"fixed"``, ``"prismatic"`` or ``"revolute"``; ``limits`` is in
-    metres for a slide and degrees for a hinge, as USD states them.
+    metres for a slide and degrees for a hinge, as USD states them. An empty
+    ``parent`` is the world. A ``drive`` stiffness above zero authors a position
+    drive aimed at 0, as an asset's own drive is.
     """
 
     name: str
@@ -63,6 +65,7 @@ class Joint:
     anchor: tuple[float, float, float] = (0.0, 0.0, 0.0)
     axis: str = "X"
     limits: tuple[float, float] = (0.0, 0.3)
+    drive: float = 0.0
 
 
 def _box(stage, path: str, half, materials=()) -> None:
@@ -131,13 +134,20 @@ def write_stage(path: str | Path, parts: list[Part], joints: list[Joint] = ()) -
             usd_joint.CreateAxisAttr(joint.axis)
             usd_joint.CreateLowerLimitAttr(joint.limits[0])
             usd_joint.CreateUpperLimitAttr(joint.limits[1])
+        if joint.drive > 0.0:
+            drive = UsdPhysics.DriveAPI.Apply(usd_joint.GetPrim(), "linear" if joint.kind == "prismatic" else "angular")
+            drive.CreateStiffnessAttr(joint.drive)
+            drive.CreateDampingAttr(0.1 * joint.drive)
+            drive.CreateTargetPositionAttr(0.0)
         by_name = {part.name: part for part in parts}
         for rel, attr, name in (
             (usd_joint.CreateBody0Rel(), usd_joint.CreateLocalPos0Attr(), joint.parent),
             (usd_joint.CreateBody1Rel(), usd_joint.CreateLocalPos1Attr(), joint.child),
         ):
-            rel.SetTargets([f"/RootNode/Geometry/{name}_obj_00"])
-            attr.Set(Gf.Vec3f(*(a - b for a, b in zip(joint.anchor, by_name[name].at, strict=True))))
+            at = by_name[name].at if name else (0.0, 0.0, 0.0)
+            if name:
+                rel.SetTargets([f"/RootNode/Geometry/{name}_obj_00"])
+            attr.Set(Gf.Vec3f(*(a - b for a, b in zip(joint.anchor, at, strict=True))))
 
     # One variant set per engine, PhysX enabled; mass is the opinion that differs.
     sets = root.GetVariantSets()

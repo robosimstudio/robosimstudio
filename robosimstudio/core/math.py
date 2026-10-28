@@ -26,6 +26,7 @@ import numpy as np
 
 __all__ = [
     "IDENTITY_QUAT",
+    "compose_xforms",
     "compute_angle_between",
     "lame_from_young_poisson",
     "look_at_matrix",
@@ -216,6 +217,11 @@ def xform_from_matrix(m: np.ndarray) -> np.ndarray:
         q[j] = (r[j, i] + r[i, j]) / s
         q[k] = (r[k, i] + r[i, k]) / s
     return np.append(np.asarray(m, dtype=np.float64)[:3, 3], q / np.linalg.norm(q))
+
+
+def compose_xforms(a: Sequence[float], b: Sequence[float]) -> np.ndarray:
+    """``a * b`` for two ``(p, q_xyzw)`` rows: ``b`` given in ``a``'s frame, in the world's."""
+    return np.asarray(xform_from_matrix(transform_matrix(a) @ transform_matrix(b)), dtype=np.float64)
 
 
 def transform_point(xform: Sequence[float], point: Sequence[float]) -> np.ndarray:

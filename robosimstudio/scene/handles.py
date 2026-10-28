@@ -171,16 +171,14 @@ class JointHandle:
             )
         )
         cos = 0.5 * (float(np.trace(rotation)) - 1.0)
-        return float(np.arctan2(sin, cos))
-
-    def fraction(self, value: float) -> float:
-        """``value`` as a fraction of the travel, 0 at :attr:`lower` and 1 at :attr:`upper`."""
-        span = self.upper - self.lower
-        if not np.isfinite(span) or span <= 0.0:
-            raise ValueError(
-                f"joint {self.name!r} has no finite travel ({self.lower}, {self.upper}) to be a fraction of"
-            )
-        return float((value - self.lower) / span)
+        angle = float(np.arctan2(sin, cos))
+        # The bodies give the turn only modulo a full one; a lid whose travel runs
+        # past half a turn ([0, 3.5] rad) is read on the turn nearest its travel's
+        # middle, so 3.3 rad open is 3.3 and not -2.98.
+        middle = 0.5 * (self.lower + self.upper)
+        if np.isfinite(middle):
+            angle += 2.0 * np.pi * round((middle - angle) / (2.0 * np.pi))
+        return angle
 
 
 @dataclass
