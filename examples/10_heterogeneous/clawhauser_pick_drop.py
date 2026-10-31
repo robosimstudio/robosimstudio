@@ -56,6 +56,10 @@ a deep overshoot is what holds it.
 """
 PAD_HALF_THICKNESS = 0.003
 PAD_HALF_WIDTH = 0.006
+PAD_CLEARANCE = 0.001
+"""How far the pads' bottom faces start above the bench [m]. The close starts at
+the ground, so a loop lying there is straddled instead of one assumed to sit at
+the body's mid-plane."""
 OPENED_HALF_GAP = 0.034
 """Where the jaws open to release: 68 mm, well outside the loop's 23 mm reach."""
 PHASES = {
@@ -64,10 +68,12 @@ PHASES = {
     # starting (measured, p3: the pads closed 20 mm behind the hoop and lifted
     # nothing).
     "close": (0.0, 0.6),
-    "lift": (0.6, 2.2),
-    "hang": (2.2, 3.0),
-    "carry": (3.0, 4.2),
-    "open": (4.8, 5.2),
+    # The pads hold still once they are closed: the toy settles onto the pinch
+    # before the lift loads it.
+    "lift": (1.1, 2.7),
+    "hang": (2.7, 3.5),
+    "carry": (3.5, 4.7),
+    "open": (5.3, 5.7),
 }
 """Planned phase windows. ``hang`` is a phase with no motion: the toy comes off
 the bench at an angle and swings to hang from the pinch before it is carried.
@@ -101,16 +107,20 @@ def build_scene(*, coarse: bool, self_contact: bool = True):
     hole = ring["hole_centre_local"]
     base = ring["base_local_y"]
     pose = (SOURCE_X, float(-hole[1]), float(-vertices[:, 2].min()) + 0.001)
-    grip = (SOURCE_X + float(hole[0]), 0.0, float(pose[2] + hole[2]))
+    grip_z = float(ParallelGripperSpec.pad_half_height + PAD_CLEARANCE)
+    grip = (SOURCE_X + float(hole[0]), 0.0, grip_z)
+    # The pads start at the bench, not at the loop's modelled height, so the lift
+    # grows by that drop and the tail still leaves the bench by the same amount.
+    lift = float(LIFT_M + (pose[2] + hole[2]) - grip_z)
     hole_height = float(hole[1] - base)
     geometry = {
         "hole_centre_local": np.round(hole, 4).tolist(),
         "loop_reach_m": ring["side_reach"],
         "pad_half_thickness_m": PAD_HALF_THICKNESS,
         "grip_squeeze_m": GRIP_SQUEEZE,
-        "grip_z_m": grip[2],
+        "grip_z_m": grip_z,
         "hole_height_m": hole_height,
-        "lift_m": LIFT_M,
+        "lift_m": lift,
         "carry_m": TARGET_X - SOURCE_X,
         "force_cap_n": GRASP_LIMIT_N,
         "resting_pose": "lying flat, no rotation",
@@ -212,7 +222,7 @@ def build_scene(*, coarse: bool, self_contact: bool = True):
     return sim, obj, jaw, camera, geometry
 
 
-def waypoints(grip, capacity: int, dt: float) -> np.ndarray:
+def waypoints(grip, capacity: int, dt: float, lift: float) -> np.ndarray:
     """The claw's own path: close, lift, hang, carry, open.
 
     The pads close on the loop where it lies, the lift takes the toy off the bench,
@@ -232,7 +242,7 @@ def waypoints(grip, capacity: int, dt: float) -> np.ndarray:
             [
                 (TARGET_X - SOURCE_X) * smooth(time, *PHASES["carry"]),
                 0.0,
-                LIFT_M * smooth(time, *PHASES["lift"]),
+                lift * smooth(time, *PHASES["lift"]),
             ]
         )
         poses[index, 0, :3] = place + np.array([-gap, 0.0, 0.0])
@@ -283,7 +293,7 @@ def judge(geometry: dict, diagnostics, quality, entity, steps: int) -> dict:
     max_penetration = float(np.max(np.concatenate([row["penetration_m"] for row in diagnostics] + [np.zeros(1)])))
     if not released:
         stop = "held"
-    elif lifted < 0.5 * LIFT_M:
+    elif lifted < 0.5 * geometry["lift_m"]:
         stop = "not-lifted"
     else:
         stop = "dropped"
@@ -357,7 +367,7 @@ def run(
     quality = MeshQuality(sim, entity)
     dt = 1.0 / (CONTROL_HZ * SUBSTEPS)
     q0 = sim.pipeline.state_0.particle_q.numpy()[particles]
-    jaw.entity.set_trajectory(waypoints(jaw, jaw.entity.capacity, dt))
+    jaw.entity.set_trajectory(waypoints(jaw, jaw.entity.capacity, dt, geometry["lift_m"]))
     rest_det = np.linalg.det(q0[tets[:, 1:]] - q0[tets[:, :1]])
     if np.any(rest_det <= 0):
         raise RuntimeError("source tetrahedra were not positively oriented after build")

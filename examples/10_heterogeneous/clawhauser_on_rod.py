@@ -167,6 +167,11 @@ a run whose earlier frames had it threaded cleanly.
 """
 PAD_HALF_THICKNESS = 0.003
 """The pad box's half-extent along the closing axis, as ``gripper.py`` builds it."""
+PAD_CLEARANCE = 0.001
+"""How far the pads' bottom faces start above the bench [m]. The close starts at
+the ground, so a loop lying there is straddled instead of one assumed to sit at
+the body's mid-plane.
+"""
 GRIP_SQUEEZE = 0.006
 """How far past the loop's measured width the closed pads aim.
 
@@ -187,13 +192,15 @@ PHASES = {
     # allows: lying flat, the loop is a limp hoop and the toy slides across the
     # bench within half a second of the scene starting.
     "close": (0.0, 0.6),
-    "lift": (0.6, 2.2),
+    # The pads hold still once they are closed: the toy settles onto the pinch
+    # before the lift loads it.
+    "lift": (1.1, 2.7),
     # The pad is still while the toy swings upright under the pinch -- the same
     # beat the cup and pick-and-drop scenes take between lift and carry.
-    "thread": (3.0, 4.2),
-    "seat": (4.2, 7.2),
-    "open": (7.8, 8.3),
-    "withdraw": (8.3, 8.8),
+    "thread": (3.5, 4.7),
+    "seat": (4.7, 7.7),
+    "open": (8.3, 8.8),
+    "withdraw": (8.8, 9.3),
 }
 """Planned phase windows. The seat's own end is not one of them: the descent
 stops when the rod reports support, and ``SEAT_FLOOR`` bounds it if it does not.
@@ -230,7 +237,7 @@ def build_scene(*, coarse: bool, rod_radius: float = ROD_RADIUS, mu: float | Non
     hole = ring["hole_centre_local"]
     base = ring["base_local_y"]
     pose = (SOURCE_X, float(-hole[1]), float(-vertices[:, 2].min()) + 0.001)
-    grip_z = float(pose[2] + hole[2])
+    grip_z = float(ParallelGripperSpec.pad_half_height + PAD_CLEARANCE)
     hole_height = float(hole[1] - base)
     seat_drop = ring["hole_inradius"] - rod_radius
     rod_z = seat_drop + hole_height + CLEARANCE
@@ -249,9 +256,10 @@ def build_scene(*, coarse: bool, rod_radius: float = ROD_RADIUS, mu: float | Non
         "grip_squeeze_m": GRIP_SQUEEZE,
         "toy_height_m": float(vertices[:, 1].max() - base),
         "hole_height_m": hole_height,
-        # The gripper's centre is the hole's centre, so the grasp height and the
-        # seated height are both stated about that one point.
+        # The pads start at the bench and the hole starts where the mesh puts it,
+        # so the descent is measured from the hole, not from the pads.
         "grip_z_m": grip_z,
+        "loop_z_m": float(pose[2] + hole[2]),
         "seat_drop_m": seat_drop,
         "rod_z_m": rod_z,
         "rod_free_y_m": ROD_FREE_Y,
@@ -378,8 +386,8 @@ def build_scene(*, coarse: bool, rod_radius: float = ROD_RADIUS, mu: float | Non
         sim.model.soft_contact_mu = float(mu)
     if abs(float(grip.entity.center[2]) - (TABLE_Z + geometry["grip_z_m"])) > 1.0e-6:
         raise RuntimeError(
-            f"the claw sits at z={grip.entity.center[2]:.4f} and the hole's centre at "
-            f"z={TABLE_Z + geometry['grip_z_m']:.4f}; the grasp would miss"
+            f"the claw sits at z={grip.entity.center[2]:.4f}, not the bench-referenced "
+            f"z={TABLE_Z + geometry['grip_z_m']:.4f} the path is built from"
         )
     return sim, obj, grip, camera, rod, ring, geometry
 
@@ -397,7 +405,7 @@ def waypoints(grip, capacity: int, dt: float, geometry: dict) -> np.ndarray:
     closed = float(grip.spec.closed_half_gap)
     lift = geometry["lift_m"]
     slide = geometry["slide_m"]
-    seat = (TABLE_Z + geometry["seat_z_m"] - SEAT_FLOOR) - centre[2]
+    seat = (TABLE_Z + geometry["seat_z_m"] - SEAT_FLOOR) - (TABLE_Z + geometry["loop_z_m"])
     # The planned descent is a ramp at SEAT_RATE, bounded below by the seat's own
     # floor: a smoothstep would reach the rod at twice that rate.
     floor = min(0.0, seat - lift)
@@ -658,7 +666,7 @@ def judge(out: Path, diagnostics, quality, geometry, sim, entity, steps, *, vide
     # seating the geometry asked for (hole_inradius - rod_radius).
     standing = diagnostics[0]["ring_centre_m"]
     loop_rise = float(np.mean([row["ring_centre_m"][2] for row in settled])) - float(standing[2])
-    seated_depth = geometry["rod_z_m"] - (geometry["grip_z_m"] + loop_rise)
+    seated_depth = geometry["rod_z_m"] - ((float(standing[2]) - TABLE_Z) + loop_rise)
     settled_load = float(np.mean([row["rod_support_n"] for row in settled]))
     settled_clearance = min(row["minimum_z_m"] for row in settled) - TABLE_Z
     # The rod's own support is the direct evidence of what holds the toy once the
