@@ -87,7 +87,13 @@ SOURCE_HASHES = {
 
 
 def build_scene(
-    *, coarse: bool, mu: float | None = None, self_contact: bool = True, contact_matching: str = "sticky"
+    *,
+    coarse: bool,
+    mu: float | None = None,
+    force_limit: float = GRASP_LIMIT_N,
+    squeeze: float = GRIP_SQUEEZE,
+    self_contact: bool = True,
+    contact_matching: str = "sticky",
 ):
     for relative, expected in SOURCE_HASHES.items():
         actual = hashlib.sha256((ASSET / relative).read_bytes()).hexdigest()
@@ -119,12 +125,12 @@ def build_scene(
         "hole_centre_local": np.round(hole, 4).tolist(),
         "loop_reach_m": ring["side_reach"],
         "pad_half_thickness_m": PAD_HALF_THICKNESS,
-        "grip_squeeze_m": GRIP_SQUEEZE,
+        "grip_squeeze_m": squeeze,
         "grip_z_m": grip_z,
         "hole_height_m": hole_height,
         "lift_m": lift,
         "carry_m": TARGET_X - SOURCE_X,
-        "force_cap_n": GRASP_LIMIT_N,
+        "force_cap_n": force_limit,
         "resting_pose": "lying flat, no rotation",
     }
     print(json.dumps({"geometry": geometry}), flush=True)
@@ -188,7 +194,10 @@ def build_scene(
             name="pick_drop_gripper",
             center=grip,
             half_gap=ring["side_reach"] + PAD_HALF_THICKNESS + 0.012,
-            closed_half_gap=ring["side_reach"] + PAD_HALF_THICKNESS - GRIP_SQUEEZE,
+            # The close travels past the loop's measured width by `squeeze`; how
+            # hard it presses is the drive's own cap, not this travel.
+            closed_half_gap=ring["side_reach"] + PAD_HALF_THICKNESS - squeeze,
+            force_limit=force_limit,
             pad_half_thickness=PAD_HALF_THICKNESS,
             pad_half_width=PAD_HALF_WIDTH,
             duration=DURATION,
@@ -345,12 +354,19 @@ def run(
     render_every: int = 0,
     coarse: bool = True,
     mu: float | None = None,
+    force_limit: float = GRASP_LIMIT_N,
+    squeeze: float = GRIP_SQUEEZE,
     enable_self_contact: bool = True,
     contact_matching: str = "sticky",
 ) -> dict:
     out.mkdir(parents=True, exist_ok=True)
     sim, obj, jaw, camera, geometry = build_scene(
-        coarse=coarse, mu=mu, self_contact=enable_self_contact, contact_matching=contact_matching
+        coarse=coarse,
+        mu=mu,
+        force_limit=force_limit,
+        squeeze=squeeze,
+        self_contact=enable_self_contact,
+        contact_matching=contact_matching
     )
     entity = obj.entity
     particles = entity.particles
@@ -492,6 +508,18 @@ def main() -> None:
     parser.add_argument("--no-coarse", action="store_true", help="stock VBD, no common-translation solve")
     parser.add_argument("--mu", type=float, default=None, help="global soft-contact friction coefficient")
     parser.add_argument(
+        "--force-limit",
+        type=float,
+        default=GRASP_LIMIT_N,
+        help="the jaws' closing budget [N]; the drive never exceeds it",
+    )
+    parser.add_argument(
+        "--squeeze",
+        type=float,
+        default=GRIP_SQUEEZE,
+        help="how far past the loop's measured width the closed pads aim [m]",
+    )
+    parser.add_argument(
         "--no-self-contact", dest="self_contact", action="store_false", help="turn the toy's self-contact off"
     )
     parser.add_argument(
@@ -507,6 +535,8 @@ def main() -> None:
         render_every=args.render_every,
         coarse=not args.no_coarse,
         mu=args.mu,
+        force_limit=args.force_limit,
+        squeeze=args.squeeze,
         enable_self_contact=args.self_contact,
         contact_matching=args.contact_matching,
     )
