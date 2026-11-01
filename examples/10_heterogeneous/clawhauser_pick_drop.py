@@ -200,11 +200,11 @@ def build_scene(
         name="overview",
         width=960,
         height=540,
-        # Framed for the lying start: the toy rests toward the camera, so the eye
-        # is pulled back and the view is aimed between the toy's rest and the place
-        # it is carried to.
-        eye=(0.835, -0.89, 1.476),
-        look_at=(0.51, -0.05, 0.95),
+        # Side on and level with the loop: the pads close across the frame and the
+        # lift is vertical, so the grasp reads as a pinch on the object's side
+        # rather than as a plan view of the bench.
+        eye=(0.02, -0.29, 1.05),
+        look_at=(0.473, -0.01, 0.785),
         fov_y=45.0,
     )
     camera = scene.add(camera_spec)
