@@ -86,7 +86,9 @@ SOURCE_HASHES = {
 }
 
 
-def build_scene(*, coarse: bool, self_contact: bool = True, contact_matching: str = "sticky"):
+def build_scene(
+    *, coarse: bool, mu: float | None = None, self_contact: bool = True, contact_matching: str = "sticky"
+):
     for relative, expected in SOURCE_HASHES.items():
         actual = hashlib.sha256((ASSET / relative).read_bytes()).hexdigest()
         if actual != expected:
@@ -214,6 +216,10 @@ def build_scene(*, coarse: bool, self_contact: bool = True, contact_matching: st
         raise RuntimeError("RSS lost Clawhauser tetrahedra or part labels")
     if sim.model.attachment_particle_body_count:
         raise RuntimeError("the contact grasp scene must not contain particle attachments")
+    if mu is not None:
+        # Newton VBD exposes one global soft-contact friction coefficient; this is
+        # it, and here it is the knob the sweep turns.
+        sim.model.soft_contact_mu = float(mu)
     model_tets = sim.model.tet_indices.numpy()[entity.tet_range[0] : entity.tet_range[1]]
     if not np.array_equal(model_tets - entity.particles[0], tets):
         raise RuntimeError("Newton changed the source tetrahedron order")
@@ -338,12 +344,13 @@ def run(
     steps: int,
     render_every: int = 0,
     coarse: bool = True,
+    mu: float | None = None,
     enable_self_contact: bool = True,
     contact_matching: str = "sticky",
 ) -> dict:
     out.mkdir(parents=True, exist_ok=True)
     sim, obj, jaw, camera, geometry = build_scene(
-        coarse=coarse, self_contact=enable_self_contact, contact_matching=contact_matching
+        coarse=coarse, mu=mu, self_contact=enable_self_contact, contact_matching=contact_matching
     )
     entity = obj.entity
     particles = entity.particles
@@ -483,6 +490,7 @@ def main() -> None:
     parser.add_argument("--steps", type=int, default=round(DURATION * CONTROL_HZ))
     parser.add_argument("--render-every", type=int, default=0)
     parser.add_argument("--no-coarse", action="store_true", help="stock VBD, no common-translation solve")
+    parser.add_argument("--mu", type=float, default=None, help="global soft-contact friction coefficient")
     parser.add_argument(
         "--no-self-contact", dest="self_contact", action="store_false", help="turn the toy's self-contact off"
     )
@@ -498,6 +506,7 @@ def main() -> None:
         steps=args.steps,
         render_every=args.render_every,
         coarse=not args.no_coarse,
+        mu=args.mu,
         enable_self_contact=args.self_contact,
         contact_matching=args.contact_matching,
     )
