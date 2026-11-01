@@ -106,7 +106,7 @@ class HeterogeneousSoftSpec:
 
     `pose` places the source mesh origin in the work-surface frame. Young's
     modulus, Poisson ratio, and density come exclusively from `params_path`.
-    `damping_time` is a solver setting in seconds, not a source material estimate.
+    `damping` is a solver setting, not a source material estimate.
     """
 
     stage: ClassVar[str] = "deformables"
@@ -118,7 +118,10 @@ class HeterogeneousSoftSpec:
     pose: tuple[float, float, float] = (0.0, 0.0, 0.0)
     quat: tuple[float, float, float, float] = (0.0, 0.0, 0.0, 1.0)
     scale: float = 1.0
-    damping_time: float = 0.0005
+    damping: float = 5e3
+    """Viscous tet damping [Pa·s] -- Newton's ``k_damp`` -- one value for the whole
+    mesh, so the loop and the ten-times-softer body resist deformation alike.
+    """
     particle_radius: float = 0.0007
     contact_ke: float = 30000.0
     contact_kd: float = 25.0
@@ -130,8 +133,8 @@ class HeterogeneousSoftSpec:
     def __post_init__(self) -> None:
         if not self.mesh_path or not self.params_path or not self.materials_path:
             raise ValueError("heterogeneous soft body needs mesh, parameter, and material paths")
-        if self.scale <= 0 or self.damping_time < 0 or self.particle_radius <= 0:
-            raise ValueError("scale and particle radius must be positive; damping time cannot be negative")
+        if self.scale <= 0 or self.particle_radius <= 0 or self.damping < 0:
+            raise ValueError("scale and particle radius must be positive; damping cannot be negative")
 
 
 @register_entity("heterogeneous_soft")
@@ -213,7 +216,7 @@ class EntityHeterogeneousSoft(ParticleMixin, Entity):
             density=1.0,
             k_mu=mu,
             k_lambda=lam,
-            k_damp=young * spec.damping_time,
+            k_damp=float(spec.damping),
             particle_radius=spec.particle_radius,
             color=colors,
             label=spec.name,

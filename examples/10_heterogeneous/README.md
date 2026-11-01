@@ -10,10 +10,10 @@ volume throughout the run; tail, body, and loop are not separate objects.
 The source estimate is used directly: parts 0 and 1 have E=0.5 MPa, ν=0.45,
 ρ=300 kg/m³; part 2 has E=5 MPa, ν=0.49, ρ=1100 kg/m³. The builder maps each
 tetrahedron to its source part and gathers density-weighted mass at vertices.
-`damping_time` and the contact penalty are solver settings. Newton VBD currently
-exposes one global soft friction coefficient; this scene uses the loop's 0.9
-estimate during loop grasping and keeps all per-part friction values in the
-source JSON for later contact work.
+`damping` -- one tet viscosity for the whole mesh -- and the contact penalty are
+solver settings. Newton VBD currently exposes one global soft friction
+coefficient; this scene uses the loop's 0.9 estimate during loop grasping and
+keeps all per-part friction values in the source JSON for later contact work.
 
 Run from an allocated CUDA compute node with the sibling Newton checkout at
 commit `d960ec3b8be23d7acac01c0ba10b8d04dca8b549` (1.8.0.dev0). In the

@@ -222,6 +222,48 @@ def build_proxy(ctx: CouplerBuild) -> Any:
     )
 
 
+ADMM_CONTACT_STIFFNESS = 1.2e3
+"""Contact stiffness the ADMM penalty presents by default [N/m].
+
+Newton's examples of this coupler sit at the same order (``rho`` 50-200 on their
+interfaces works out to roughly 1 kN/m), so a scene gets the coupling those
+examples validated unless it states its own ``rho``.
+"""
+
+
+def _admm_rho(ctx: CouplerBuild, stiffness: float) -> float:
+    """The penalty that makes a cross-island contact present ``stiffness`` [N/m].
+
+    Newton's rigid-particle contact force is ``W * (lambda + rho * W * (u - Jv))``
+    with ``W`` the square root of the interface's reduced mass, so the penalty's
+    own stiffness is ``rho * W^2 / dt``. A fixed ``rho`` is therefore a different
+    contact in every scene: Newton's examples use kg-scale interfaces, where
+    ``W^2`` is of order 1e-2, while a milligram FEM particle against a 50 g finger
+    has ``W^2`` of order 1e-4. At the stock ``rho = 1`` that is a few N/m -- a
+    contact that has to sink centimetres before it carries the object's weight,
+    which reads as a contact force that never arrives. Scaling by ``W^2`` gives
+    the same contact whatever the mesh resolution or the body masses are.
+    """
+    dt = 1.0 / (ctx.arrangement.control_hz * ctx.arrangement.substeps)
+    body_mass = ctx.model.body_mass.numpy()
+    particle_mass = ctx.model.particle_mass.numpy()
+    rho = 0.0
+    for channel in ctx.channels:
+        destination = next((i for i in ctx.islands if i.name == channel.destination), None)
+        source = next((i for i in ctx.islands if i.name == channel.source), None)
+        if destination is None or source is None or not len(destination.particles) or not len(source.bodies):
+            continue
+        m_body = float(body_mass[[int(b) for b in source.bodies]].mean())
+        m_particle = float(particle_mass[destination.particles].mean())
+        if m_body <= 0.0 or m_particle <= 0.0:
+            continue
+        # The lightest interface sets the penalty: it is the one that converges
+        # slowest, and a single scalar has to serve every channel.
+        weight = np.sqrt(m_body * m_particle / (m_body + m_particle))
+        rho = max(rho, stiffness * dt / (weight * weight))
+    return rho
+
+
 def build_admm(ctx: CouplerBuild) -> Any:
     from newton.solvers.experimental.coupled import SolverCoupled, SolverCoupledADMM
 
@@ -245,7 +287,10 @@ def build_admm(ctx: CouplerBuild) -> Any:
         "contact_matching_normal_dot_threshold",
         "contact_matching_force_scale",
     }
-    config = SolverCoupledADMM.Config(**{k: v for k, v in params.items() if k in known}, contact_pairs=pairs)
+    settings = {k: v for k, v in params.items() if k in known}
+    if not settings.get("rho"):
+        settings["rho"] = _admm_rho(ctx, float(params.get("contact_stiffness", ADMM_CONTACT_STIFFNESS)))
+    config = SolverCoupledADMM.Config(**settings, contact_pairs=pairs)
     return SolverCoupledADMM(model=ctx.model, entries=ctx.entries(SolverCoupled.Entry), coupling=config)
 
 

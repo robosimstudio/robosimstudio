@@ -202,6 +202,7 @@ def _solve_block(
     max_shift: float,
     relaxation: float,
     path_length: wp.array[float],
+    step_path: wp.array[float],
     shift: wp.array[wp.vec3],
     applications: wp.array[int],
 ):
@@ -217,6 +218,10 @@ def _solve_block(
     if wp.isfinite(step[0]) and wp.isfinite(step[1]) and wp.isfinite(step[2]):
         shift[w] = step
         path_length[w] += wp.length(step)
+        # Cleared by the caller, not by ``begin_substep``: the substep budget
+        # above resets every substep, so a per-frame reader of ``path_length``
+        # would only ever see the last one.
+        step_path[w] += wp.length(step)
         if wp.length(step) > 0.0:
             applications[w] += 1
 
@@ -308,6 +313,8 @@ class _TranslationBlock:
         self.hessian = wp.zeros(1, dtype=wp.mat33, device=device)
         self.shift = wp.zeros(1, dtype=wp.vec3, device=device)
         self.path_length = wp.zeros(1, dtype=float, device=device)
+        # Cumulative since the last ``reset``, for a per-frame reader.
+        self.step_path = wp.zeros(1, dtype=float, device=device)
         self.applications = wp.zeros(1, dtype=int, device=device)
         self.invalid_world = wp.zeros(1, dtype=int, device=device)
 
@@ -404,6 +411,7 @@ class _TranslationBlock:
                 self.max_shift,
                 self.relaxation,
                 self.path_length,
+                self.step_path,
                 self.shift,
                 self.applications,
             ],
@@ -494,6 +502,7 @@ class SolverVBDCoarse(SolverVBD):
         super().reset(state, world_mask=world_mask, flags=flags)
         if self.coarse_block is not None:
             self.coarse_block.begin_substep(world_mask)
+            self.coarse_block.step_path.zero_()
 
     def _initialize_particles(self, state_in, state_out, contacts, dt):
         super()._initialize_particles(state_in, state_out, contacts, dt)

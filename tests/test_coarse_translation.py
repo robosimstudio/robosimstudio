@@ -79,6 +79,7 @@ class TestCoarseTranslation(unittest.TestCase):
         residual = wp.array([wp.vec3(1.0, 0.0, 0.0)], dtype=wp.vec3, device=device)
         hessian = wp.array([np.eye(3, dtype=np.float32) * 100.0], dtype=wp.mat33, device=device)
         path_length = wp.zeros(1, dtype=float, device=device)
+        step_path = wp.zeros(1, dtype=float, device=device)
         shift = wp.zeros(1, dtype=wp.vec3, device=device)
         applications = wp.zeros(1, dtype=int, device=device)
         invalid = wp.zeros(1, dtype=int, device=device)
@@ -90,11 +91,16 @@ class TestCoarseTranslation(unittest.TestCase):
             0.005,
             1.0,
             path_length,
+            step_path,
             shift,
             applications,
         ]
         wp.launch(_solve_block, dim=1, inputs=launch, device=device)
         self.assertAlmostEqual(float(path_length.numpy()[0]), 0.005, places=6)
+        # The frame reader's counter is cumulative: a substep that spends the
+        # budget and the next one that spends nothing still add to it, and only
+        # ``reset`` clears it.
+        self.assertAlmostEqual(float(step_path.numpy()[0]), 0.005, places=6)
         self.assertEqual(int(applications.numpy()[0]), 1)
         reference = np.zeros((1, 3), dtype=np.float32)
         q = wp.array(reference, dtype=wp.vec3, device=device)
@@ -118,6 +124,7 @@ class TestCoarseTranslation(unittest.TestCase):
         wp.launch(_solve_block, dim=1, inputs=launch, device=device)
         np.testing.assert_array_equal(shift.numpy()[0], np.zeros(3, dtype=np.float32))
         self.assertEqual(int(applications.numpy()[0]), 1)
+        self.assertAlmostEqual(float(step_path.numpy()[0]), 0.005, places=6)
         # An unusable solve -- here an overflowed contact buffer -- moves nothing.
         invalid.assign(np.ones(1, dtype=np.int32))
         wp.launch(_solve_block, dim=1, inputs=launch, device=device)

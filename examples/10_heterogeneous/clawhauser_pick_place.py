@@ -113,7 +113,6 @@ def build_scene():
             materials_path=str(ASSET / "inferred_params.json"),
             pose=pose,
             quat=rotation,
-            damping_time=0.0005,
             contact_ke=100000.0,
         )
     )
