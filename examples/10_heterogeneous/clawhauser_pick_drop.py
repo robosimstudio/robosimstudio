@@ -86,7 +86,7 @@ SOURCE_HASHES = {
 }
 
 
-def build_scene(*, coarse: bool, self_contact: bool = True):
+def build_scene(*, coarse: bool, self_contact: bool = True, contact_matching: str = "sticky"):
     for relative, expected in SOURCE_HASHES.items():
         actual = hashlib.sha256((ASSET / relative).read_bytes()).hexdigest()
         if actual != expected:
@@ -161,6 +161,12 @@ def build_scene(*, coarse: bool, self_contact: bool = True):
             contact_ke=CONTACT_KE,
             contact_kd=25.0,
             broad_phase="nxn",
+            # VBD measures body-particle friction by the motion inside each
+            # collision pass, which creeps under any static tangential load: the
+            # pad pinch slides the loop out however high the friction is. Sticky
+            # matching keeps each pad contact's points across passes, and friction
+            # then acts on the drift from them.
+            contact_matching=contact_matching,
         ),
     )
     scene = rss.Scene(cell="bench_075", physics=physics, name="clawhauser_pick_drop")
@@ -327,10 +333,18 @@ def judge(geometry: dict, diagnostics, quality, entity, steps: int) -> dict:
 
 
 def run(
-    out: Path, *, steps: int, render_every: int = 0, coarse: bool = True, enable_self_contact: bool = True
+    out: Path,
+    *,
+    steps: int,
+    render_every: int = 0,
+    coarse: bool = True,
+    enable_self_contact: bool = True,
+    contact_matching: str = "sticky",
 ) -> dict:
     out.mkdir(parents=True, exist_ok=True)
-    sim, obj, jaw, camera, geometry = build_scene(coarse=coarse, self_contact=enable_self_contact)
+    sim, obj, jaw, camera, geometry = build_scene(
+        coarse=coarse, self_contact=enable_self_contact, contact_matching=contact_matching
+    )
     entity = obj.entity
     particles = entity.particles
     tets = entity.source_tets
@@ -455,6 +469,7 @@ def run(
     )
     result = judge(geometry, diagnostics, quality, entity, steps)
     result["self_contact"] = self_contact
+    result["contact_matching"] = contact_matching
     result["video_error"] = video_error
     result["mean_frame_ms"] = 1000.0 * (time.perf_counter() - started) / max(1, len(diagnostics))
     (out / "result.json").write_text(json.dumps(result, indent=2) + "\n")
@@ -471,6 +486,12 @@ def main() -> None:
     parser.add_argument(
         "--no-self-contact", dest="self_contact", action="store_false", help="turn the toy's self-contact off"
     )
+    parser.add_argument(
+        "--contact-matching",
+        choices=("sticky", "disabled"),
+        default="sticky",
+        help="sticky keeps the pads' contact points across passes; disabled is the creeping control",
+    )
     args = parser.parse_args()
     run(
         args.out,
@@ -478,6 +499,7 @@ def main() -> None:
         render_every=args.render_every,
         coarse=not args.no_coarse,
         enable_self_contact=args.self_contact,
+        contact_matching=args.contact_matching,
     )
 
 
