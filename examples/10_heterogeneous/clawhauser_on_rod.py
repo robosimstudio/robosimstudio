@@ -215,7 +215,16 @@ SOURCE_HASHES = {
 }
 
 
-def build_scene(*, coarse: bool, rod_radius: float = ROD_RADIUS, mu: float | None = None, self_contact: bool = True):
+def build_scene(
+    *,
+    coarse: bool,
+    rod_radius: float = ROD_RADIUS,
+    mu: float | None = None,
+    force_limit: float = GRASP_LIMIT_N,
+    squeeze: float = GRIP_SQUEEZE,
+    self_contact: bool = True,
+    contact_matching: str = "sticky",
+):
     for relative, expected in SOURCE_HASHES.items():
         actual = hashlib.sha256((ASSET / relative).read_bytes()).hexdigest()
         if actual != expected:
@@ -253,7 +262,8 @@ def build_scene(*, coarse: bool, rod_radius: float = ROD_RADIUS, mu: float | Non
         "hole_inradius_median_m": ring["hole_inradius_median"],
         "reach_m": ring["side_reach"],
         "pad_half_thickness_m": PAD_HALF_THICKNESS,
-        "grip_squeeze_m": GRIP_SQUEEZE,
+        "grip_squeeze_m": squeeze,
+        "force_cap_n": force_limit,
         "toy_height_m": float(vertices[:, 1].max() - base),
         "hole_height_m": hole_height,
         # The pads start at the bench and the hole starts where the mesh puts it,
@@ -316,6 +326,7 @@ def build_scene(*, coarse: bool, rod_radius: float = ROD_RADIUS, mu: float | Non
             contact_ke=CONTACT_KE,
             contact_kd=25.0,
             broad_phase="nxn",
+            contact_matching=contact_matching,
         ),
     )
     scene = rss.Scene(cell="bench_075", physics=physics, name="clawhauser_on_rod")
@@ -353,7 +364,8 @@ def build_scene(*, coarse: bool, rod_radius: float = ROD_RADIUS, mu: float | Non
             # -- an absolute height here would be lifted by the frame twice.
             center=(SOURCE_X + float(hole[0]), 0.0, grip_z),
             half_gap=ring["side_reach"] + PAD_HALF_THICKNESS + 0.012,
-            closed_half_gap=ring["side_reach"] + PAD_HALF_THICKNESS - GRIP_SQUEEZE,
+            closed_half_gap=ring["side_reach"] + PAD_HALF_THICKNESS - squeeze,
+            force_limit=force_limit,
             pad_half_thickness=PAD_HALF_THICKNESS,
             pad_half_width=0.006,
             duration=DURATION,
@@ -492,11 +504,20 @@ def run(
     coarse: bool = True,
     rod_radius: float = ROD_RADIUS,
     mu: float | None = None,
+    force_limit: float = GRASP_LIMIT_N,
+    squeeze: float = GRIP_SQUEEZE,
     enable_self_contact: bool = True,
+    contact_matching: str = "sticky",
 ) -> dict:
     out.mkdir(parents=True, exist_ok=True)
     sim, obj, grip, camera, rod, ring, geometry = build_scene(
-        coarse=coarse, rod_radius=rod_radius, mu=mu, self_contact=enable_self_contact
+        coarse=coarse,
+        rod_radius=rod_radius,
+        mu=mu,
+        force_limit=force_limit,
+        squeeze=squeeze,
+        self_contact=enable_self_contact,
+        contact_matching=contact_matching,
     )
     entity = obj.entity
     particles = entity.particles
@@ -731,7 +752,7 @@ def judge(out: Path, diagnostics, quality, geometry, sim, entity, steps, *, vide
         and result["quality"]["nonfinite_tet_substeps_by_part"] == [0, 0, 0]
         and min(result["quality"]["minimum_J_by_part"]) > 0.0
         and result["max_penetration_m"] <= 0.0005
-        and peak_force <= GRASP_LIMIT_N * (1.0 + 1.0e-6)
+        and peak_force <= float(geometry["force_cap_n"]) * (1.0 + 1.0e-6)
         and peak_torque <= 0.03
     )
     (out / "result.json").write_text(json.dumps(result, indent=2) + "\n")
@@ -747,6 +768,14 @@ def main() -> None:
     parser.add_argument("--no-coarse", dest="coarse", action="store_false")
     parser.add_argument("--rod-radius", type=float, default=ROD_RADIUS, help="rod radius [m]")
     parser.add_argument("--mu", type=float, default=None, help="global soft-contact friction coefficient")
+    parser.add_argument("--force-limit", type=float, default=GRASP_LIMIT_N, help="the jaws' closing budget [N]")
+    parser.add_argument("--squeeze", type=float, default=GRIP_SQUEEZE, help="close travel past the loop [m]")
+    parser.add_argument(
+        "--contact-matching",
+        choices=("sticky", "disabled"),
+        default="sticky",
+        help="sticky keeps the pads' contact points across passes",
+    )
     parser.add_argument(
         "--no-self-contact", dest="self_contact", action="store_false", help="turn the toy's self-contact off"
     )
@@ -758,7 +787,10 @@ def main() -> None:
         coarse=args.coarse,
         rod_radius=args.rod_radius,
         mu=args.mu,
+        force_limit=args.force_limit,
+        squeeze=args.squeeze,
         enable_self_contact=args.self_contact,
+        contact_matching=args.contact_matching,
     )
 
 

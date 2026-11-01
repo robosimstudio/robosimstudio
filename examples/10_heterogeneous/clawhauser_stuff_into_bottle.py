@@ -237,7 +237,17 @@ SOURCE_HASHES = {
 }
 
 
-def build_scene(*, coarse: bool, bore: float, cap: float, push_cap: float, mu: float | None, self_contact: bool = True):
+def build_scene(
+    *,
+    coarse: bool,
+    bore: float,
+    cap: float,
+    push_cap: float,
+    mu: float | None,
+    squeeze: float = GRIP_SQUEEZE,
+    self_contact: bool = True,
+    contact_matching: str = "sticky",
+):
     for relative, expected in SOURCE_HASHES.items():
         actual = hashlib.sha256((ASSET / relative).read_bytes()).hexdigest()
         if actual != expected:
@@ -280,7 +290,7 @@ def build_scene(*, coarse: bool, bore: float, cap: float, push_cap: float, mu: f
         "hole_inradius_median_m": ring["hole_inradius_median"],
         "loop_reach_m": ring["side_reach"],
         "pad_half_thickness_m": PAD_HALF_THICKNESS,
-        "grip_squeeze_m": GRIP_SQUEEZE,
+        "grip_squeeze_m": squeeze,
         "toy_height_m": float(vertices[:, 1].max() - base),
         "hole_height_m": hole_height,
         # Where the jaws close and how wide the thing they close on is: the loop's
@@ -347,6 +357,7 @@ def build_scene(*, coarse: bool, bore: float, cap: float, push_cap: float, mu: f
             contact_ke=CONTACT_KE,
             contact_kd=25.0,
             broad_phase="nxn",
+            contact_matching=contact_matching,
         ),
     )
     scene = rss.Scene(cell="bench_075", physics=physics, name="clawhauser_stuff_into_bottle")
@@ -410,7 +421,7 @@ def build_scene(*, coarse: bool, bore: float, cap: float, push_cap: float, mu: f
             name="bottle_loop_gripper",
             center=(SOURCE_X + float(hole[0]), 0.0, grip_z),
             half_gap=ring["side_reach"] + PAD_HALF_THICKNESS + 0.012,
-            closed_half_gap=ring["side_reach"] + PAD_HALF_THICKNESS - GRIP_SQUEEZE,
+            closed_half_gap=ring["side_reach"] + PAD_HALF_THICKNESS - squeeze,
             pad_half_thickness=PAD_HALF_THICKNESS,
             pad_half_width=PAD_HALF_WIDTH,
             force_limit=cap,
@@ -647,11 +658,20 @@ def run(
     cap: float = GRASP_LIMIT_N,
     push_cap: float = PUSH_LIMIT_N,
     mu: float | None = None,
+    squeeze: float = GRIP_SQUEEZE,
     enable_self_contact: bool = True,
+    contact_matching: str = "sticky",
 ) -> dict:
     out.mkdir(parents=True, exist_ok=True)
     sim, obj, grip, camera, ring, glass_shapes, glass_bodies, geometry = build_scene(
-        coarse=coarse, bore=bore, cap=cap, push_cap=push_cap, mu=mu, self_contact=enable_self_contact
+        coarse=coarse,
+        bore=bore,
+        cap=cap,
+        push_cap=push_cap,
+        mu=mu,
+        squeeze=squeeze,
+        self_contact=enable_self_contact,
+        contact_matching=contact_matching,
     )
     entity = obj.entity
     particles = entity.particles
@@ -1190,7 +1210,15 @@ def main() -> None:
     parser.add_argument("--bore", type=float, default=BORE_RADIUS, help="container inner radius [m]")
     parser.add_argument("--cap", type=float, default=GRASP_LIMIT_N, help="jaw closing clamp [N]")
     parser.add_argument("--push-cap", type=float, default=PUSH_LIMIT_N, help="carrier push clamp [N]")
+    parser.add_argument("--force-limit", type=float, default=None, help="alias for --cap, the sweep's name")
+    parser.add_argument("--squeeze", type=float, default=GRIP_SQUEEZE, help="close travel past the loop [m]")
     parser.add_argument("--mu", type=float, default=None, help="global soft-contact friction coefficient")
+    parser.add_argument(
+        "--contact-matching",
+        choices=("sticky", "disabled"),
+        default="sticky",
+        help="sticky keeps the pads' contact points across passes",
+    )
     parser.add_argument(
         "--no-self-contact", dest="self_contact", action="store_false", help="turn the toy's self-contact off"
     )
@@ -1201,10 +1229,12 @@ def main() -> None:
         render_every=args.render_every,
         coarse=args.coarse,
         bore=args.bore,
-        cap=args.cap,
+        cap=args.cap if args.force_limit is None else args.force_limit,
         push_cap=args.push_cap,
         mu=args.mu,
+        squeeze=args.squeeze,
         enable_self_contact=args.self_contact,
+        contact_matching=args.contact_matching,
     )
 
 
