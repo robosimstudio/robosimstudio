@@ -111,7 +111,7 @@ class CouplerSpec:
             fields of :class:`newton.solvers.SolverCoupledADMM.Config`.
     """
 
-    method: str = "admm"
+    method: str = "proxy"
     params: tuple[tuple[str, Any], ...] = ()
 
     def __post_init__(self) -> None:
@@ -129,7 +129,7 @@ class CouplerSpec:
         return replace(self, params=_frozen_params({**dict(self.params), **params}))
 
 
-def coupler(method: str = "admm", /, **params: Any) -> CouplerSpec:
+def coupler(method: str = "proxy", /, **params: Any) -> CouplerSpec:
     """A :class:`CouplerSpec`: ``coupler("proxy", mode="staggered", iterations=2, mass_scale=20.0)``."""
     return CouplerSpec(method=method, params=_frozen_params(params))
 

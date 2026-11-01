@@ -725,7 +725,15 @@ def compose(
             self_contact=graph.self_contact,
             unresolved=graph.unresolved,
         )
-    routing = route(route_graph, newton_islands, channels, model, world_shapes=world_shapes, worlds=worlds)
+    routing = route(
+        route_graph,
+        newton_islands,
+        channels,
+        model,
+        world_shapes=world_shapes,
+        worlds=worlds,
+        proxy=arrangement.coupling.method == "proxy",
+    )
     for channel in channels:
         channel.pairs = routing.channel_pairs.get((channel.source, channel.destination))
 
