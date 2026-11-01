@@ -24,7 +24,7 @@ OUTPUT = Path(__file__).resolve().parents[2] / "outputs" / "clawhauser_on_rod"
 CONTROL_HZ = 30
 SUBSTEPS = 20
 DURATION = 9.5
-"""Long enough for the guarded seat to stop early or late and still leave the last"""
+"""Long enough for the guarded seat to stop early or late and still leave a quiet tail."""
 SEAT_TRIGGER = 0.95
 """Fraction of the toy's weight the rod must carry before the descent stops."""
 SEAT_FRAMES = 3
@@ -33,8 +33,12 @@ SEAT_FLOOR = 0.006
 """How far past the nominal seat height the planned descent is allowed to go."""
 SEAT_RATE = 0.025
 """How fast the planned descent goes [m/s]: a ramp, not a smoothstep."""
-SETTLE_S = 0.8
-"""How long the toy is left alone before the claw closes [s]."""
+SETTLE_S = 3.0
+"""Longest the toy is left alone before the claw closes [s]."""
+SETTLE_REST_M = 0.0002
+"""Largest particle motion in a control frame below which the toy counts as still."""
+SETTLE_STILL_FRAMES = 5
+"""Consecutive still frames the loop must hold: a bounce apex is still for one."""
 OPENED_HALF_GAP = 0.045
 """How far apart the jaws open once the toy is on the rod."""
 SEAT_HOLD = 1.0
@@ -44,11 +48,13 @@ SEAT_WITHDRAW = 0.5
 TABLE_Z = 0.75
 SOURCE_X = -0.13
 CONTACT_GAP = 0.02
-"""The collision pipeline's detection gap. The coarse block's own gap must be"""
+"""The collision pipeline's detection gap; the coarse block's own gap must match it."""
 CONTACT_KE = 100000.0
-"""The arrangement's rigid-soft penalty stiffness: support load is this times"""
+"""Rigid-soft penalty stiffness: a contact's support load is this times its depth."""
 COARSE_BUDGET = 0.005
 """Cumulative coarse translation per substep, at most a quarter of the gap."""
+COUPLER_BAUMGARTE = 0.1
+"""Fraction of an existing pad-loop overlap the coupler removes per substep."""
 ROD_RADIUS = 0.006
 POST_RADIUS = 0.010
 ROD_FREE_Y = 0.030
@@ -58,14 +64,19 @@ CLEARANCE = 0.030
 """Space the hanging toy keeps under its lowest point [m]; the gate asks 20 mm."""
 THREAD_LIFT = 0.005
 RIM_HANG = 0.020
-"""How far the loop's centre sits below the pads when the toy dangles from a rim"""
+"""How far the loop's centre hangs below the pads when the toy dangles from a rim."""
 """How far the hole's centre rides above its seated height while threading."""
 WITHDRAW_Z = 0.060
 """How far the opened jaws rise to clear the toy."""
 PAD_HALF_THICKNESS = 0.003
 """The pad box's half-extent along the closing axis, as ``gripper.py`` builds it."""
-GRIP_SQUEEZE = 0.006
-"""How far past the loop's measured width the closed pads aim."""
+GRIP_SQUEEZE = 0.002
+"""How far past the loop's measured width the closed pads aim.
+
+The jaw drive clamps at 5 N, so this is the closing travel past the contact and
+not a way to build force: the loop yields, and metal that keeps closing splits
+it.
+"""
 # The seat is the slow one on purpose. Its descent is what brings the loop's
 # hole down onto the rod, and the catch is an impact: the guided ramp runs at a
 # constant 25 mm/s, whose momentum over one substep is about 1.9 N -- well under
@@ -86,7 +97,7 @@ PHASES = {
     "open": (8.3, 8.8),
     "withdraw": (8.8, 9.3),
 }
-"""Planned phase windows. The seat's own end is not one of them: the descent"""
+"""Planned phase windows. The seat's own end is not one: the guard stops the descent."""
 SOURCE_HASHES = {
     "final_mesh.mesh": "df3d1505d96d36fbfa76291e7ab94269a30500ba5e4b87516d0bf8f57f0c6458",
     "heterogeneous_params.npz": "7cfc8ca3cc7c08d261aa90b08832230801fec1ac62848d0e9239d9e2f318e8c6",
@@ -103,6 +114,7 @@ def build_scene(
     self_contact: bool = True,
     claw: str = "mujoco",
     coupler: str = "admm",
+    coupler_iterations: int | None = None,
 ):
     for relative, expected in SOURCE_HASHES.items():
         actual = hashlib.sha256((ASSET / relative).read_bytes()).hexdigest()
@@ -207,7 +219,18 @@ def build_scene(
         substeps=SUBSTEPS,
         use_cuda_graph=False,
         backends=(("soft", vbd), ("rigid", claw_backend if split else vbd), ("*", vbd)),
-        **({} if not split else {"coupling": rss.coupler(coupler, mode="staggered")}),
+        **(
+            {}
+            if not split
+            else {
+                "coupling": rss.coupler(
+                    coupler,
+                    mode="staggered",
+                    baumgarte=COUPLER_BAUMGARTE,
+                    **({} if coupler_iterations is None else {"iterations": int(coupler_iterations)}),
+                )
+            }
+        ),
         collision=rss.CollisionSpec(
             soft_contact_margin=CONTACT_GAP,
             full_surface_contact=False,
@@ -263,8 +286,6 @@ def build_scene(
         name="overview",
         width=960,
         height=540,
-        # Pulled back from the toy-and-rod framing so both ends of the scene stay
-        # in frame for the whole carry, as in the cup and pick-and-drop scenes.
         eye=(0.76, -0.55, 1.163),
         look_at=(0.46, 0.0, 0.95),
         fov_y=45.0,
@@ -413,14 +434,20 @@ def run(
     coarse: bool = False,
     rod_radius: float = ROD_RADIUS,
     mu: float | None = None,
-    enable_self_contact: bool = True,    claw: str = "mujoco",
-
-
+    enable_self_contact: bool = True,
+    claw: str = "mujoco",
     coupler: str = "admm",
+    coupler_iterations: int | None = None,
 ) -> dict:
     out.mkdir(parents=True, exist_ok=True)
     sim, obj, grip, camera, rod, ring, geometry = build_scene(
-        coarse=coarse, rod_radius=rod_radius, mu=mu, self_contact=enable_self_contact, claw=claw, coupler=coupler
+        coarse=coarse,
+        rod_radius=rod_radius,
+        mu=mu,
+        self_contact=enable_self_contact,
+        claw=claw,
+        coupler=coupler,
+        coupler_iterations=coupler_iterations,
     )
     entity = obj.entity
     particles = entity.particles
@@ -438,28 +465,40 @@ def run(
     quality = MeshQuality(sim, entity)
     dt = 1.0 / (CONTROL_HZ * SUBSTEPS)
     q0 = sim.pipeline.state_0.particle_q.numpy()[particles]
-    # Let the toy settle, then aim the grasp at the loop it settled into: see
-    # SETTLE_S. The pre-roll is outside the reported frames, so every phase, time
-    # and guard frame below stays a frame of the trajectory that starts after it.
+    # Let the toy settle, then aim the grasp at the loop it settled into. The
+    # pre-roll waits for the loop to stop rather than running a fixed time: the
+    # loop falls 30 mm onto the bench and is still in the air at 0.8 s, so a fixed
+    # pre-roll aimed the pads 9 mm above it and the pinch caught the rim's top
+    # edge. The pre-roll is outside the reported frames, so every phase, time and
+    # guard frame below stays a frame of the trajectory that starts after it.
     spawn_ring = q0[ring["loop_ids"]].mean(axis=0)
     grip.entity.set_trajectory(parked(grip, grip.entity.capacity))
+    # Every particle is watched, not the loop's centroid: the loop sits at the
+    # toy's end and barely moves while the toy rotates about it, so a centroid
+    # gate calls a toy that is still falling settled.
+    previous = None
+    still = settle_frames = 0
     for _ in range(round(SETTLE_S * CONTROL_HZ)):
         sim.run(1).sync()
-    settled = sim.pipeline.state_0.particle_q.numpy()[particles]
-    loop_rest = settled[ring["loop_ids"]]
+        settle_frames += 1
+        now = sim.pipeline.state_0.particle_q.numpy()[particles]
+        moved = np.inf if previous is None else float(np.abs(now - previous).max())
+        previous = now
+        still = still + 1 if moved < SETTLE_REST_M else 0
+        if still >= SETTLE_STILL_FRAMES:
+            break
+    loop_rest = previous[ring["loop_ids"]]
     settled_ring = loop_rest.mean(axis=0)
-    # Aim at the loop *as it settles*, in its own frame: the pads close at the
-    # centroid's height and squeeze past the loop's width there. Both earlier
-    # aims are wrong against this pose -- the spawn one left 30 mm of air between
-    # the pads and the loop, and the widest-band one put them on the rim where it
-    # lies on the bench: measured pads at z = 0.7503 against a band at 0.7531,
-    # three grazing contacts, 2e-5 N on the drive, and the toy never lifted.
+    # Aim at the loop as it settles, in its own frame: the pads close at the
+    # centroid's height and squeeze past the loop's width there.
     band = np.abs(loop_rest[:, 2] - settled_ring[2]) <= PAD_HALF_THICKNESS
     reach = float(np.max(np.abs(loop_rest[band, 0] - settled_ring[0])))
     closed_gap = reach + PAD_HALF_THICKNESS - GRIP_SQUEEZE
     print(
         json.dumps(
             {
+                "settle_frames": settle_frames,
+                "settle_aim_z_m": float(settled_ring[2]),
                 "settle_drop_m": float(spawn_ring[2] - settled_ring[2]),
                 "settled_reach_m": reach,
                 "spawn_reach_m": float(geometry.get("side_reach_m", ring["side_reach"])),
@@ -509,6 +548,11 @@ def run(
             touching_shape = depth > 0.0
             finger = np.isin(shapes, grip.entity.finger_shapes)
             on_rod = np.isin(shapes, list(rod_shapes))
+            # On a split island the pads' contacts are the coupler's, not the main
+            # buffer's: the pad rows never reach this list.
+            finger_contacts = int(np.count_nonzero(finger & touching_shape))
+            if claw != "vbd":
+                finger_contacts = int(getattr(sim.pipeline.program.solver, "collision_contact_count", 0))
             # Newton mixes a particle contact's stiffness as the mean of the two
             # sides: the object's own soft_contact_ke and the shape's. The rod is
             # built from the post fixture cfg (ke = 1e4), so a read at the object's
@@ -528,7 +572,7 @@ def run(
                 "minimum_tet_volume_ratio": float((det / rest_det).min()),
                 "inverted_tetrahedra": int(np.count_nonzero(det <= 0)),
                 "soft_contacts": count,
-                "finger_contacts": int(np.count_nonzero(finger & touching_shape)),
+                "finger_contacts": finger_contacts,
                 "rod_ring_contacts": int(np.count_nonzero(on_rod & np.isin(touching, loop_ids) & touching_shape)),
                 "rod_load_n": float(load[on_rod].sum()),
                 "rod_support_n": float(support[on_rod].sum()),
@@ -703,6 +747,7 @@ def main() -> None:
     parser.add_argument("--coarse", dest="coarse", action="store_true", help="run the coarse common-translation solve")
     parser.add_argument("--claw", default="mujoco", help="backend for the claw: mujoco gives it its own island")
     parser.add_argument("--coupler", default="admm", help="island coupler: admm or proxy")
+    parser.add_argument("--coupler-iterations", type=int, default=None, help="ADMM iterations per substep")
     parser.add_argument("--rod-radius", type=float, default=ROD_RADIUS, help="rod radius [m]")
     parser.add_argument("--mu", type=float, default=None, help="global soft-contact friction coefficient")
     parser.add_argument(
@@ -716,6 +761,7 @@ def main() -> None:
         coarse=args.coarse,
         claw=args.claw,
         coupler=args.coupler,
+        coupler_iterations=args.coupler_iterations,
         rod_radius=args.rod_radius,
         mu=args.mu,
         enable_self_contact=args.self_contact,

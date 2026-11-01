@@ -86,7 +86,14 @@ SOURCE_HASHES = {
 }
 
 
-def build_scene(*, coarse: bool = False, self_contact: bool = True, claw: str = "vbd", coupler: str = "admm"):
+def build_scene(
+    *,
+    coarse: bool = False,
+    self_contact: bool = True,
+    claw: str = "vbd",
+    coupler: str = "admm",
+    coupler_iterations: int | None = None,
+):
     for relative, expected in SOURCE_HASHES.items():
         actual = hashlib.sha256((ASSET / relative).read_bytes()).hexdigest()
         if actual != expected:
@@ -165,7 +172,17 @@ def build_scene(*, coarse: bool = False, self_contact: bool = True, claw: str = 
         substeps=SUBSTEPS,
         use_cuda_graph=False,
         backends=(("soft", vbd), ("rigid", claw_backend if split else vbd), ("*", vbd)),
-        **({} if not split else {"coupling": rss.coupler(coupler, mode="staggered")}),
+        **(
+            {}
+            if not split
+            else {
+                "coupling": rss.coupler(
+                    coupler,
+                    mode="staggered",
+                    **({} if coupler_iterations is None else {"iterations": int(coupler_iterations)}),
+                )
+            }
+        ),
         collision=rss.CollisionSpec(
             soft_contact_margin=CONTACT_GAP,
             full_surface_contact=False,
@@ -346,10 +363,15 @@ def run(
     enable_self_contact: bool = True,
     claw: str = "vbd",
     coupler: str = "admm",
+    coupler_iterations: int | None = None,
 ) -> dict:
     out.mkdir(parents=True, exist_ok=True)
     sim, obj, jaw, camera, geometry = build_scene(
-        coarse=coarse, self_contact=enable_self_contact, claw=claw, coupler=coupler
+        coarse=coarse,
+        self_contact=enable_self_contact,
+        claw=claw,
+        coupler=coupler,
+        coupler_iterations=coupler_iterations,
     )
     entity = obj.entity
     particles = entity.particles
@@ -490,6 +512,7 @@ def main() -> None:
     parser.add_argument("--coarse", action="store_true", help="run the coarse common-translation solve")
     parser.add_argument("--claw", default="vbd", help="backend for the claw: vbd shares the FEM's island")
     parser.add_argument("--coupler", default="admm", help="island coupler: admm, proxy or one_way")
+    parser.add_argument("--coupler-iterations", type=int, default=None, help="ADMM iterations per substep")
     parser.add_argument(
         "--no-self-contact", dest="self_contact", action="store_false", help="turn the toy's self-contact off"
     )
@@ -502,6 +525,7 @@ def main() -> None:
         enable_self_contact=args.self_contact,
         claw=args.claw,
         coupler=args.coupler,
+        coupler_iterations=args.coupler_iterations,
     )
 
 

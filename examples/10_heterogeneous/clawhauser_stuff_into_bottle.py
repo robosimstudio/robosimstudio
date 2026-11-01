@@ -242,6 +242,7 @@ def build_scene(
     self_contact: bool = True,
     claw: str = "vbd",
     coupler: str = "admm",
+    coupler_iterations: int | None = None,
 ):
     for relative, expected in SOURCE_HASHES.items():
         actual = hashlib.sha256((ASSET / relative).read_bytes()).hexdigest()
@@ -357,7 +358,17 @@ def build_scene(
         substeps=SUBSTEPS,
         use_cuda_graph=False,
         backends=(("soft", vbd), ("rigid", claw_backend if split else vbd), ("*", vbd)),
-        **({} if not split else {"coupling": rss.coupler(coupler, mode="staggered")}),
+        **(
+            {}
+            if not split
+            else {
+                "coupling": rss.coupler(
+                    coupler,
+                    mode="staggered",
+                    **({} if coupler_iterations is None else {"iterations": int(coupler_iterations)}),
+                )
+            }
+        ),
         collision=rss.CollisionSpec(
             soft_contact_margin=CONTACT_GAP,
             full_surface_contact=False,
@@ -667,6 +678,7 @@ def run(
     enable_self_contact: bool = True,
     claw: str = "vbd",
     coupler: str = "admm",
+    coupler_iterations: int | None = None,
 ) -> dict:
     out.mkdir(parents=True, exist_ok=True)
     sim, obj, grip, camera, ring, glass_shapes, glass_bodies, geometry = build_scene(
@@ -678,6 +690,7 @@ def run(
         self_contact=enable_self_contact,
         claw=claw,
         coupler=coupler,
+        coupler_iterations=coupler_iterations,
     )
     entity = obj.entity
     particles = entity.particles
@@ -1215,6 +1228,7 @@ def main() -> None:
     parser.add_argument("--coarse", dest="coarse", action="store_true", help="run the coarse common-translation solve")
     parser.add_argument("--claw", default="vbd", help="backend for the claw: vbd shares the FEM's island")
     parser.add_argument("--coupler", default="admm", help="island coupler: admm, proxy or one_way")
+    parser.add_argument("--coupler-iterations", type=int, default=None, help="ADMM iterations per substep")
     parser.add_argument("--bore", type=float, default=BORE_RADIUS, help="container inner radius [m]")
     parser.add_argument("--cap", type=float, default=GRASP_LIMIT_N, help="jaw closing clamp [N]")
     parser.add_argument("--push-cap", type=float, default=PUSH_LIMIT_N, help="carrier push clamp [N]")
@@ -1230,6 +1244,7 @@ def main() -> None:
         coarse=args.coarse,
         claw=args.claw,
         coupler=args.coupler,
+        coupler_iterations=args.coupler_iterations,
         bore=args.bore,
         cap=args.cap,
         push_cap=args.push_cap,

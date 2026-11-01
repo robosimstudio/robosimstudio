@@ -58,30 +58,50 @@ def _slide_state(
 
 
 @wp.kernel
-def _set_guide(
+def _drive_y(
     tick: wp.array[int],
     lengths: wp.array[int],
     poses: wp.array2d[wp.transform],
     rates: wp.array2d[wp.spatial_vector],
+    dof: int,
     guide: int,
+    build_y: float,
+    ke: float,
+    kd: float,
+    limit: float,
     body_q: wp.array[wp.transform],
     body_qd: wp.array[wp.spatial_vector],
+    joint_f: wp.array[float],
+    applied: wp.array[wp.spatial_vector],
 ):
-    """Hold the guide at the finger midpoint, level with the target orientation."""
+    """Slide the claw's base along y to the targets' midpoint.
+
+    The base is a prismatic joint and not a teleported kinematic body: a
+    reduced-coordinate engine reads joints, so a body-quaternion write moved the
+    claw under VBD and left it behind under MuJoCo.
+    """
     frame = wp.min(tick[0], lengths[0] - 1)
     left, right = poses[frame, 0], poses[frame, 1]
     midpoint = (wp.transform_get_translation(left) + wp.transform_get_translation(right)) * 0.5
-    linear = (wp.spatial_top(rates[frame, 0]) + wp.spatial_top(rates[frame, 1])) * 0.5
-    angular = (wp.spatial_bottom(rates[frame, 0]) + wp.spatial_bottom(rates[frame, 1])) * 0.5
-    body_q[guide] = wp.transform(midpoint, wp.transform_get_rotation(left))
-    body_qd[guide] = wp.spatial_vector(linear, angular)
+    target = midpoint[1] - build_y
+    target_rate = (wp.spatial_top(rates[frame, 0])[1] + wp.spatial_top(rates[frame, 1])[1]) * 0.5
+    position = wp.transform_get_translation(body_q[guide])[1] - build_y
+    rate = wp.spatial_top(body_qd[guide])[1]
+    effort = wp.clamp(ke * (target - position) + kd * (target_rate - rate), -limit, limit)
+    joint_f[dof] = effort
+    applied[0] = wp.spatial_vector(wp.vec3(0.0, effort, 0.0), wp.vec3())
 
 
 @wp.kernel
 def _drive_carrier(
+    tick: wp.array[int],
+    lengths: wp.array[int],
+    poses: wp.array2d[wp.transform],
+    rates: wp.array2d[wp.spatial_vector],
     dof: int,
     carrier: int,
     guide: int,
+    build_z: float,
     fingers: wp.array[int],
     body_q: wp.array[wp.transform],
     body_qd: wp.array[wp.spatial_vector],
@@ -114,6 +134,13 @@ def _drive_carrier(
     into the bench on the first frame.
     """
     axis = wp.vec3(0.0, 0.0, 1.0)
+    frame = wp.min(tick[0], lengths[0] - 1)
+    left, right = poses[frame, 0], poses[frame, 1]
+    midpoint = (wp.transform_get_translation(left) + wp.transform_get_translation(right)) * 0.5
+    # The base holds its height, so the lift and the press are the carrier's own
+    # travel; its target is the path read against the fixed base.
+    target = midpoint[2] - build_z
+    target_rate = (wp.spatial_top(rates[frame, 0])[2] + wp.spatial_top(rates[frame, 1])[2]) * 0.5
     parent, child = body_q[guide], body_q[carrier]
     parent_origin = wp.transform_get_translation(parent)
     child_origin = wp.transform_get_translation(child)
@@ -126,7 +153,7 @@ def _drive_carrier(
     )
     rate = wp.dot(child_velocity - parent_velocity, axis)
     stiffness = press_ke if pressing[0] != 0 else ke
-    effort = stiffness * (0.0 - coordinate) + kd * (0.0 - rate)
+    effort = stiffness * (target - coordinate) + kd * (target_rate - rate)
     if compensate_gravity:
         for link in range(3):
             body = carrier if link == 0 else fingers[link - 1]
@@ -177,9 +204,7 @@ def _drive_slides(
         body_qd,
         body_com,
     )
-    effort = wp.clamp(
-        ke * (half_gap - coordinate) + kd * (gap_rate - rate), -limit, limit
-    )
+    effort = wp.clamp(ke * (half_gap - coordinate) + kd * (gap_rate - rate), -limit, limit)
     joint_f[dofs[finger]] = effort
     applied[finger] = wp.spatial_vector(wp.vec3(effort, 0.0, 0.0), wp.vec3())
     peak_force[finger] = wp.max(peak_force[finger], wp.abs(effort))
@@ -226,13 +251,12 @@ clamp appears in the other's drive."""
 
 
 def vbd_island(solver):
-    """The VBD sub-solver when the claw is coupled out of it, else ``solver``.
+    """The VBD entry when the claw is on its own island, else ``solver``.
 
-    A claw on its own island makes the pipeline's solver a ``SolverCoupled``; the
-    particles, their self-contact flags and their contact buffers still belong to
-    the VBD entry, so the scenes read those off that entry rather than the wrapper.
+    The particles, their self-contact flags and their contact buffers belong to
+    that entry, not to the coupled wrapper the pipeline steps.
     """
-    for name in getattr(solver, "entry_names", lambda: ())():
+    for name in solver.entry_names() if hasattr(solver, "entry_names") else ():
         inner = solver.solver(name)
         if type(inner).__name__.startswith("SolverVBD"):
             return inner
@@ -341,8 +365,8 @@ class ParallelGripper(rss.Entity):
         cfg = newton.ModelBuilder.ShapeConfig(mu=spec.pad_mu, ke=1.0e5, kd=25.0, gap=0.001, density=0.0)
         self.guide_body = builder.add_link(
             xform=wp.transform(self.center, wp.quat_identity()),
-            mass=0.0,
-            is_kinematic=True,
+            mass=0.05,
+            inertia=wp.mat33(np.eye(3) * 2.5e-5),
             label=f"{spec.name}_guide",
         )
         self.carrier_body = builder.add_link(
@@ -383,7 +407,25 @@ class ParallelGripper(rss.Entity):
             )
         )
         self.joints = [
-            builder.add_joint_free(self.guide_body, label=f"{spec.name}_guide_free"),
+            # The base slides along y on a joint: it is the one axis the pads have
+            # to travel to reach a loop that settles off the build pose, and a
+            # joint is the only motion every backend integrates.
+            builder.add_joint_prismatic(
+                -1,
+                self.guide_body,
+                parent_xform=wp.transform(self.center, wp.quat_identity()),
+                axis=wp.vec3(0.0, 1.0, 0.0),
+                target_pos=0.0,
+                target_ke=0.0,
+                target_kd=0.0,
+                effort_limit=spec.push_force_limit,
+                actuator_mode=newton.JointTargetMode.POSITION_VELOCITY,
+                limit_lower=-0.15,
+                limit_upper=0.15,
+                damping=0.0,
+                friction=0.0,
+                label=f"{spec.name}_base_y",
+            ),
             builder.add_joint_prismatic(
                 self.guide_body,
                 self.carrier_body,
@@ -393,8 +435,8 @@ class ParallelGripper(rss.Entity):
                 target_kd=0.0,
                 effort_limit=spec.push_force_limit,
                 actuator_mode=newton.JointTargetMode.POSITION_VELOCITY,
-                limit_lower=-0.20,
-                limit_upper=0.20,
+                limit_lower=-0.30,
+                limit_upper=0.30,
                 damping=0.0,
                 friction=0.0,
                 label=f"{spec.name}_push",
@@ -463,8 +505,7 @@ class ParallelGripper(rss.Entity):
     def coupling_bodies(self) -> list[int]:
         """The fingers as the surfaces a deformable can feel, i.e. the ``hands`` role.
 
-        Without this the claw is a rigid island nothing may touch: the toy's
-        ``hands`` rule resolves to no node and the coupler gets no channel.
+        Without it the claw is a rigid island nothing may touch.
         """
         return list(self.bodies)
 
@@ -477,6 +518,7 @@ class ParallelGripper(rss.Entity):
         device = model.device
         dofs = model.joint_qd_start.numpy()
         self._body_indices = wp.array(self.bodies, dtype=int, device=device)
+        self._base_dof = int(dofs[self.joints[0]])
         self._carrier_dof = int(dofs[self.joints[1]])
         self._finger_dofs = wp.array(dofs[self.joints[2:]], dtype=int, device=device)
         self._poses = wp.zeros((self.capacity, 2), dtype=wp.transform, device=device)
@@ -485,6 +527,7 @@ class ParallelGripper(rss.Entity):
         self._tick = wp.zeros(1, dtype=int, device=device)
         self._pressing = wp.zeros(1, dtype=int, device=device)
         self.applied_wrenches = wp.zeros(2, dtype=wp.spatial_vector, device=device)
+        self.applied_base = wp.zeros(1, dtype=wp.spatial_vector, device=device)
         self.applied_carrier = wp.zeros(1, dtype=wp.spatial_vector, device=device)
         self.peak_force = wp.zeros(2, dtype=float, device=device)
         self.peak_torque = wp.zeros(2, dtype=float, device=device)
@@ -544,25 +587,40 @@ class ParallelGripper(rss.Entity):
         del dt
         spec, model = self.spec, self._model
         wp.launch(
-            _set_guide,
+            _drive_y,
             dim=1,
             inputs=[
                 self._tick,
                 self._lengths,
                 self._poses,
                 self._velocities,
+                self._base_dof,
                 self.guide_body,
+                float(self.center[1]),
+                spec.carrier_ke,
+                spec.carrier_kd,
+                spec.push_force_limit,
+                state.body_q,
+                state.body_qd,
             ],
-            outputs=[state.body_q, state.body_qd],
+            outputs=[
+                self.pipeline.control.joint_f,
+                self.applied_base,
+            ],
             device=model.device,
         )
         wp.launch(
             _drive_carrier,
             dim=1,
             inputs=[
+                self._tick,
+                self._lengths,
+                self._poses,
+                self._velocities,
                 self._carrier_dof,
                 self.carrier_body,
                 self.guide_body,
+                float(self.center[2]),
                 self._body_indices,
                 state.body_q,
                 state.body_qd,
@@ -645,6 +703,7 @@ class ParallelGripper(rss.Entity):
         self._tick.zero_()
         self._pressing.zero_()
         self.applied_wrenches.zero_()
+        self.applied_base.zero_()
         self.applied_carrier.zero_()
         self.peak_force.zero_()
         self.peak_torque.zero_()
