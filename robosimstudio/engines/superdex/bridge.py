@@ -1150,6 +1150,8 @@ class SuperdexBridge:
                 on_soft = np.zeros(3)
                 # This world's deformables only -- see ``actors_by_world``.
                 for entry in self.actors_by_world.get(mirror.world, ()):
+                    if self._harvest_unusable(entry):
+                        continue
                     on_soft += np.asarray(
                         entry["actor"].get_contact_force_from_actor_world(mirror.actor), dtype=np.float64
                     )
@@ -1172,6 +1174,43 @@ class SuperdexBridge:
             entry["prev"] = self.rig.write_particles(
                 state, entry["start"], entry["count"], np.asarray(entry["read"]()), dt, entry["prev"]
             )
+
+    def _harvest_unusable(self, entry: dict) -> bool:
+        """Whether this actor's reported contact force must not reach a body: today, every rod.
+
+        SuperDex's ``get_contact_force_from_actor_world`` -- and the per-sample
+        ``force`` behind it -- is a world vector for a volumetric soft body: a
+        Panda closing on the sponge reads each pad's push along that pad's own
+        normal, into the foam, 67 N on the upper pads and 22 N on the lower
+        ones. For a **rod** it is not: the knot example's rope, held by both
+        YAM hands at rest, reports about 40 N along +y on every pad -- the same
+        vector on the left hand and the right, on the pad at -x and the pad at
+        +x, resting, lifting, or pulling either way -- when a squeeze acts
+        along the pads' normals, +-x, and cancels. No frame makes it right:
+        not the mirror's (that rotation breaks the sponge), not the actor's
+        root (identity), not the rod's own tangent-normal frame (friction
+        then opposes nothing). The magnitude is the squeeze; the direction is
+        not stated in any frame this bridge can resolve.
+
+        Fed to the accumulator as it stands, that vector shoved both hands of
+        a pinch sideways by 80 N until the rope slipped out -- which is why
+        ``03_knot`` ships ``feedback="off"``. Dropping the rod's share is the
+        honest default until the engine's convention for rod contacts is
+        known: a hand holding a rope feels no reaction from it, and says so
+        once, instead of feeling a wrong one.
+        """
+        unusable = entry.get("actor").get_type() == self.physics.ActorType.ROD
+        if unusable and not entry.get("_harvest_warned"):
+            entry["_harvest_warned"] = True
+            log.warning(
+                "superdex island %r: the contact force on rod %r is not harvested -- the engine states a rod's "
+                "contact force in a frame this bridge cannot resolve (measured: one vector on every pad, whichever "
+                "way the pads face), so feeding it back would push the hand the wrong way. The rod still follows "
+                "the hand; the hand feels nothing from the rod.",
+                self.recipe.get("island"),
+                entry.get("name"),
+            )
+        return unusable
 
     def _drive_world(self, world: int, posed: list, step_dt: float, teleport: bool) -> None:
         """Pose one world's moving mirrors and step its scene."""
