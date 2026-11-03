@@ -123,7 +123,7 @@ CONTACT_KE = 100000.0
 the summed penetration a contact patch reports."""
 COARSE_BUDGET = 0.005
 """Cumulative coarse translation per substep, at most a quarter of the gap."""
-GRIP_SQUEEZE = 0.012
+GRIP_SQUEEZE = 0.016
 """How far past the loop's measured width the closed pads aim [m]. The same
 measured value the rod scene uses. The parallel jaws hold the pads' attitude, so
 the loop cannot roll them, and the flat face plus its friction is the grip.

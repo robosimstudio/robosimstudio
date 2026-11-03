@@ -54,7 +54,7 @@ LIFT_M = 0.210
 CONTACT_GAP = 0.02
 CONTACT_KE = 100000.0
 COARSE_BUDGET = 0.005
-GRIP_SQUEEZE = 0.012
+GRIP_SQUEEZE = 0.016
 """How far past the loop's measured width the closed pads aim [m]. The same value
 the rod and cup scenes use: the pads close on the cord's rim from either side and
 a deep overshoot is what holds it. On the arm it is the same arithmetic -- each

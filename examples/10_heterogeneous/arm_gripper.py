@@ -5,7 +5,7 @@ The claw these scenes used to carry was a mechanism on a kinematic guide: a
 level carrier and two prismatic jaws, prescribed along a path. The arm replaces
 both halves of that -- it reaches, its own fingers close on the loop, and the toy
 hangs from the pads -- while the grasp's numbers stay the ones the claw was
-measured at: a 10 N closing clamp, a close commanded 12 mm past the loop's
+measured at: a 10 N closing clamp, a close commanded 16 mm past the loop's
 measured half-width, and the pipeline's global soft-contact ``mu``.
 
 **Two islands, joined one way.** The arm is an ``articulated`` robot and resolves
@@ -31,8 +31,8 @@ writes into the actuator's ``forcerange``; :func:`check_arm` asserts the built
 model carries it on both finger DOFs, so a model edited back to 5 fails here
 instead of gripping at half.
 
-**The 12 mm close is a command, not a distance.** Each pad face is commanded
-12 mm inside the loop's measured outer surface. The pads cannot travel that far
+**The 16 mm close is a command, not a distance.** Each pad face is commanded
+16 mm inside the loop's measured outer surface. The pads cannot travel that far
 -- the faces meet at the finger origins -- and are not allowed to: the 10 N cap
 stalls them first. That is the same arithmetic the claw used, whose pads also
 overlap at full close.
@@ -102,7 +102,7 @@ SPAN = 2.0 * OPEN_HALF_GAP
 GRASP_LIMIT_N = 10.0
 """The jaws' closing budget [N]: one finger's actuator force, never more."""
 
-CLOSE_TRAVEL = 0.012
+CLOSE_TRAVEL = 0.016
 """How far past a measured half-width the pads are commanded [m].
 
 A command, not a distance: the cap stops the fingers wherever the toy's push

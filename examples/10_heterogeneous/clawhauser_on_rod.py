@@ -181,7 +181,7 @@ PAD_CLEARANCE = 0.001
 the ground, so a loop lying there is straddled instead of one assumed to sit at
 the body's mid-plane.
 """
-GRIP_SQUEEZE = 0.012
+GRIP_SQUEEZE = 0.016
 """How far past the loop's measured width the closed pads aim.
 
 Both ends of this were measured. At 1 mm the pads press about 1 N and the cord,
@@ -519,7 +519,7 @@ def arm_route(sim, geometry: dict, capacity: int, dt: float):
     """The same path the claw is given, as tool-centre poses and a pad-face gap.
 
     The gap is stated between the pad *faces* here, where the claw states it
-    between the pads' centres, so ``squeeze`` is the same 12 mm past the loop's
+    between the pads' centres, so ``squeeze`` is the same 16 mm past the loop's
     widest point in both.
     """
     control = arm_gripper.ArmControl(sim)
