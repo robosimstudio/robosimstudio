@@ -181,6 +181,15 @@ PAD_CLEARANCE = 0.001
 the ground, so a loop lying there is straddled instead of one assumed to sit at
 the body's mid-plane.
 """
+GRIP_TO_BODY = 0.006
+"""How far inboard of the loop's widest band the pads close [m].
+
+The widest band is the ring's equator; six millimetres toward the body the band
+is still 22.96 mm of its 23.13 mm maximum, so the pinch stays on the wide part
+while its faces get cord behind them. Measured on the rod: the forces are the
+same 11.8 / 10.5 N and the ring still stretches to 1.96x and leaves the pads at
+frame 61, so where along the band the pads land is not what the grip is short of.
+"""
 GRIP_SQUEEZE = 0.016
 """How far past the loop's measured width the closed pads aim.
 
@@ -294,7 +303,7 @@ def build_scene(
         "thread_z_m": thread_height,
         "thread_lift_m": THREAD_LIFT,
         "withdraw_z_m": WITHDRAW_Z,
-        "grip_centre_m": [SOURCE_X + float(hole[0]), 0.0, float(grip_z)],
+        "grip_centre_m": [SOURCE_X + float(hole[0]), -GRIP_TO_BODY, float(grip_z)],
     }
     print(json.dumps({"geometry": geometry}), flush=True)
 
@@ -391,7 +400,7 @@ def build_scene(
                 # past it that the jaw drive clamps at 10 N. The pose is in the
                 # work-surface frame, like the statics above and every other entity's
                 # -- an absolute height here would be lifted by the frame twice.
-                center=(SOURCE_X + float(hole[0]), 0.0, grip_z),
+                center=(SOURCE_X + float(hole[0]), -GRIP_TO_BODY, grip_z),
                 half_gap=ring["side_reach"] + PAD_HALF_THICKNESS + 0.012,
                 closed_half_gap=ring["side_reach"] + PAD_HALF_THICKNESS - squeeze,
                 force_limit=force_limit,
