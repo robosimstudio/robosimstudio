@@ -228,7 +228,7 @@ def build_scene(
     *,
     coarse: bool,
     rod_radius: float = ROD_RADIUS,
-    mu: float | None = 4.0,
+    mu: float | None = 8.0,
     force_limit: float = GRASP_LIMIT_N,
     squeeze: float = GRIP_SQUEEZE,
     self_contact: bool = True,
@@ -403,9 +403,11 @@ def build_scene(
             )
         )
     if split:
-        # Three-quarter, and further back than the claw's framing: the arm's reach
-        # and the rod's far end both have to stay in frame.
-        eye, look_at, fov_y = (0.10, -1.05, 1.30), (0.42, 0.03, 0.92), 50.0
+        # Three-quarter from the right of the rod, further back than the claw's
+        # framing: the arm's reach and the rod's far end both have to stay in
+        # frame, and the thread onto the rod reads from its side rather than
+        # down its axis.
+        eye, look_at, fov_y = (1.12, -0.85, 1.30), (0.42, 0.03, 0.92), 50.0
     else:
         # Pulled back from the toy-and-rod framing so both ends of the scene stay
         # in frame for the whole carry, as in the cup and pick-and-drop scenes.
@@ -605,7 +607,7 @@ def run(
     render_every: int = 0,
     coarse: bool = False,
     rod_radius: float = ROD_RADIUS,
-    mu: float | None = 4.0,
+    mu: float | None = 8.0,
     force_limit: float = GRASP_LIMIT_N,
     squeeze: float = GRIP_SQUEEZE,
     enable_self_contact: bool = True,
@@ -923,7 +925,7 @@ def main() -> None:
     parser.add_argument("--render-every", type=int, default=0)
     parser.add_argument("--coarse", dest="coarse", action="store_true", help="run the coarse common-translation solve")
     parser.add_argument("--rod-radius", type=float, default=ROD_RADIUS, help="rod radius [m]")
-    parser.add_argument("--mu", type=float, default=4.0, help="global soft-contact friction coefficient")
+    parser.add_argument("--mu", type=float, default=8.0, help="global soft-contact friction coefficient")
     parser.add_argument("--force-limit", type=float, default=GRASP_LIMIT_N, help="the jaws' closing budget [N]")
     parser.add_argument("--squeeze", type=float, default=GRIP_SQUEEZE, help="close travel past the loop [m]")
     parser.add_argument(

@@ -251,7 +251,7 @@ def build_scene(
     bore: float,
     cap: float,
     push_cap: float,
-    mu: float | None = 4.0,
+    mu: float | None = 8.0,
     squeeze: float = GRIP_SQUEEZE,
     self_contact: bool = True,
     claw: str = "arm",
@@ -703,7 +703,7 @@ def run(
     bore: float = BORE_RADIUS,
     cap: float = GRASP_LIMIT_N,
     push_cap: float = PUSH_LIMIT_N,
-    mu: float | None = 4.0,
+    mu: float | None = 8.0,
     squeeze: float = GRIP_SQUEEZE,
     enable_self_contact: bool = True,
     claw: str = "arm",
@@ -1347,7 +1347,7 @@ def main() -> None:
     parser.add_argument("--push-cap", type=float, default=PUSH_LIMIT_N, help="carrier push clamp [N]")
     parser.add_argument("--force-limit", type=float, default=None, help="alias for --cap, the sweep's name")
     parser.add_argument("--squeeze", type=float, default=GRIP_SQUEEZE, help="close travel past the loop [m]")
-    parser.add_argument("--mu", type=float, default=4.0, help="global soft-contact friction coefficient")
+    parser.add_argument("--mu", type=float, default=8.0, help="global soft-contact friction coefficient")
     parser.add_argument(
         "--no-self-contact", dest="self_contact", action="store_false", help="turn the toy's self-contact off"
     )

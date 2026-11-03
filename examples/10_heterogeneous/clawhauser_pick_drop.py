@@ -101,7 +101,7 @@ SOURCE_HASHES = {
 def build_scene(
     *,
     coarse: bool,
-    mu: float | None = 4.0,
+    mu: float | None = 8.0,
     force_limit: float = GRASP_LIMIT_N,
     squeeze: float = GRIP_SQUEEZE,
     self_contact: bool = True,
@@ -435,7 +435,7 @@ def run(
     steps: int,
     render_every: int = 0,
     coarse: bool = False,
-    mu: float | None = 4.0,
+    mu: float | None = 8.0,
     force_limit: float = GRASP_LIMIT_N,
     squeeze: float = GRIP_SQUEEZE,
     enable_self_contact: bool = True,
@@ -633,7 +633,7 @@ def main() -> None:
     parser.add_argument("--steps", type=int, default=round(DURATION * CONTROL_HZ))
     parser.add_argument("--render-every", type=int, default=0)
     parser.add_argument("--coarse", action="store_true", help="run the coarse common-translation solve")
-    parser.add_argument("--mu", type=float, default=4.0, help="global soft-contact friction coefficient")
+    parser.add_argument("--mu", type=float, default=8.0, help="global soft-contact friction coefficient")
     parser.add_argument(
         "--force-limit",
         type=float,

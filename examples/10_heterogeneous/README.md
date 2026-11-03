@@ -221,7 +221,8 @@ which stays as the reference the arm is measured against. `arm_gripper.py` is
 the shared module: the MJCF asset, the embodiment, the hand's registry entry, the
 route/IK planner and the build-time checks. The grasp's numbers do not change --
 a 10 N closing clamp, the pads commanded 12 mm past the loop's measured
-half-width, and the pipeline's global `mu` -- and neither does the task: each
+half-width, and the pipeline's global `mu`, 8.0 by default on the stock pads --
+and neither does the task: each
 scene states a tool-centre path and a pad-face gap, the arm's IK turns it into
 joint targets at the control rate, and every per-frame diagnostic is computed
 from the same state arrays the claw's were.
