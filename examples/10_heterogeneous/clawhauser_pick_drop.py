@@ -492,6 +492,8 @@ def run(
     result["contact_matching"] = "sticky"
     result["video_error"] = video_error
     result["mean_frame_ms"] = 1000.0 * (time.perf_counter() - started) / max(1, len(diagnostics))
+    result["mean_step_ms"] = 1000.0 * (time.perf_counter() - started) / max(1, len(diagnostics) * SUBSTEPS)
+    result["elapsed_s"] = time.perf_counter() - started
     (out / "result.json").write_text(json.dumps(result, indent=2) + "\n")
     print(json.dumps({k: v for k, v in result.items() if k not in ("geometry", "quality")}), flush=True)
     return result

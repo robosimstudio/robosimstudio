@@ -12,6 +12,7 @@ import argparse
 import hashlib
 import json
 import subprocess
+import time
 from pathlib import Path
 
 import newton
@@ -215,6 +216,7 @@ def run(
 
         videos = VideoSet(str(out), fps=max(1, CONTROL_HZ // render_every))
         videos.__enter__()
+    started = time.perf_counter()
     try:
         for frame in range(steps):
             sim.run(1).sync()
@@ -361,6 +363,9 @@ def run(
             "max_inverted_fraction": max_inverted_fraction,
             "settled_inverted_tetrahedra": settled_inverted,
             "success": bool(success),
+            "elapsed_s": time.perf_counter() - started,
+            "mean_frame_ms": 1000.0 * (time.perf_counter() - started) / max(1, len(diagnostics)),
+            "mean_step_ms": 1000.0 * (time.perf_counter() - started) / max(1, len(diagnostics) * SUBSTEPS),
         }
         (out / "result.json").write_text(json.dumps(result, indent=2) + "\n")
         print(json.dumps(result), flush=True)

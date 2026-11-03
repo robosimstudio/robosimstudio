@@ -652,6 +652,8 @@ def run(
                 # run costs with rendering off. The corrector's share on its own is
                 # measured by the W1 probe, not here.
                 "mean_frame_ms": 1000.0 * (time.perf_counter() - started) / max(1, len(diagnostics)),
+                "mean_step_ms": 1000.0 * (time.perf_counter() - started) / max(1, len(diagnostics) * SUBSTEPS),
+                "elapsed_s": time.perf_counter() - started,
             },
             indent=2,
         )

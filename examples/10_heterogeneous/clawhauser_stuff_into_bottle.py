@@ -1015,6 +1015,8 @@ def run(
                 "attachment_particles": int(sim.model.attachment_particle_body_count),
                 "completed_steps": len(diagnostics),
                 "mean_frame_ms": 1000.0 * (time.perf_counter() - started) / max(1, len(diagnostics)),
+                "mean_step_ms": 1000.0 * (time.perf_counter() - started) / max(1, len(diagnostics) * SUBSTEPS),
+                "elapsed_s": time.perf_counter() - started,
             },
             indent=2,
         )
