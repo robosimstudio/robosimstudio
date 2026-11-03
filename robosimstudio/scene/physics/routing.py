@@ -94,7 +94,6 @@ def route(
     *,
     world_shapes: np.ndarray,
     worlds=None,
-    proxy: bool = True,
 ) -> Routing:
     """Cut the model's pair table into per-pipeline lists.
 
@@ -121,8 +120,6 @@ def route(
             bench by step 120 -- free fall, because nothing was holding them up.
             Nothing reported anything: the states stayed finite, the episodes
             ran their budget, and the rows said what rows say.
-        proxy: Whether the coupler mirrors bodies into the deformable island
-            (proxy) rather than handing it the main contact buffer (ADMM).
     """
     pairs = (
         model.shape_contact_pairs.numpy().astype(np.int32).reshape(-1, 2)
@@ -178,11 +175,6 @@ def route(
             io = island_for(other)
             if io is dest or io is None or get_domain(other.domain).world_fixed:
                 channel_rows[key].append(rows)
-                if not proxy and dest.is_deformable:
-                    # ADMM reads the main buffer, not the channel: routed only to the
-                    # channel, the toy rested on nothing.
-                    main_rows.append(rows)
-                    needs_main = True
             elif io is not None and io.name == channel.source:
                 # Only the proxied bodies' shapes are visible in the destination.
                 proxied = _rows_between(pairs, spread(_shapes_for(dest_node(graph, dest), False)), channel.shapes)

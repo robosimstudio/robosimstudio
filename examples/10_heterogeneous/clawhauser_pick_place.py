@@ -27,6 +27,8 @@ CONTROL_HZ = 30
 SUBSTEPS = 20
 DURATION = 13.0
 TABLE_Z = 0.75
+# The scene's own closed target, kept when no squeeze is named.
+CLOSED_HALF_GAP = 0.010
 # RSS positions are relative to the bench's work-surface frame, whose origin
 # is world x=0.6 m. These values place the toy at world x=0.47 and 0.65 m.
 SOURCE_X = -0.13
@@ -39,7 +41,13 @@ SOURCE_HASHES = {
 }
 
 
-def build_scene():
+def build_scene(
+    *,
+    mu: float | None = None,
+    force_limit: float = ScriptedGripperSpec.force_limit,
+    squeeze: float | None = None,
+    contact_matching: str = "sticky",
+):
     for relative, expected in SOURCE_HASHES.items():
         actual = hashlib.sha256((ASSET / relative).read_bytes()).hexdigest()
         if actual != expected:
@@ -65,6 +73,13 @@ def build_scene():
     local_center = vertices[grasp_ids].mean(axis=0)
     grasp_center = (SOURCE_X + local_center[0], -local_center[1], pose[2] - local_center[2])
     half_span = np.max(np.abs(vertices[grasp_ids, 0] - local_center[0]))
+    # A named squeeze is the closed pads' travel past the grasp patch's measured
+    # half-width; the drive's force cap still decides how far they get.
+    closed_half_gap = (
+        CLOSED_HALF_GAP
+        if squeeze is None
+        else float(half_span + ScriptedGripperSpec.pad_half_thickness - squeeze)
+    )
 
     vbd = rss.backend(
         "vbd",
@@ -84,6 +99,7 @@ def build_scene():
             contact_ke=100000.0,
             contact_kd=25.0,
             broad_phase="nxn",
+            contact_matching=contact_matching,
         ),
     )
     scene = rss.Scene(cell="bench_075", physics=physics, name="clawhauser_loop_pick_place")
@@ -120,7 +136,8 @@ def build_scene():
         ScriptedGripperSpec(
             center=grasp_center,
             half_gap=float(half_span + 0.012),
-            closed_half_gap=0.010,
+            closed_half_gap=closed_half_gap,
+            force_limit=force_limit,
             travel_x=TARGET_X - SOURCE_X,
             control_hz=CONTROL_HZ,
             substeps=SUBSTEPS,
@@ -137,9 +154,11 @@ def build_scene():
     )
     scene.add(camera)
     sim = scene.build(device="cuda:0", warmup=False, use_cuda_graph=False)
+    if mu is not None:
+        sim.model.soft_contact_mu = float(mu)
     entity = obj.entity
-    if type(sim.pipeline.program.solver).__name__ != "SolverVBD":
-        raise RuntimeError(f"expected Newton VBD, got {type(sim.pipeline.program.solver).__name__}")
+    if not type(sim.pipeline.program.solver).__name__.startswith("SolverVBD"):
+        raise RuntimeError(f"expected a VBD solver, got {type(sim.pipeline.program.solver).__name__}")
     if sim.model.tet_count != len(tets) or len(entity.tet_part_labels) != len(tets):
         raise RuntimeError("RSS lost Clawhauser tetrahedra or part labels")
     if sim.model.attachment_particle_body_count:
@@ -158,9 +177,20 @@ def build_scene():
     return sim, obj, grip, camera, grasp_ids, labels
 
 
-def run(out: Path, *, steps: int, render_every: int = 0):
+def run(
+    out: Path,
+    *,
+    steps: int,
+    render_every: int = 0,
+    mu: float | None = None,
+    force_limit: float = ScriptedGripperSpec.force_limit,
+    squeeze: float | None = None,
+    contact_matching: str = "sticky",
+):
     out.mkdir(parents=True, exist_ok=True)
-    sim, obj, grip, camera, ring_ids, labels = build_scene()
+    sim, obj, grip, camera, ring_ids, labels = build_scene(
+        mu=mu, force_limit=force_limit, squeeze=squeeze, contact_matching=contact_matching
+    )
     entity = obj.entity
     particle_ids = entity.particles
     ring_ids = particle_ids[ring_ids]
@@ -336,8 +366,29 @@ def main() -> None:
     parser.add_argument("--out", type=Path, default=OUTPUT / "run")
     parser.add_argument("--steps", type=int, default=round(DURATION * CONTROL_HZ))
     parser.add_argument("--render-every", type=int, default=0)
+    parser.add_argument("--mu", type=float, default=None, help="global soft-contact friction coefficient")
+    parser.add_argument(
+        "--force-limit", type=float, default=ScriptedGripperSpec.force_limit, help="the jaws' closing budget [N]"
+    )
+    parser.add_argument(
+        "--squeeze", type=float, default=None, help="close travel past the grasp patch's width [m]"
+    )
+    parser.add_argument(
+        "--contact-matching",
+        choices=("sticky", "disabled"),
+        default="sticky",
+        help="keep the pads' contact points across passes; disabled is the creeping control",
+    )
     args = parser.parse_args()
-    run(args.out, steps=args.steps, render_every=args.render_every)
+    run(
+        args.out,
+        steps=args.steps,
+        render_every=args.render_every,
+        mu=args.mu,
+        force_limit=args.force_limit,
+        squeeze=args.squeeze,
+        contact_matching=args.contact_matching,
+    )
 
 
 if __name__ == "__main__":

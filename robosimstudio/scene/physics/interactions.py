@@ -259,8 +259,7 @@ def build_graph(
             graph.unresolved.append(f"{node.name}: contact with {target!r}, which is neither a role nor an entity")
             return
         if target == "hands":
-            # A gripper built as a plain entity leaves the ``robot`` role empty; its pads are still the hands.
-            robot = graph.robot() or next((n for n in graph.nodes.values() if n.hand_bodies.size), None)
+            robot = graph.robot()
             if robot is None or robot.hand_bodies.size == 0:
                 if source != "default":
                     graph.unresolved.append(f"{node.name}: contact with hands, but the scene has no coupling surfaces")

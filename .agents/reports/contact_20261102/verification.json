@@ -1,0 +1,243 @@
+{
+  "completed_requested_frames": 477,
+  "duration_s": 15.9,
+  "settling_after_withdraw_end_s": 4.300000000000001,
+  "task_result": {
+    "geometry": {
+      "hole_centre_local": [
+        0.0033,
+        0.0874,
+        0.0002
+      ],
+      "loop_reach_m": 0.02313200461977851,
+      "pad_half_thickness_m": 0.003,
+      "grip_squeeze_m": 0.006,
+      "grip_z_m": 0.010700000000000001,
+      "grip_xy_offset_m": [
+        0.0018613155,
+        -0.007
+      ],
+      "hole_height_m": 0.19785359491255872,
+      "lift_m": 0.23722959816722788,
+      "carry_m": 0.08,
+      "lower_m": 0.0440953028944008,
+      "carry_axis": "y",
+      "force_cap_n": 5.0,
+      "resting_pose": "lying flat, no rotation"
+    },
+    "weight_n": 1.2268926395179949,
+    "stop_reason": "dropped",
+    "released": true,
+    "lifted_m": 0.050640881061553955,
+    "moved_y_m": 0.09221109002828598,
+    "pre_lower_moved_y_m": 0.10347773879766464,
+    "rolled_after_release_m": -0.005983483046293259,
+    "landed_frame": 323,
+    "drift_after_landing_m": 0.007506534657364677,
+    "rest_speed_m_s": 0.00014632971115119956,
+    "settled_clearance_m": 0.0006979107856750488,
+    "max_finger_contacts": 46,
+    "held_until_open": true,
+    "minimum_transit_clearance_m": 0.04054725170135498,
+    "max_inverted_tetrahedra": 0,
+    "local_inversion": false,
+    "nonfinite": false,
+    "max_penetration_m": 3.62720456905663e-05,
+    "quality": {
+      "minimum_J_by_part": [
+        0.9038441777229309,
+        0.43523794412612915,
+        0.9704501628875732
+      ],
+      "inverted_tet_substeps_by_part": [
+        0,
+        0,
+        0
+      ],
+      "nonfinite_tet_substeps_by_part": [
+        0,
+        0,
+        0
+      ]
+    },
+    "steps": 477,
+    "success": true,
+    "peak_jaw_drive_n": [
+      5.0,
+      5.0
+    ]
+  },
+  "last_finger_contact_frame": 322,
+  "first_clear_frame": 323,
+  "all_later_frames_clear": true,
+  "post_contact_frames": [],
+  "first_main_body_table_shell_frame_after_lower_start": 278,
+  "support_pause_maximum_body_clearance_mm": 0.697016716003418,
+  "final_half_second_body_clearance_mm_min_max": [
+    0.6979107856750488,
+    0.6980299949645996
+  ],
+  "independent_saved_state_peak_whole_vertex_centroid_speed_mm_s": 0.14632971115119903,
+  "settling_metric_note": "Arithmetic centroid of all object vertices, not mass centre or maximum local particle speed; existing criterion unchanged.",
+  "actual_withdrawal_330_to348_mm": [
+    -0.0017881393432617188,
+    -20.036094665527344,
+    0.0
+  ],
+  "selected_poses": [
+    {
+      "frame": 318,
+      "time_s": 10.6,
+      "actual_pad_midpoint_m": [
+        0.4750401973724365,
+        -0.11360639333724976,
+        0.834954023361206
+      ],
+      "actual_jaw_center_gap_mm": 45.53483200073242,
+      "commanded_pad_midpoint_m": [
+        0.47519999742507935,
+        -0.11326336860656738,
+        0.8361569046974182
+      ],
+      "part_clearance_mm": [
+        4.751324653625488,
+        0.6968975067138672,
+        43.575584411621094
+      ]
+    },
+    {
+      "frame": 322,
+      "time_s": 10.733333333333333,
+      "actual_pad_midpoint_m": [
+        0.4750688970088959,
+        -0.1134912520647049,
+        0.8352231979370117
+      ],
+      "actual_jaw_center_gap_mm": 48.301998138427734,
+      "commanded_pad_midpoint_m": [
+        0.47519999742507935,
+        -0.11326336860656738,
+        0.8361569046974182
+      ],
+      "part_clearance_mm": [
+        4.194736480712891,
+        0.6980299949645996,
+        44.373451232910156
+      ]
+    },
+    {
+      "frame": 323,
+      "time_s": 10.766666666666667,
+      "actual_pad_midpoint_m": [
+        0.47516530752182007,
+        -0.11344166845083237,
+        0.8355042338371277
+      ],
+      "actual_jaw_center_gap_mm": 50.122947692871094,
+      "commanded_pad_midpoint_m": [
+        0.47519999742507935,
+        -0.11326336860656738,
+        0.8361569046974182
+      ],
+      "part_clearance_mm": [
+        3.800034523010254,
+        0.6986856460571289,
+        44.550716400146484
+      ]
+    },
+    {
+      "frame": 330,
+      "time_s": 11.0,
+      "actual_pad_midpoint_m": [
+        0.4752011299133301,
+        -0.11325878649950027,
+        0.8361503481864929
+      ],
+      "actual_jaw_center_gap_mm": 68.00961303710938,
+      "commanded_pad_midpoint_m": [
+        0.47519999742507935,
+        -0.11326336860656738,
+        0.8361569046974182
+      ],
+      "part_clearance_mm": [
+        23.580669403076172,
+        0.6979703903198242,
+        0.7399320602416992
+      ]
+    },
+    {
+      "frame": 348,
+      "time_s": 11.6,
+      "actual_pad_midpoint_m": [
+        0.4751993417739868,
+        -0.13329488039016724,
+        0.8361503481864929
+      ],
+      "actual_jaw_center_gap_mm": 67.99352264404297,
+      "commanded_pad_midpoint_m": [
+        0.47519999742507935,
+        -0.13326336443424225,
+        0.8361569046974182
+      ],
+      "part_clearance_mm": [
+        11.0396146774292,
+        0.6981492042541504,
+        0.6989240646362305
+      ]
+    },
+    {
+      "frame": 477,
+      "time_s": 15.9,
+      "actual_pad_midpoint_m": [
+        0.4751993417739868,
+        -0.13325420022010803,
+        0.8361503481864929
+      ],
+      "actual_jaw_center_gap_mm": 67.99352264404297,
+      "commanded_pad_midpoint_m": [
+        0.47519999742507935,
+        -0.13326336443424225,
+        0.8361569046974182
+      ],
+      "part_clearance_mm": [
+        10.50823974609375,
+        0.6979703903198242,
+        0.6990432739257812
+      ]
+    }
+  ],
+  "final_whole_boundary_box_checks": [
+    {
+      "shape": 1,
+      "physical_intersected_faces": [],
+      "particle_radius_expanded_intersected_faces": [],
+      "minimum_vertex_distance_mm": 75.18069448060592
+    },
+    {
+      "shape": 2,
+      "physical_intersected_faces": [],
+      "particle_radius_expanded_intersected_faces": [],
+      "minimum_vertex_distance_mm": 50.98513759355832
+    },
+    {
+      "shape": 3,
+      "physical_intersected_faces": [],
+      "particle_radius_expanded_intersected_faces": [],
+      "minimum_vertex_distance_mm": 53.51813475690352
+    },
+    {
+      "shape": 4,
+      "physical_intersected_faces": [],
+      "particle_radius_expanded_intersected_faces": [],
+      "minimum_vertex_distance_mm": 49.316905644187734
+    },
+    {
+      "shape": 5,
+      "physical_intersected_faces": [],
+      "particle_radius_expanded_intersected_faces": [],
+      "minimum_vertex_distance_mm": 49.90674980327477
+    }
+  ],
+  "source_sha256": "e63fd3c272e266840765331479af8995225ee7503c7cc32fe5807c57250eb6b8",
+  "limits": "One fixed scene configuration and one completed corrected-tolerance trial; no reset generalisation, speed optimisation, robot arm or real-world calibration tested."
+}

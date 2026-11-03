@@ -1,0 +1,60 @@
+{
+  "geometry": {
+    "hole_centre_local": [
+      0.0033,
+      0.0874,
+      0.0002
+    ],
+    "loop_reach_m": 0.02313200461977851,
+    "pad_half_thickness_m": 0.003,
+    "grip_squeeze_m": 0.006,
+    "grip_z_m": 0.007,
+    "hole_height_m": 0.19785359491255872,
+    "lift_m": 0.24092959816722787,
+    "carry_m": 0.08,
+    "force_cap_n": 5.0,
+    "resting_pose": "lying flat, no rotation"
+  },
+  "weight_n": 1.2268926395179949,
+  "stop_reason": "dropped",
+  "released": true,
+  "lifted_m": 0.14584219455718994,
+  "moved_x_m": 0.0003896951675415039,
+  "rolled_after_release_m": -0.0030643045902252197,
+  "landed_frame": 82,
+  "drift_after_landing_m": 0.03216489124983368,
+  "rest_speed_m_s": 0.005892413835606889,
+  "settled_clearance_m": 0.000687718391418457,
+  "max_finger_contacts": 4,
+  "max_inverted_tetrahedra": 0,
+  "local_inversion": false,
+  "max_penetration_m": 3.5885022953152657e-05,
+  "quality": {
+    "minimum_J_by_part": [
+      0.9585262537002563,
+      0.0966789647936821,
+      0.5051372647285461
+    ],
+    "inverted_tet_substeps_by_part": [
+      0,
+      0,
+      0
+    ],
+    "nonfinite_tet_substeps_by_part": [
+      0,
+      0,
+      0
+    ]
+  },
+  "steps": 600,
+  "success": false,
+  "self_contact": {
+    "enabled": true,
+    "margin_m": 0.002,
+    "rest_exclusion_m": 0.006,
+    "pair_buffer": "solver.detector"
+  },
+  "contact_matching": "sticky",
+  "video_error": null,
+  "mean_frame_ms": 748.0725182366663
+}

@@ -1,0 +1,234 @@
+{
+  "kind": "saved-state rendering, not a new simulation trial",
+  "source_states": "/nobackup/proj/disk/ehpc-dev-2026d08-170/personal/yiduo/robosimstudio/outputs/debug/contact_20261102/agent_b/12_main_edge_epsilon/states.npz",
+  "source_states_sha256": "dd950ef6a4073342924867607f5458bf2c9a22133c1d926ad2dc6bac5cdebd16",
+  "source_metadata": {
+    "rss_revision": "f1b648c plus integrated contact fixes",
+    "newton_revision": "d960ec3b",
+    "viscous_tet_damping_pa_s": [
+      500.0
+    ],
+    "friction_epsilon_m_s": 0.001,
+    "task_source_sha256": "e63fd3c272e266840765331479af8995225ee7503c7cc32fe5807c57250eb6b8",
+    "requested_frames": 477,
+    "phases_s": {
+      "close": [
+        0.0,
+        0.6
+      ],
+      "lift": [
+        1.1,
+        2.7
+      ],
+      "hang": [
+        2.7,
+        3.5
+      ],
+      "carry": [
+        3.5,
+        4.7
+      ],
+      "lower": [
+        5.3,
+        6.1
+      ],
+      "lay": [
+        6.1,
+        10.1
+      ],
+      "support": [
+        10.1,
+        10.6
+      ],
+      "open": [
+        10.6,
+        11.0
+      ],
+      "withdraw": [
+        11.0,
+        11.6
+      ]
+    },
+    "native_iterations": 80,
+    "attachments": 0,
+    "self_contact_enabled": true,
+    "solver_edge_epsilon": 1e-12,
+    "detector_edge_epsilon": 1e-12,
+    "contact_hypothesis": "Use native 1e-12 edge degeneracy tolerance so millimetre edges remain segments during rest exclusion and current contact; no physics-law or trajectory change.",
+    "pad_clearance_m": 0.0047,
+    "initial_gripper_center_m": [
+      0.47519999998322876,
+      -0.007,
+      0.7607
+    ],
+    "finger_bodies": [
+      2,
+      3
+    ],
+    "finger_shapes": [
+      2,
+      3,
+      4,
+      5
+    ],
+    "shapes_by_side": [
+      [
+        2,
+        3
+      ],
+      [
+        4,
+        5
+      ]
+    ],
+    "geometry": {
+      "hole_centre_local": [
+        0.0033,
+        0.0874,
+        0.0002
+      ],
+      "loop_reach_m": 0.02313200461977851,
+      "pad_half_thickness_m": 0.003,
+      "grip_squeeze_m": 0.006,
+      "grip_z_m": 0.010700000000000001,
+      "grip_xy_offset_m": [
+        0.0018613155,
+        -0.007
+      ],
+      "hole_height_m": 0.19785359491255872,
+      "lift_m": 0.23722959816722788,
+      "carry_m": 0.08,
+      "lower_m": 0.0440953028944008,
+      "carry_axis": "y",
+      "force_cap_n": 5.0,
+      "resting_pose": "lying flat, no rotation"
+    },
+    "substeps": 80,
+    "full_surface_contact": true,
+    "face_module_optimization_level": 1,
+    "placement_trajectory": {
+      "vertical_approach_m": 0.0440953028944008,
+      "lay_reference_yz_m": [
+        0.07443453371524811,
+        0.7508833408355713
+      ],
+      "lay_angle_degrees": 67.236328125,
+      "lay_clearance_m": 0.008068359375,
+      "withdraw_minus_y_m": 0.02,
+      "final_commanded_pad_center_m": [
+        0.47519999742507935,
+        -0.13326336443424225,
+        0.8361569046974182
+      ],
+      "hypothesis": "Stop the same geometric arc at the measured supported pose before over-travel; no anchored tail or prescribed object rotation."
+    }
+  },
+  "source_result": {
+    "geometry": {
+      "hole_centre_local": [
+        0.0033,
+        0.0874,
+        0.0002
+      ],
+      "loop_reach_m": 0.02313200461977851,
+      "pad_half_thickness_m": 0.003,
+      "grip_squeeze_m": 0.006,
+      "grip_z_m": 0.010700000000000001,
+      "grip_xy_offset_m": [
+        0.0018613155,
+        -0.007
+      ],
+      "hole_height_m": 0.19785359491255872,
+      "lift_m": 0.23722959816722788,
+      "carry_m": 0.08,
+      "lower_m": 0.0440953028944008,
+      "carry_axis": "y",
+      "force_cap_n": 5.0,
+      "resting_pose": "lying flat, no rotation"
+    },
+    "weight_n": 1.2268926395179949,
+    "stop_reason": "dropped",
+    "released": true,
+    "lifted_m": 0.050640881061553955,
+    "moved_y_m": 0.09221109002828598,
+    "pre_lower_moved_y_m": 0.10347773879766464,
+    "rolled_after_release_m": -0.005983483046293259,
+    "landed_frame": 323,
+    "drift_after_landing_m": 0.007506534657364677,
+    "rest_speed_m_s": 0.00014632971115119956,
+    "settled_clearance_m": 0.0006979107856750488,
+    "max_finger_contacts": 46,
+    "held_until_open": true,
+    "minimum_transit_clearance_m": 0.04054725170135498,
+    "max_inverted_tetrahedra": 0,
+    "local_inversion": false,
+    "nonfinite": false,
+    "max_penetration_m": 3.62720456905663e-05,
+    "quality": {
+      "minimum_J_by_part": [
+        0.9038441777229309,
+        0.43523794412612915,
+        0.9704501628875732
+      ],
+      "inverted_tet_substeps_by_part": [
+        0,
+        0,
+        0
+      ],
+      "nonfinite_tet_substeps_by_part": [
+        0,
+        0,
+        0
+      ]
+    },
+    "steps": 477,
+    "success": true,
+    "peak_jaw_drive_n": [
+      5.0,
+      5.0
+    ]
+  },
+  "source_outcome": "passed",
+  "source_stop_reason": "dropped",
+  "render_task_source_sha256": "e63fd3c272e266840765331479af8995225ee7503c7cc32fe5807c57250eb6b8",
+  "restored_fields": [
+    "particle_q",
+    "body_q"
+  ],
+  "simulation_steps_executed": 0,
+  "saved_frames_rendered": 477,
+  "encoded_frames_expected": 954,
+  "video_fps": 60,
+  "representative_frames": {
+    "final": 477,
+    "held": 105,
+    "prelower": 159,
+    "support": 311,
+    "preopen": 318,
+    "withdrawn": 348,
+    "postrelease": 325
+  },
+  "camera": "existing overview, unchanged",
+  "geometry": {
+    "hole_centre_local": [
+      0.0033,
+      0.0874,
+      0.0002
+    ],
+    "loop_reach_m": 0.02313200461977851,
+    "pad_half_thickness_m": 0.003,
+    "grip_squeeze_m": 0.006,
+    "grip_z_m": 0.010700000000000001,
+    "grip_xy_offset_m": [
+      0.0018613155,
+      -0.007
+    ],
+    "hole_height_m": 0.19785359491255872,
+    "lift_m": 0.23722959816722788,
+    "carry_m": 0.08,
+    "lower_m": 0.0440953028944008,
+    "carry_axis": "y",
+    "force_cap_n": 5.0,
+    "resting_pose": "lying flat, no rotation"
+  }
+}
