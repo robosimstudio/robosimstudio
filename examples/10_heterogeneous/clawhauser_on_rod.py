@@ -426,8 +426,13 @@ def build_scene(
         raise RuntimeError("the contact grasp scene must not contain particle attachments")
     if mu is not None:
         # Newton VBD exposes one global soft-contact friction coefficient; this is
-        # it, and here it is the knob the sweep turns.
+        # it, and here it is the knob the sweep turns. The solver steps the model
+        # it was built with, so if that is a distinct object the assignment has to
+        # land there as well -- and the value in use is reported either way.
         sim.model.soft_contact_mu = float(mu)
+        if vbd_solver.model is not sim.model:
+            vbd_solver.model.soft_contact_mu = float(mu)
+        geometry["global_soft_contact_mu"] = float(vbd_solver.model.soft_contact_mu)
     if grip is not None and abs(float(grip.entity.center[2]) - (TABLE_Z + geometry["grip_z_m"])) > 1.0e-6:
         raise RuntimeError(
             f"the claw sits at z={grip.entity.center[2]:.4f}, not the bench-referenced "

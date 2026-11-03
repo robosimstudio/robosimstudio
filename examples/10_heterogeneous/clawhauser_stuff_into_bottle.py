@@ -486,8 +486,13 @@ def build_scene(
         raise RuntimeError("the contact grasp scene must not contain particle attachments")
     if mu is not None:
         # Newton VBD exposes one global soft-contact friction coefficient; this is
-        # it, and it is the knob the sweep turns.
+        # it, and it is the knob the sweep turns. The solver steps the model it was
+        # built with, so if that is a distinct object the assignment has to land
+        # there as well -- and the value in use is reported either way.
         sim.model.soft_contact_mu = float(mu)
+        if solver.model is not sim.model:
+            solver.model.soft_contact_mu = float(mu)
+        geometry["global_soft_contact_mu"] = float(solver.model.soft_contact_mu)
     model_tets = sim.model.tet_indices.numpy()[entity.tet_range[0] : entity.tet_range[1]]
     if not np.array_equal(model_tets - entity.particles[0], tets):
         raise RuntimeError("Newton changed the source tetrahedron order")
