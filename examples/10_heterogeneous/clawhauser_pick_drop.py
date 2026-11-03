@@ -49,7 +49,7 @@ LIFT_M = 0.210
 CONTACT_GAP = 0.02
 CONTACT_KE = 100000.0
 COARSE_BUDGET = 0.005
-GRIP_SQUEEZE = 0.006
+GRIP_SQUEEZE = 0.012
 """How far past the loop's measured width the closed pads aim [m]. The same value
 the rod and cup scenes use: the pads close on the cord's rim from either side and
 a deep overshoot is what holds it.
@@ -93,7 +93,6 @@ def build_scene(
     force_limit: float = GRASP_LIMIT_N,
     squeeze: float = GRIP_SQUEEZE,
     self_contact: bool = True,
-    contact_matching: str = "sticky",
 ):
     for relative, expected in SOURCE_HASHES.items():
         actual = hashlib.sha256((ASSET / relative).read_bytes()).hexdigest()
@@ -174,7 +173,7 @@ def build_scene(
             # pad pinch slides the loop out however high the friction is. Sticky
             # matching keeps each pad contact's points across passes, and friction
             # then acts on the drift from them.
-            contact_matching=contact_matching,
+            contact_matching="sticky",
         ),
     )
     scene = rss.Scene(cell="bench_075", physics=physics, name="clawhauser_pick_drop")
@@ -352,12 +351,11 @@ def run(
     *,
     steps: int,
     render_every: int = 0,
-    coarse: bool = True,
+    coarse: bool = False,
     mu: float | None = None,
     force_limit: float = GRASP_LIMIT_N,
     squeeze: float = GRIP_SQUEEZE,
     enable_self_contact: bool = True,
-    contact_matching: str = "sticky",
 ) -> dict:
     out.mkdir(parents=True, exist_ok=True)
     sim, obj, jaw, camera, geometry = build_scene(
@@ -366,7 +364,6 @@ def run(
         force_limit=force_limit,
         squeeze=squeeze,
         self_contact=enable_self_contact,
-        contact_matching=contact_matching
     )
     entity = obj.entity
     particles = entity.particles
@@ -492,7 +489,7 @@ def run(
     )
     result = judge(geometry, diagnostics, quality, entity, steps)
     result["self_contact"] = self_contact
-    result["contact_matching"] = contact_matching
+    result["contact_matching"] = "sticky"
     result["video_error"] = video_error
     result["mean_frame_ms"] = 1000.0 * (time.perf_counter() - started) / max(1, len(diagnostics))
     (out / "result.json").write_text(json.dumps(result, indent=2) + "\n")
@@ -505,7 +502,7 @@ def main() -> None:
     parser.add_argument("--out", type=Path, default=OUTPUT / "run")
     parser.add_argument("--steps", type=int, default=round(DURATION * CONTROL_HZ))
     parser.add_argument("--render-every", type=int, default=0)
-    parser.add_argument("--no-coarse", action="store_true", help="stock VBD, no common-translation solve")
+    parser.add_argument("--coarse", action="store_true", help="run the coarse common-translation solve")
     parser.add_argument("--mu", type=float, default=None, help="global soft-contact friction coefficient")
     parser.add_argument(
         "--force-limit",
@@ -522,23 +519,16 @@ def main() -> None:
     parser.add_argument(
         "--no-self-contact", dest="self_contact", action="store_false", help="turn the toy's self-contact off"
     )
-    parser.add_argument(
-        "--contact-matching",
-        choices=("sticky", "disabled"),
-        default="sticky",
-        help="sticky keeps the pads' contact points across passes; disabled is the creeping control",
-    )
     args = parser.parse_args()
     run(
         args.out,
         steps=args.steps,
         render_every=args.render_every,
-        coarse=not args.no_coarse,
+        coarse=args.coarse,
         mu=args.mu,
         force_limit=args.force_limit,
         squeeze=args.squeeze,
         enable_self_contact=args.self_contact,
-        contact_matching=args.contact_matching,
     )
 
 

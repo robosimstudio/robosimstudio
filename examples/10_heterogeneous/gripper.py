@@ -184,7 +184,7 @@ class ScriptedGripperSpec:
     name: str = "loop_gripper"
     mode: str = "kinematic"
     finger_mass: float = 0.05
-    force_limit: float = 5.0
+    force_limit: float = 10.0
     """Closing clamp. A grasp squeezes with this and never more."""
     push_force_limit: float = 50.0
     """Press clamp. ``set_press`` swaps the drive onto it, so a press can push

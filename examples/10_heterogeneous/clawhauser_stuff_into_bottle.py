@@ -35,7 +35,7 @@ depth, so a sweep over bores is an argument rather than a different file.
 
 Control, for contrast rather than for the result:
 
-    --no-coarse        stock VBD: no common-translation solve under load
+    --coarse           run the common-translation solve under load
 
 Knobs, each reported with its measured effect:
 
@@ -120,7 +120,7 @@ CONTACT_KE = 100000.0
 the summed penetration a contact patch reports."""
 COARSE_BUDGET = 0.005
 """Cumulative coarse translation per substep, at most a quarter of the gap."""
-GRIP_SQUEEZE = 0.006
+GRIP_SQUEEZE = 0.012
 """How far past the loop's measured width the closed pads aim [m]. The same
 measured value the rod scene uses. The parallel jaws hold the pads' attitude, so
 the loop cannot roll them, and the flat face plus its friction is the grip.
@@ -246,7 +246,6 @@ def build_scene(
     mu: float | None,
     squeeze: float = GRIP_SQUEEZE,
     self_contact: bool = True,
-    contact_matching: str = "sticky",
 ):
     for relative, expected in SOURCE_HASHES.items():
         actual = hashlib.sha256((ASSET / relative).read_bytes()).hexdigest()
@@ -357,7 +356,7 @@ def build_scene(
             contact_ke=CONTACT_KE,
             contact_kd=25.0,
             broad_phase="nxn",
-            contact_matching=contact_matching,
+            contact_matching="sticky",
         ),
     )
     scene = rss.Scene(cell="bench_075", physics=physics, name="clawhauser_stuff_into_bottle")
@@ -653,14 +652,13 @@ def run(
     *,
     steps: int,
     render_every: int = 0,
-    coarse: bool = True,
+    coarse: bool = False,
     bore: float = BORE_RADIUS,
     cap: float = GRASP_LIMIT_N,
     push_cap: float = PUSH_LIMIT_N,
     mu: float | None = None,
     squeeze: float = GRIP_SQUEEZE,
     enable_self_contact: bool = True,
-    contact_matching: str = "sticky",
 ) -> dict:
     out.mkdir(parents=True, exist_ok=True)
     sim, obj, grip, camera, ring, glass_shapes, glass_bodies, geometry = build_scene(
@@ -671,7 +669,6 @@ def run(
         mu=mu,
         squeeze=squeeze,
         self_contact=enable_self_contact,
-        contact_matching=contact_matching,
     )
     entity = obj.entity
     particles = entity.particles
@@ -1206,19 +1203,13 @@ def main() -> None:
     parser.add_argument("--out", type=Path, default=OUTPUT / "run")
     parser.add_argument("--steps", type=int, default=round(DURATION * CONTROL_HZ))
     parser.add_argument("--render-every", type=int, default=0)
-    parser.add_argument("--no-coarse", dest="coarse", action="store_false")
+    parser.add_argument("--coarse", dest="coarse", action="store_true", help="run the coarse common-translation solve")
     parser.add_argument("--bore", type=float, default=BORE_RADIUS, help="container inner radius [m]")
     parser.add_argument("--cap", type=float, default=GRASP_LIMIT_N, help="jaw closing clamp [N]")
     parser.add_argument("--push-cap", type=float, default=PUSH_LIMIT_N, help="carrier push clamp [N]")
     parser.add_argument("--force-limit", type=float, default=None, help="alias for --cap, the sweep's name")
     parser.add_argument("--squeeze", type=float, default=GRIP_SQUEEZE, help="close travel past the loop [m]")
     parser.add_argument("--mu", type=float, default=None, help="global soft-contact friction coefficient")
-    parser.add_argument(
-        "--contact-matching",
-        choices=("sticky", "disabled"),
-        default="sticky",
-        help="sticky keeps the pads' contact points across passes",
-    )
     parser.add_argument(
         "--no-self-contact", dest="self_contact", action="store_false", help="turn the toy's self-contact off"
     )
@@ -1234,7 +1225,6 @@ def main() -> None:
         mu=args.mu,
         squeeze=args.squeeze,
         enable_self_contact=args.self_contact,
-        contact_matching=args.contact_matching,
     )
 
 

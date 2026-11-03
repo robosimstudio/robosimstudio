@@ -27,8 +27,8 @@ CONTROL_HZ = 30
 SUBSTEPS = 20
 DURATION = 13.0
 TABLE_Z = 0.75
-# The scene's own closed target, kept when no squeeze is named.
-CLOSED_HALF_GAP = 0.010
+GRIP_SQUEEZE = 0.012
+"""How far past the grasp patch's measured width the closed pads aim [m]."""
 # RSS positions are relative to the bench's work-surface frame, whose origin
 # is world x=0.6 m. These values place the toy at world x=0.47 and 0.65 m.
 SOURCE_X = -0.13
@@ -43,10 +43,10 @@ SOURCE_HASHES = {
 
 def build_scene(
     *,
+    coarse: bool = False,
     mu: float | None = None,
     force_limit: float = ScriptedGripperSpec.force_limit,
-    squeeze: float | None = None,
-    contact_matching: str = "sticky",
+    squeeze: float = GRIP_SQUEEZE,
 ):
     for relative, expected in SOURCE_HASHES.items():
         actual = hashlib.sha256((ASSET / relative).read_bytes()).hexdigest()
@@ -75,18 +75,24 @@ def build_scene(
     half_span = np.max(np.abs(vertices[grasp_ids, 0] - local_center[0]))
     # A named squeeze is the closed pads' travel past the grasp patch's measured
     # half-width; the drive's force cap still decides how far they get.
-    closed_half_gap = (
-        CLOSED_HALF_GAP
-        if squeeze is None
-        else float(half_span + ScriptedGripperSpec.pad_half_thickness - squeeze)
-    )
+    closed_half_gap = float(half_span + ScriptedGripperSpec.pad_half_thickness - squeeze)
 
-    vbd = rss.backend(
-        "vbd",
-        iterations=12,
-        particle_enable_self_contact=False,
-        particle_enable_tile_solve=False,
-        rigid_body_particle_contact_buffer_size=4096,
+    common = {
+        "iterations": 12,
+        "particle_enable_self_contact": False,
+        "particle_enable_tile_solve": False,
+        "rigid_body_particle_contact_buffer_size": 4096,
+    }
+    vbd = (
+        rss.backend(
+            "robosimstudio_materials.coarse_translation.SolverVBDCoarse",
+            coarse_translation=True,
+            coarse_contact_gap=0.002,
+            coarse_budget=0.0005,
+            **common,
+        )
+        if coarse
+        else rss.backend("vbd", **common)
     )
     physics = rss.ArrangementSpec(
         control_hz=CONTROL_HZ,
@@ -99,7 +105,7 @@ def build_scene(
             contact_ke=100000.0,
             contact_kd=25.0,
             broad_phase="nxn",
-            contact_matching=contact_matching,
+            contact_matching="sticky",
         ),
     )
     scene = rss.Scene(cell="bench_075", physics=physics, name="clawhauser_loop_pick_place")
@@ -182,14 +188,14 @@ def run(
     *,
     steps: int,
     render_every: int = 0,
+    coarse: bool = False,
     mu: float | None = None,
     force_limit: float = ScriptedGripperSpec.force_limit,
-    squeeze: float | None = None,
-    contact_matching: str = "sticky",
+    squeeze: float = GRIP_SQUEEZE,
 ):
     out.mkdir(parents=True, exist_ok=True)
     sim, obj, grip, camera, ring_ids, labels = build_scene(
-        mu=mu, force_limit=force_limit, squeeze=squeeze, contact_matching=contact_matching
+        coarse=coarse, mu=mu, force_limit=force_limit, squeeze=squeeze
     )
     entity = obj.entity
     particle_ids = entity.particles
@@ -366,28 +372,23 @@ def main() -> None:
     parser.add_argument("--out", type=Path, default=OUTPUT / "run")
     parser.add_argument("--steps", type=int, default=round(DURATION * CONTROL_HZ))
     parser.add_argument("--render-every", type=int, default=0)
+    parser.add_argument("--coarse", action="store_true", help="run the coarse common-translation solve")
     parser.add_argument("--mu", type=float, default=None, help="global soft-contact friction coefficient")
     parser.add_argument(
         "--force-limit", type=float, default=ScriptedGripperSpec.force_limit, help="the jaws' closing budget [N]"
     )
     parser.add_argument(
-        "--squeeze", type=float, default=None, help="close travel past the grasp patch's width [m]"
-    )
-    parser.add_argument(
-        "--contact-matching",
-        choices=("sticky", "disabled"),
-        default="sticky",
-        help="keep the pads' contact points across passes; disabled is the creeping control",
+        "--squeeze", type=float, default=GRIP_SQUEEZE, help="close travel past the grasp patch's width [m]"
     )
     args = parser.parse_args()
     run(
         args.out,
         steps=args.steps,
         render_every=args.render_every,
+        coarse=args.coarse,
         mu=args.mu,
         force_limit=args.force_limit,
         squeeze=args.squeeze,
-        contact_matching=args.contact_matching,
     )
 
 

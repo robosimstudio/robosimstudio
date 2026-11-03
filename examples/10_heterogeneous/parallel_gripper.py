@@ -217,7 +217,7 @@ def _advance_tick(tick: wp.array[int], lengths: wp.array[int]):
     tick[0] = wp.min(tick[0] + 1, lengths[0] - 1)
 
 
-GRASP_LIMIT_N = 5.0
+GRASP_LIMIT_N = 10.0
 """The jaws' closing budget: the slides never press the loop harder [N]."""
 PUSH_LIMIT_N = 200.0
 """The carrier's push budget while pressing the toy [N]. Independent of the

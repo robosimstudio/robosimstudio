@@ -31,7 +31,7 @@ motion was built on.
 
 Controls, for contrast rather than for the result:
 
-    --no-coarse        stock VBD: no common-translation solve under load
+    --coarse           run the common-translation solve under load
 
 Knobs, each reported with its measured effect:
 
@@ -172,7 +172,7 @@ PAD_CLEARANCE = 0.001
 the ground, so a loop lying there is straddled instead of one assumed to sit at
 the body's mid-plane.
 """
-GRIP_SQUEEZE = 0.006
+GRIP_SQUEEZE = 0.012
 """How far past the loop's measured width the closed pads aim.
 
 Both ends of this were measured. At 1 mm the pads press about 1 N and the cord,
@@ -223,7 +223,6 @@ def build_scene(
     force_limit: float = GRASP_LIMIT_N,
     squeeze: float = GRIP_SQUEEZE,
     self_contact: bool = True,
-    contact_matching: str = "sticky",
 ):
     for relative, expected in SOURCE_HASHES.items():
         actual = hashlib.sha256((ASSET / relative).read_bytes()).hexdigest()
@@ -326,7 +325,7 @@ def build_scene(
             contact_ke=CONTACT_KE,
             contact_kd=25.0,
             broad_phase="nxn",
-            contact_matching=contact_matching,
+            contact_matching="sticky",
         ),
     )
     scene = rss.Scene(cell="bench_075", physics=physics, name="clawhauser_on_rod")
@@ -501,13 +500,12 @@ def run(
     *,
     steps: int,
     render_every: int = 0,
-    coarse: bool = True,
+    coarse: bool = False,
     rod_radius: float = ROD_RADIUS,
     mu: float | None = None,
     force_limit: float = GRASP_LIMIT_N,
     squeeze: float = GRIP_SQUEEZE,
     enable_self_contact: bool = True,
-    contact_matching: str = "sticky",
 ) -> dict:
     out.mkdir(parents=True, exist_ok=True)
     sim, obj, grip, camera, rod, ring, geometry = build_scene(
@@ -517,7 +515,6 @@ def run(
         force_limit=force_limit,
         squeeze=squeeze,
         self_contact=enable_self_contact,
-        contact_matching=contact_matching,
     )
     entity = obj.entity
     particles = entity.particles
@@ -765,17 +762,11 @@ def main() -> None:
     parser.add_argument("--out", type=Path, default=OUTPUT / "run")
     parser.add_argument("--steps", type=int, default=round(DURATION * CONTROL_HZ))
     parser.add_argument("--render-every", type=int, default=0)
-    parser.add_argument("--no-coarse", dest="coarse", action="store_false")
+    parser.add_argument("--coarse", dest="coarse", action="store_true", help="run the coarse common-translation solve")
     parser.add_argument("--rod-radius", type=float, default=ROD_RADIUS, help="rod radius [m]")
     parser.add_argument("--mu", type=float, default=None, help="global soft-contact friction coefficient")
     parser.add_argument("--force-limit", type=float, default=GRASP_LIMIT_N, help="the jaws' closing budget [N]")
     parser.add_argument("--squeeze", type=float, default=GRIP_SQUEEZE, help="close travel past the loop [m]")
-    parser.add_argument(
-        "--contact-matching",
-        choices=("sticky", "disabled"),
-        default="sticky",
-        help="sticky keeps the pads' contact points across passes",
-    )
     parser.add_argument(
         "--no-self-contact", dest="self_contact", action="store_false", help="turn the toy's self-contact off"
     )
@@ -790,7 +781,6 @@ def main() -> None:
         force_limit=args.force_limit,
         squeeze=args.squeeze,
         enable_self_contact=args.self_contact,
-        contact_matching=args.contact_matching,
     )
 
 
