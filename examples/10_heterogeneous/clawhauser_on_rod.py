@@ -2,10 +2,12 @@
 """Hang the labelled Clawhauser volume on a horizontal rod by its loop.
 
 The toy stands on the bench by its tail, loop up and the hole's axis horizontal
-along the rod. A two-finger claw pinches the loop's outer sides at the hole's own
-centre height -- narrow pads, no ledge, the hole left free -- lifts the toy until
-the rod's free end is inside the hole, slides it through, sets the toy down on the
-rod and lets go. What holds it then is the rod under the loop's inner surface:
+along the rod. A two-finger gripper pinches the loop's outer sides at the hole's
+own centre height -- narrow pads, no ledge, the hole left free -- lifts the toy
+until the rod's free end is inside the hole, slides it through, sets the toy down
+on the rod and lets go. The default mover is the AIRBOT Play arm with its own
+parallel hand (`arm_gripper`); `--claw claw` runs the scripted claw this scene
+was built on, which stays as the reference the arm is measured against. What holds it then is the rod under the loop's inner surface:
 one rigid-soft contact patch carrying 1.227 N of toy.
 
 That height is not a convenience. It is the loop's widest point, and the only
@@ -18,10 +20,11 @@ the pads aim a fixed interference past the measured width, so the squeeze is the
 drive's own clamp rather than whatever closing gap the loop's compliance leaves.
 
 Two things this scene is built to show. The rod and its post are rigid and never
-move, so nothing is scripted once the claw opens. And every jaw number is
-bounded: the two padded fingers slide on a level carrier under a 5 N jaw budget,
-and the carrier's 200 N push budget is separate. ``peak_force_n`` is the jaw peak;
-``peak_torque_nm`` is zero because a prismatic jaw cannot rotate.
+move, so nothing is scripted once the jaws open. And every jaw number is bounded:
+the claw's two padded fingers slide under a 10 N budget; the arm's hand is an
+actuator whose force range is the same 10 N, so its ``peak_force_n`` is the force
+the pads could feel rather than a command. ``peak_torque_nm`` is the claw's, and
+absent on the arm.
 
 Geometry is derived from the mesh rather than hard-coded: the loop's hole centre
 and inner radius by an inscribed-circle fixed point over the loop's vertices, the
@@ -50,6 +53,7 @@ import subprocess
 import time
 from pathlib import Path
 
+import arm_gripper
 import newton
 import numpy as np
 from loop_geometry import ring_geometry, smooth
@@ -167,6 +171,11 @@ a run whose earlier frames had it threaded cleanly.
 """
 PAD_HALF_THICKNESS = 0.003
 """The pad box's half-extent along the closing axis, as ``gripper.py`` builds it."""
+ARM_BASE = (-0.48, 0.0, 0.132, 0.0, 0.0, 0.0, 1.0)
+"""Where the arm stands, in the work-surface frame: on the bench's near side,
+0.35 m from the loop. An embodiment's mount is stated in that frame; the IK and
+the measured poses are world, so `arm_route` adds the cell's origin."""
+CELL = "bench_075"
 PAD_CLEARANCE = 0.001
 """How far the pads' bottom faces start above the bench [m]. The close starts at
 the ground, so a loop lying there is straddled instead of one assumed to sit at
@@ -180,7 +189,7 @@ which is round where they meet it, slides straight back out of the pinch on the
 first lifted step: five finger contacts through the close, none from the lift
 on, and the toy never left the bench, in three identical runs. At 6 mm the drive
 sits at its clamp and the grasp holds through lift, thread and seat -- the
-squeeze is a bounded 5 N, which is what that clamp is for.
+squeeze is a bounded 10 N, which is what that clamp is for.
 """
 # The seat is the slow one on purpose. Its descent is what brings the loop's
 # hole down onto the rod, and the catch is an impact: the guided ramp runs at a
@@ -223,6 +232,7 @@ def build_scene(
     force_limit: float = GRASP_LIMIT_N,
     squeeze: float = GRIP_SQUEEZE,
     self_contact: bool = True,
+    claw: str = "arm",
 ):
     for relative, expected in SOURCE_HASHES.items():
         actual = hashlib.sha256((ASSET / relative).read_bytes()).hexdigest()
@@ -256,6 +266,7 @@ def build_scene(
     thread_height = seat_height + THREAD_LIFT
     ring_plane_y = 0.0
     geometry = {
+        "gripper": "claw" if claw == "claw" else "arm",
         "hole_centre_local": np.round(hole, 4).tolist(),
         "hole_inradius_m": ring["hole_inradius"],
         "hole_inradius_median_m": ring["hole_inradius_median"],
@@ -283,6 +294,7 @@ def build_scene(
         "thread_z_m": thread_height,
         "thread_lift_m": THREAD_LIFT,
         "withdraw_z_m": WITHDRAW_Z,
+        "grip_centre_m": [SOURCE_X + float(hole[0]), 0.0, float(grip_z)],
     }
     print(json.dumps({"geometry": geometry}), flush=True)
 
@@ -320,11 +332,19 @@ def build_scene(
             **common,
         )
     )
+    # The arm is an articulated robot and resolves to MuJoCo, so it is its own
+    # island; the toy keeps VBD. `one_way` with `slide_feedback` is what carries
+    # the grip: the finger stops where the loop pushes back with its actuator's
+    # force, so the 10 N ceiling is the grip. Sticky matching is the scene's, and
+    # the coupler forwards it into its own collision pipeline.
+    split = claw != "claw"
     physics = rss.ArrangementSpec(
         control_hz=CONTROL_HZ,
         substeps=SUBSTEPS,
         use_cuda_graph=False,
-        backends=(("soft", vbd), ("rigid", vbd), ("*", vbd)),
+        backends=((("articulated", rss.backend("mujoco")),) if split else ())
+        + (("soft", vbd), ("rigid", vbd), ("*", vbd)),
+        **({"coupling": rss.coupler("one_way", contact_forces=True, slide_feedback=True)} if split else {}),
         collision=rss.CollisionSpec(
             soft_contact_margin=CONTACT_GAP,
             full_surface_contact=False,
@@ -334,7 +354,7 @@ def build_scene(
             contact_matching="sticky",
         ),
     )
-    scene = rss.Scene(cell="bench_075", physics=physics, name="clawhauser_on_rod")
+    scene = rss.Scene(cell=CELL, physics=physics, name="clawhauser_on_rod")
     rod_x = SOURCE_X + float(hole[0])
     scene.add(rss.slab(name="rod_base", half=(0.030, 0.030, 0.006), at=(rod_x, POST_Y, 0.006), collide=True))
     scene.add(rss.post(name="rod_post", radius=POST_RADIUS, half_height=rod_z / 2.0, at=(rod_x, POST_Y, rod_z / 2.0)))
@@ -359,40 +379,47 @@ def build_scene(
             contact_ke=CONTACT_KE,
         )
     )
-    grip = scene.add(
-        ParallelGripperSpec(
-            name="rod_loop_gripper",
-            # The loop's widest point, which is the hole's own centre height: the
-            # pads' faces come to rest on that width, and the squeeze is the aim
-            # past it that the jaw drive clamps at 5 N. The pose is in the
-            # work-surface frame, like the statics above and every other entity's
-            # -- an absolute height here would be lifted by the frame twice.
-            center=(SOURCE_X + float(hole[0]), 0.0, grip_z),
-            half_gap=ring["side_reach"] + PAD_HALF_THICKNESS + 0.012,
-            closed_half_gap=ring["side_reach"] + PAD_HALF_THICKNESS - squeeze,
-            force_limit=force_limit,
-            pad_half_thickness=PAD_HALF_THICKNESS,
-            pad_half_width=0.006,
-            duration=DURATION,
-            control_hz=CONTROL_HZ,
-            substeps=SUBSTEPS,
+    grip = None
+    if split:
+        arm_gripper.add_arm(scene, base_offset=ARM_BASE, force_limit=force_limit)
+    else:
+        grip = scene.add(
+            ParallelGripperSpec(
+                name="rod_loop_gripper",
+                # The loop's widest point, which is the hole's own centre height: the
+                # pads' faces come to rest on that width, and the squeeze is the aim
+                # past it that the jaw drive clamps at 10 N. The pose is in the
+                # work-surface frame, like the statics above and every other entity's
+                # -- an absolute height here would be lifted by the frame twice.
+                center=(SOURCE_X + float(hole[0]), 0.0, grip_z),
+                half_gap=ring["side_reach"] + PAD_HALF_THICKNESS + 0.012,
+                closed_half_gap=ring["side_reach"] + PAD_HALF_THICKNESS - squeeze,
+                force_limit=force_limit,
+                pad_half_thickness=PAD_HALF_THICKNESS,
+                pad_half_width=0.006,
+                duration=DURATION,
+                control_hz=CONTROL_HZ,
+                substeps=SUBSTEPS,
+            )
         )
-    )
-    camera = rss.CameraSpec(
-        name="overview",
-        width=960,
-        height=540,
+    if split:
+        # Three-quarter, and further back than the claw's framing: the arm's reach
+        # and the rod's far end both have to stay in frame.
+        eye, look_at, fov_y = (0.10, -1.05, 1.30), (0.42, 0.03, 0.92), 50.0
+    else:
         # Pulled back from the toy-and-rod framing so both ends of the scene stay
         # in frame for the whole carry, as in the cup and pick-and-drop scenes.
-        eye=(0.76, -0.55, 1.163),
-        look_at=(0.46, 0.0, 0.95),
-        fov_y=45.0,
-    )
-    scene.add(camera)
+        eye, look_at, fov_y = (0.76, -0.55, 1.163), (0.46, 0.0, 0.95), 45.0
+    camera = scene.add(rss.CameraSpec(name="overview", width=960, height=540, eye=eye, look_at=look_at, fov_y=fov_y))
     sim = scene.build(device="cuda:0", warmup=False, use_cuda_graph=False)
     entity = obj.entity
-    if not type(sim.pipeline.program.solver).__name__.startswith("SolverVBD"):
-        raise RuntimeError(f"expected a VBD solver, got {type(sim.pipeline.program.solver).__name__}")
+    # The toy's own solver: the coupling wrapper when the arm is in the scene, and
+    # every VBD attribute read below has to come from it, not from the wrapper.
+    vbd_solver = arm_gripper.vbd_solver(sim.pipeline.program.solver)
+    if not type(vbd_solver).__name__.startswith("SolverVBD"):
+        raise RuntimeError(f"expected a VBD solver, got {type(vbd_solver).__name__}")
+    if split:
+        geometry["arm"] = arm_gripper.check_arm(sim, limit=force_limit)
     if sim.model.tet_count != len(tets) or len(entity.tet_part_labels) != len(tets):
         raise RuntimeError("RSS lost Clawhauser tetrahedra or part labels")
     if sim.model.attachment_particle_body_count:
@@ -401,7 +428,7 @@ def build_scene(
         # Newton VBD exposes one global soft-contact friction coefficient; this is
         # it, and here it is the knob the sweep turns.
         sim.model.soft_contact_mu = float(mu)
-    if abs(float(grip.entity.center[2]) - (TABLE_Z + geometry["grip_z_m"])) > 1.0e-6:
+    if grip is not None and abs(float(grip.entity.center[2]) - (TABLE_Z + geometry["grip_z_m"])) > 1.0e-6:
         raise RuntimeError(
             f"the claw sits at z={grip.entity.center[2]:.4f}, not the bench-referenced "
             f"z={TABLE_Z + geometry['grip_z_m']:.4f} the path is built from"
@@ -481,6 +508,71 @@ def after_seat(positions: np.ndarray, dt: float, closed_half_gap: float) -> np.n
     return poses
 
 
+def arm_route(sim, geometry: dict, capacity: int, dt: float):
+    """The same path the claw is given, as tool-centre poses and a pad-face gap.
+
+    The gap is stated between the pad *faces* here, where the claw states it
+    between the pads' centres, so ``squeeze`` is the same 12 mm past the loop's
+    widest point in both.
+    """
+    control = arm_gripper.ArmControl(sim)
+    # The scene states the grasp in the work-surface frame, and as the claw's pads'
+    # midpoint; the IK solves in world, and the arm is given its tool centre.
+    centre = arm_gripper.tcp_for_pads(
+        np.asarray(rss.get_cell(CELL).surface_frame[:3], dtype=np.float64)
+        + np.asarray(geometry["grip_centre_m"], dtype=np.float64)
+    )
+    reach = float(geometry["reach_m"])
+    squeeze = float(geometry["grip_squeeze_m"])
+    lift = geometry["lift_m"]
+    slide = geometry["slide_m"]
+    seat = (TABLE_Z + geometry["seat_z_m"] - SEAT_FLOOR) - (TABLE_Z + geometry["loop_z_m"])
+    # The planned descent is a ramp at SEAT_RATE, bounded below by the seat's own
+    # floor: a smoothstep would reach the rod at twice that rate.
+    floor = min(0.0, seat - lift)
+
+    def tcp_at(time: float) -> np.ndarray:
+        return centre + np.array(
+            (
+                0.0,
+                slide * smooth(time, *PHASES["thread"]),
+                lift * smooth(time, *PHASES["lift"])
+                + max(-SEAT_RATE * max(0.0, time - PHASES["seat"][0]), floor)
+                + WITHDRAW_Z * smooth(time, *PHASES["withdraw"]),
+            )
+        )
+
+    def half_gap_at(time: float) -> float:
+        face = reach + squeeze - 2.0 * squeeze * smooth(time, *PHASES["close"])
+        return face + (OPENED_HALF_GAP - face) * smooth(time, *PHASES["open"])
+
+    route = control.plan(quat=arm_gripper.GRASP_QUAT, capacity=capacity, dt=dt, tcp_at=tcp_at, half_gap_at=half_gap_at)
+    return control, route
+
+
+def arm_after_seat(control, geometry: dict, dt: float):
+    """Hold, open and rise clear, from where the pads actually are.
+
+    The same hand-over the claw takes, and for the same reason: the guarded stop
+    leaves the pads wherever the rod reported the toy, so the hold has to be a
+    hold and not a resumed descent. The gap it holds is the *commanded* one, not
+    the measured one -- aiming at where the fingers already are asks for no
+    force, and the released loop slides out of the pinch.
+    """
+    centre = np.asarray(control.tcp(), dtype=np.float64)
+    held = float(geometry["reach_m"]) - float(geometry["grip_squeeze_m"])
+    count = int(np.ceil((SEAT_HOLD + SEAT_OPEN + SEAT_WITHDRAW) / dt)) + 2
+
+    def tcp_at(time: float) -> np.ndarray:
+        rise = WITHDRAW_Z * smooth(time, SEAT_HOLD + SEAT_OPEN, SEAT_HOLD + SEAT_OPEN + SEAT_WITHDRAW)
+        return centre + np.array((0.0, 0.0, rise))
+
+    def half_gap_at(time: float) -> float:
+        return held + (OPENED_HALF_GAP - held) * smooth(time, SEAT_HOLD, SEAT_HOLD + SEAT_OPEN)
+
+    return control.plan(quat=arm_gripper.GRASP_QUAT, capacity=count, dt=dt, tcp_at=tcp_at, half_gap_at=half_gap_at)
+
+
 def loop_stretch(sim, entity) -> dict:
     """Principal stretch of the loop, frame-only: how far the grasp pulled it."""
     q = sim.pipeline.state_0.particle_q.numpy()[entity.particles]
@@ -512,6 +604,7 @@ def run(
     force_limit: float = GRASP_LIMIT_N,
     squeeze: float = GRIP_SQUEEZE,
     enable_self_contact: bool = True,
+    claw: str = "arm",
 ) -> dict:
     out.mkdir(parents=True, exist_ok=True)
     sim, obj, grip, camera, rod, ring, geometry = build_scene(
@@ -521,12 +614,15 @@ def run(
         force_limit=force_limit,
         squeeze=squeeze,
         self_contact=enable_self_contact,
+        claw=claw,
     )
     entity = obj.entity
     particles = entity.particles
     tets = entity.source_tets
     loop_ids = particles[ring["loop_ids"]]
-    solver = sim.pipeline.program.solver
+    # The toy's own solver: the coupling wrapper when the arm is in the scene, and
+    # every VBD attribute below has to be read from it, not from the wrapper.
+    solver = arm_gripper.vbd_solver(sim.pipeline.program.solver)
     self_contact = {
         "enabled": bool(getattr(solver, "particle_enable_self_contact", False)),
         "margin_m": float(getattr(solver, "particle_self_contact_margin", 0.0)),
@@ -537,7 +633,28 @@ def run(
     print(json.dumps({"self_contact": self_contact}), flush=True)
     quality = MeshQuality(sim, entity)
     dt = 1.0 / (CONTROL_HZ * SUBSTEPS)
-    grip.entity.set_trajectory(waypoints(grip, grip.entity.capacity, dt, geometry))
+    control_dt = 1.0 / CONTROL_HZ
+    arm, route, route_start = None, None, 0
+    if grip is None:
+        arm, route = arm_route(sim, geometry, steps, control_dt)
+        if route.worst_position_error_m > 0.025:
+            raise RuntimeError(f"the arm misses the rod path by {route.worst_position_error_m:.3f} m")
+        # The claw starts at the grasp; the arm starts above it, so it is placed
+        # where its route starts before the first step.
+        arm.start(route)
+        arms = sim.handles.arms[arm_gripper.ARM]
+        finger_sides = [
+            np.array([int(shape) for _, shapes in side for shape in shapes], dtype=np.int32)
+            for side in arms.finger_groups
+        ]
+        finger_shapes = np.unique(np.concatenate(finger_sides))
+        shape_forces = getattr(sim.pipeline.program.solver, "shape_contact_forces", None)
+        print(json.dumps({"arm_path_error_m": route.worst_position_error_m}), flush=True)
+    else:
+        finger_sides = [np.asarray(grip.entity.finger_shapes, dtype=np.int32)]
+        finger_shapes = finger_sides[0]
+        shape_forces = None
+        grip.entity.set_trajectory(waypoints(grip, grip.entity.capacity, dt, geometry))
     q0 = sim.pipeline.state_0.particle_q.numpy()[particles]
     rest_det = np.linalg.det(q0[tets[:, 1:]] - q0[tets[:, :1]])
     if np.any(rest_det <= 0):
@@ -561,6 +678,8 @@ def run(
     started = time.perf_counter()
     try:
         for frame in range(steps):
+            if arm is not None:
+                arm.follow(route, frame - route_start)
             sim.run(1).sync()
             q = sim.pipeline.state_0.particle_q.numpy()
             owned = q[particles]
@@ -575,7 +694,7 @@ def run(
             # real depth are. ``max_penetration_m`` and the loads below are read
             # from those depths already.
             touching_shape = depth > 0.0
-            finger = np.isin(shapes, grip.entity.finger_shapes)
+            finger = np.isin(shapes, finger_shapes)
             on_rod = np.isin(shapes, list(rod_shapes))
             # Newton mixes a particle contact's stiffness as the mean of the two
             # sides: the object's own soft_contact_ke and the shape's. The rod is
@@ -602,7 +721,9 @@ def run(
                 "rod_support_n": float(support[on_rod].sum()),
                 "bench_support_n": float(support[~finger].sum()),
                 "max_penetration_m": float(depth.max()) if depth.size else 0.0,
-                "finger_positions": [[float(v) for v in body_q[b][:3]] for b in grip.entity.bodies],
+                "finger_positions": [[float(v) for v in body_q[int(side[0][0])][:3]] for side in arms.finger_groups]
+                if arm is not None
+                else [[float(v) for v in body_q[b][:3]] for b in grip.entity.bodies],
             }
             diagnostics.append(row)
             if frame + 1 >= round(PHASES["seat"][0] * CONTROL_HZ) and row["rod_support_n"] >= SEAT_TRIGGER * weight:
@@ -614,12 +735,24 @@ def run(
                 # descending and hand over to hold, open, withdraw, built from
                 # where the fingers actually are.
                 seat_frame = frame + 1
-                fingers = np.array([[body_q[b][0], body_q[b][1], body_q[b][2]] for b in grip.entity.bodies])
-                grip.entity.set_trajectory(after_seat(fingers, dt, grip.spec.closed_half_gap))
+                if arm is None:
+                    fingers = np.array([[body_q[b][0], body_q[b][1], body_q[b][2]] for b in grip.entity.bodies])
+                    grip.entity.set_trajectory(after_seat(fingers, dt, grip.spec.closed_half_gap))
+                else:
+                    route = arm_after_seat(arm, geometry, control_dt)
+                    route_start = frame + 1
                 print(json.dumps({"seat_frame": seat_frame, "rod_support_n": row["rod_support_n"]}), flush=True)
-            row["applied"] = grip.entity.applied_wrenches.numpy().tolist()
-            row["peak_force_n"] = grip.entity.peak_force.numpy().tolist()
-            row["peak_torque_nm"] = grip.entity.peak_torque.numpy().tolist()
+            if arm is None:
+                row["applied"] = grip.entity.applied_wrenches.numpy().tolist()
+                row["peak_force_n"] = grip.entity.peak_force.numpy().tolist()
+                row["peak_torque_nm"] = grip.entity.peak_torque.numpy().tolist()
+            elif shape_forces is not None:
+                # What each pad would feel, not what the arm was told. The vector
+                # carries friction, so the grip is its part along the closing axis,
+                # where the cap binds, and the total is the pad's load.
+                load, squeeze = arm_gripper.pad_forces(sim, shape_forces(), finger_sides)
+                row["peak_force_n"] = squeeze
+                row["pad_force_n"] = load
             if frame % 15 == 0 or frame == steps - 1:
                 print(json.dumps(row), flush=True)
             if videos is not None and frame % render_every == 0:
@@ -647,7 +780,7 @@ def run(
                 "coarse": bool(coarse),
                 "coarse_contact_gap_m": CONTACT_GAP if coarse else None,
                 "coarse_budget_m": COARSE_BUDGET if coarse else None,
-                "claw": "parallel",
+                "claw": geometry["gripper"],
                 "self_contact": self_contact,
                 "geometry": geometry,
                 "mass_kg": mass,
@@ -670,8 +803,18 @@ def run(
     )
 
 
+def peak_over(diagnostics, key: str):
+    """The run's largest value per pad for ``key``, not the last frame's.
+
+    A grip's peak is what it held with, and the last frame is after the release:
+    reading it there reported 0 N for a grasp that closed at the cap.
+    """
+    rows = [row[key] for row in diagnostics if row.get(key)]
+    return [max(values) for values in zip(*rows, strict=True)] if rows else None
+
+
 def judge(out: Path, diagnostics, quality, geometry, sim, entity, steps, *, video_error, seat_frame) -> dict:
-    last = diagnostics[-1]
+    solver = arm_gripper.vbd_solver(sim.pipeline.program.solver)
     # The hold is the window after the guarded stop: the toy is on the rod and the
     # jaws have not opened yet. Where it falls depends on when the rod reported
     # the toy, so it is read off that frame and not off a clock.
@@ -710,11 +853,9 @@ def judge(out: Path, diagnostics, quality, geometry, sim, entity, steps, *, vide
     result = {
         "geometry": geometry,
         "self_contact": {
-            "enabled": bool(getattr(sim.pipeline.program.solver, "particle_enable_self_contact", False)),
-            "margin_m": float(getattr(sim.pipeline.program.solver, "particle_self_contact_margin", 0.0)),
-            "rest_exclusion_m": float(
-                getattr(sim.pipeline.program.solver, "particle_rest_shape_contact_exclusion_radius", 0.0)
-            ),
+            "enabled": bool(getattr(solver, "particle_enable_self_contact", False)),
+            "margin_m": float(getattr(solver, "particle_self_contact_margin", 0.0)),
+            "rest_exclusion_m": float(getattr(solver, "particle_rest_shape_contact_exclusion_radius", 0.0)),
         },
         "weight_n": weight,
         "rod_load_n": rod_load,
@@ -725,8 +866,8 @@ def judge(out: Path, diagnostics, quality, geometry, sim, entity, steps, *, vide
             np.mean([row["bench_support_n"] for row in diagnostics[CONTROL_HZ // 2 : CONTROL_HZ]])
         ),
         "seated_frame": seat_frame,
-        "peak_force_n": last.get("peak_force_n"),
-        "peak_torque_nm": last.get("peak_torque_nm"),
+        "peak_force_n": peak_over(diagnostics, "peak_force_n"),
+        "peak_torque_nm": peak_over(diagnostics, "peak_torque_nm"),
         "settled_load_n": settled_load,
         "settled_clearance_m": settled_clearance,
         "hold_clearance_m": (min(row["minimum_z_m"] for row in hold) - TABLE_Z) if hold else None,
@@ -746,6 +887,11 @@ def judge(out: Path, diagnostics, quality, geometry, sim, entity, steps, *, vide
     }
     peak_force = max(result["peak_force_n"] or [0.0])
     peak_torque = max(result["peak_torque_nm"] or [0.0])
+    # The claw's peak is the wrench its own drive applied, so its cap is exact to
+    # a float32 ulp. The arm's is the squeeze its pads read back through the
+    # coupling: the actuator is clamped at the same number, and the readback can
+    # sit a percent over it for a substep.
+    tolerance = 1.0e-6 if geometry["gripper"] == "claw" else arm_gripper.GRIP_TOLERANCE
     result["success"] = bool(
         steps >= round(DURATION * CONTROL_HZ)
         and result["seated_frame"] is not None
@@ -757,7 +903,7 @@ def judge(out: Path, diagnostics, quality, geometry, sim, entity, steps, *, vide
         and result["quality"]["nonfinite_tet_substeps_by_part"] == [0, 0, 0]
         and min(result["quality"]["minimum_J_by_part"]) > 0.0
         and result["max_penetration_m"] <= 0.0005
-        and peak_force <= float(geometry["force_cap_n"]) * (1.0 + 1.0e-6)
+        and peak_force <= float(geometry["force_cap_n"]) * (1.0 + tolerance)
         and peak_torque <= 0.03
     )
     (out / "result.json").write_text(json.dumps(result, indent=2) + "\n")
@@ -778,6 +924,12 @@ def main() -> None:
     parser.add_argument(
         "--no-self-contact", dest="self_contact", action="store_false", help="turn the toy's self-contact off"
     )
+    parser.add_argument(
+        "--claw",
+        choices=("arm", "claw"),
+        default="arm",
+        help="who moves: the AIRBOT arm, or the scripted parallel claw this scene was built on",
+    )
     args = parser.parse_args()
     run(
         args.out,
@@ -789,6 +941,7 @@ def main() -> None:
         force_limit=args.force_limit,
         squeeze=args.squeeze,
         enable_self_contact=args.self_contact,
+        claw=args.claw,
     )
 
 

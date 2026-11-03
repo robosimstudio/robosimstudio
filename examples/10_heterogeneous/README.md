@@ -52,7 +52,7 @@ parallel claw: a level 120 x 30 x 18 mm carrier, two 10 x 12 x 42 mm finger
 posts on native prismatic slides, and 6 x 12 x 12 mm pad inserts on the posts'
 inner faces. Each post runs from the pad's bottom face to the carrier's
 underside, so the pad sits flush in the post and the finger is one column. The pads cannot rotate, and there is no ledge: the pad face and its
-friction are the only grip aids. The jaws close under a 5 N clamp; the carrier
+friction are the only grip aids. The jaws close under a 10 N clamp; the carrier
 is the press path under a separate 200 N budget, so `peak_force_n` is the jaw
 peak and `peak_push_force_n` the press peak. The press runs the same path at the
 same rate as the carry and differs only in stiffness (50 kN/m against 1.5), so
@@ -112,7 +112,7 @@ Controls and knobs, each reported with its measured effect:
 - `--mu`: the pipeline's single global soft friction coefficient. 0.9 for the
   rod; 2.0 for the cup's loop grip.
 - `--cap` / `--push-cap`: the jaw closing clamp and the carrier push budget [N].
-  The jaws never exceed 5 N; the press measures 145-200 N at the 200 N default
+  The jaws never exceed 10 N; the press measures 145-200 N at the 200 N default
   and 100.0 N at 100 N, over the same 85 mm path.
 - `--rod-radius`: 6 mm; the rod carries the toy at 1.16-1.19 N.
 
@@ -160,7 +160,7 @@ pad positions.
    post 3 mm from the 50 mm bore wall; at 40 mm the post touched. The body is
    110 mm wide in a 100 mm bore, so the press deforms its lower rim; local tet
    inversion is the measured deformation and is reported, not gated away.
-4. **The press is the carrier's, not the jaws'.** The jaws stay under 5 N; the
+4. **The press is the carrier's, not the jaws'.** The jaws stay under 10 N; the
    carrier's 200 N budget is the press, and at that cap the 85 mm path, not the
    clamp, ends it (peak 60.5-63.0 N). At 50 N the clamp bound the press: the
    carrier lagged its path, the body did not travel with the pads, and 1 of 3
@@ -210,3 +210,104 @@ current full AIRBOT recording under `outputs/clawhauser/airbot_play_final/`
 shows the arm reaching, closing and moving, but `result.json` reports
 `success: false`: the loop slips off the fingertips during lift and remains at
 the source zone.
+
+## The three scenes on the arm
+
+`clawhauser_pick_drop.py`, `clawhauser_on_rod.py` and
+`clawhauser_stuff_into_bottle.py` move with the AIRBOT Play arm and its own
+parallel hand by default; `--claw claw` runs the scripted claw described above,
+which stays as the reference the arm is measured against. `arm_gripper.py` is
+the shared module: the MJCF asset, the embodiment, the hand's registry entry, the
+route/IK planner and the build-time checks. The grasp's numbers do not change --
+a 10 N closing clamp, the pads commanded 12 mm past the loop's measured
+half-width, and the pipeline's global `mu` -- and neither does the task: each
+scene states a tool-centre path and a pad-face gap, the arm's IK turns it into
+joint targets at the control rate, and every per-frame diagnostic is computed
+from the same state arrays the claw's were.
+
+**Two islands, joined one way.** The arm is an `articulated` robot and resolves
+to MuJoCo; the toy stays on VBD. They meet through `coupler("one_way",
+contact_forces=True, slide_feedback=True)`. Per substep the coupler steps the
+rigid island, runs one Newton collision pipeline over the whole model, and steps
+VBD with `integrate_with_external_rigid_solver=True`: the arm is a boundary the
+toy never pushes back on. `slide_feedback` then resolves each soft contact's
+push along every prismatic joint's axis onto the finger, so a finger stops where
+the toy pushes back with its actuator's force. `admm` and `proxy` are the other
+two couplers and both are two-way; a 1.2 N toy has no reaction worth solving, and
+Newton's proxy harvest refuses the full-surface soft contacts these pads make.
+The claw sits in the same VBD island as the toy, so this is the one topology
+change the migration makes; the rest of the pipeline is untouched.
+
+**Sticky matching survives the split.** `contact_matching` is a
+`CollisionPipeline` property, not a solver one, and `build_one_way` forwards the
+scene's `CollisionSpec` into the coupler's own pipeline. Each scene keeps
+`contact_matching="sticky"`, and every arm run asserts at build that the live
+pipeline reports it: without it, friction becomes VBD's per-pass drift and the
+pinch slides the loop out however high `mu` is. The toy's own self-contact
+matcher is separate -- `particle_enable_self_contact`, the margin and the
+rest-shape exclusion stay on the VBD backend spec.
+
+**Reading the solver through the coupler.** With two islands,
+`sim.pipeline.program.solver` is the coupler, not VBD, and every VBD attribute
+read through it returns `None`: the self-contact pair buffers and the coarse
+solve's path reported nothing for that reason. Each scene unwraps it first
+(`arm_gripper.vbd_solver`).
+
+**The 10 N limit is the actuator's.** The MJCF declares
+`actuatorfrcrange="-5 5"` on each finger joint; the hand's `ActuationSpec` raises
+it to 10 N, restates the same number as `effort_limit`, and `check_arm` asserts
+the built model carries it on both finger DOFs before the first step. What the
+scenes report as `peak_force_n` is the pads' measured squeeze -- the component of
+their contact force along the closing axis -- because the raw vector also carries
+friction: on the pick-and-drop's carry the two pads read `-10.1 N` and `+10.1 N`
+along the jaws' axis with their total loads at 11.1-11.8 N. The total is reported
+beside it as `peak_pad_force_n`. The gate allows it half again, which is the paper
+fold's own bound for the same stack: a 10 N `effort_limit` measured 9.8 N
+holding, 13.5 N pressing and never over 15 N at any step. Measured here, the
+rod's close spiked to 14.6 N as the pads landed and settled at 10.1 / 10.2 N.
+
+**The arm starts where its route starts.** The claw begins at its grasp pose;
+the arm's home keyframe is 340 mm above it, so a run that let the phases play out
+from the home pose closed the pads on the way down and hit the cord at 0.8 m/s.
+Each scene places the arm at its route's first frame before the first step, so a
+phase means the same thing on both movers, and a replanned route (the rod's
+guard, the bottle's press) is taken from where the arm already is.
+
+### What the arm does today
+
+Measured on one RTX 3060 under WSL (Warp 1.18, `--render-every 0`), the three
+scenes at their default lengths. The cluster was in its three-day maintenance
+window, so these are the local numbers, not GH200 ones.
+
+| Scene | What it measured | Verdict |
+|---|---|---|
+| `clawhauser_pick_drop.py` | lifts 43.8 mm of the 240.9 mm asked for, carries 80.7 mm, peak grip 10.34 N, 0.18 mm penetration, settles 34.2 mm off the bench | `success: false` -- `released: false`: the pads never let the loop go |
+| `clawhauser_on_rod.py` | seats at frame 143, releases, holds 28.7 mm of clearance, settles 19.8 mm (the gate wants 20), rod carries 7.03 N, peak grip 12.81 N, 0.63 mm penetration | `success: false` -- `rod_threaded: false` on the clearance, and over the penetration gate |
+| `clawhauser_stuff_into_bottle.py` | inserts 79.8 mm, 45.4% of the volume inside, 41.2% settled, 76 press frames, push peak 27.4 N, 0.20 mm into the shell | `success: false` -- `released: false`, and the grip peaked at 16.63 N against the 15 N bound |
+
+**One failure is common to all three: the hand does not open off the loop.** The
+measured aperture tells the story. On the pick-and-drop it stalls at 16.3 mm
+while the close is commanded to 11.1 mm, and when the open ramps to 34 mm it
+stalls at 25.9 mm while the pads push at the 10 N cap -- the loop stretched to
+1.59x on the rod, the toy hanging 1 mm from where it was lifted, neither pinched
+on the cord nor free of it. A 16.3 mm mouth is inside the hoop, whose outer
+surface is at 23 mm and whose hole is about that wide: the pads are closing
+*through* the hole and pressing its inner surface, and opening stretches the hole
+instead of letting go. The claw does not do this because its pads are 12 mm wide
+and meet the cord's outer surface at 23 mm; these are 40 mm wide and 12 mm tall,
+so the mouth of the grip spans the hole rather than the cord.
+
+The `PAD_RISE` correction is the other open question, and it is not settled. It
+was measured on the built rod scene (finger bodies 6.2 mm above the commanded
+point, pad boxes 5 mm up their own frame) and it improved the rod from "never
+seats, 27.7 N grip, 1.24 mm penetration" to the row above, while on the
+pick-and-drop it cost 195 mm of the lift. Neither version released the loop, so
+it is not the release's cause; it is where the grasp sits, and one constant cannot
+be right for a lying hoop and a standing one. The next step is to place the pad
+*faces* on the cord's measured surface -- the scene already measures that surface
+for the claw -- rather than to correct the tool centre by a constant.
+
+The one number that held across all three runs is the grip's ceiling: the pads
+sat at 10.1 / 10.2 N along the closing axis for as long as they held, with
+total loads of 11.1 N, and the highest squeeze anywhere was 12.81 N on the rod
+and 16.63 N in the bottle's press.
