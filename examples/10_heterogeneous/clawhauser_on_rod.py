@@ -219,7 +219,7 @@ def build_scene(
     *,
     coarse: bool,
     rod_radius: float = ROD_RADIUS,
-    mu: float | None = None,
+    mu: float | None = 4.0,
     force_limit: float = GRASP_LIMIT_N,
     squeeze: float = GRIP_SQUEEZE,
     self_contact: bool = True,
@@ -287,7 +287,6 @@ def build_scene(
     print(json.dumps({"geometry": geometry}), flush=True)
 
     common = {
-        "iterations": 12,
         "particle_enable_self_contact": self_contact,
         # Millimetre-scale self-contact: the solver's own default margin is
         # 0.2 m, which makes every particle pair touch and the toy explode.
@@ -309,10 +308,17 @@ def build_scene(
             coarse_translation=True,
             coarse_contact_gap=CONTACT_GAP,
             coarse_budget=COARSE_BUDGET,
+            iterations=12,
             **common,
         )
         if coarse
-        else rss.backend("vbd", **common)
+        else rss.backend(
+            "robosimstudio_materials.chebyshev_acceleration.SolverVBDChebyshev",
+            iterations=160,
+            chebyshev_rho=0.95,
+            chebyshev_gamma=1.0,
+            **common,
+        )
     )
     physics = rss.ArrangementSpec(
         control_hz=CONTROL_HZ,
@@ -502,7 +508,7 @@ def run(
     render_every: int = 0,
     coarse: bool = False,
     rod_radius: float = ROD_RADIUS,
-    mu: float | None = None,
+    mu: float | None = 4.0,
     force_limit: float = GRASP_LIMIT_N,
     squeeze: float = GRIP_SQUEEZE,
     enable_self_contact: bool = True,
@@ -766,7 +772,7 @@ def main() -> None:
     parser.add_argument("--render-every", type=int, default=0)
     parser.add_argument("--coarse", dest="coarse", action="store_true", help="run the coarse common-translation solve")
     parser.add_argument("--rod-radius", type=float, default=ROD_RADIUS, help="rod radius [m]")
-    parser.add_argument("--mu", type=float, default=None, help="global soft-contact friction coefficient")
+    parser.add_argument("--mu", type=float, default=4.0, help="global soft-contact friction coefficient")
     parser.add_argument("--force-limit", type=float, default=GRASP_LIMIT_N, help="the jaws' closing budget [N]")
     parser.add_argument("--squeeze", type=float, default=GRIP_SQUEEZE, help="close travel past the loop [m]")
     parser.add_argument(

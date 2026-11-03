@@ -243,7 +243,7 @@ def build_scene(
     bore: float,
     cap: float,
     push_cap: float,
-    mu: float | None,
+    mu: float | None = 4.0,
     squeeze: float = GRIP_SQUEEZE,
     self_contact: bool = True,
 ):
@@ -318,7 +318,6 @@ def build_scene(
     print(json.dumps({"geometry": geometry}), flush=True)
 
     common = {
-        "iterations": 12,
         "particle_enable_self_contact": self_contact,
         # Millimetre-scale self-contact: the solver's own default margin is
         # 0.2 m, which makes every particle pair touch and the toy explode.
@@ -340,10 +339,17 @@ def build_scene(
             coarse_translation=True,
             coarse_contact_gap=CONTACT_GAP,
             coarse_budget=COARSE_BUDGET,
+            iterations=12,
             **common,
         )
         if coarse
-        else rss.backend("vbd", **common)
+        else rss.backend(
+            "robosimstudio_materials.chebyshev_acceleration.SolverVBDChebyshev",
+            iterations=160,
+            chebyshev_rho=0.95,
+            chebyshev_gamma=1.0,
+            **common,
+        )
     )
     physics = rss.ArrangementSpec(
         control_hz=CONTROL_HZ,
@@ -656,7 +662,7 @@ def run(
     bore: float = BORE_RADIUS,
     cap: float = GRASP_LIMIT_N,
     push_cap: float = PUSH_LIMIT_N,
-    mu: float | None = None,
+    mu: float | None = 4.0,
     squeeze: float = GRIP_SQUEEZE,
     enable_self_contact: bool = True,
 ) -> dict:
@@ -1211,7 +1217,7 @@ def main() -> None:
     parser.add_argument("--push-cap", type=float, default=PUSH_LIMIT_N, help="carrier push clamp [N]")
     parser.add_argument("--force-limit", type=float, default=None, help="alias for --cap, the sweep's name")
     parser.add_argument("--squeeze", type=float, default=GRIP_SQUEEZE, help="close travel past the loop [m]")
-    parser.add_argument("--mu", type=float, default=None, help="global soft-contact friction coefficient")
+    parser.add_argument("--mu", type=float, default=4.0, help="global soft-contact friction coefficient")
     parser.add_argument(
         "--no-self-contact", dest="self_contact", action="store_false", help="turn the toy's self-contact off"
     )

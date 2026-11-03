@@ -45,7 +45,7 @@ SOURCE_HASHES = {
 def build_scene(
     *,
     coarse: bool = False,
-    mu: float | None = None,
+    mu: float | None = 4.0,
     force_limit: float = ScriptedGripperSpec.force_limit,
     squeeze: float = GRIP_SQUEEZE,
 ):
@@ -79,7 +79,6 @@ def build_scene(
     closed_half_gap = float(half_span + ScriptedGripperSpec.pad_half_thickness - squeeze)
 
     common = {
-        "iterations": 12,
         "particle_enable_self_contact": False,
         "particle_enable_tile_solve": False,
         "rigid_body_particle_contact_buffer_size": 4096,
@@ -90,10 +89,17 @@ def build_scene(
             coarse_translation=True,
             coarse_contact_gap=0.002,
             coarse_budget=0.0005,
+            iterations=12,
             **common,
         )
         if coarse
-        else rss.backend("vbd", **common)
+        else rss.backend(
+            "robosimstudio_materials.chebyshev_acceleration.SolverVBDChebyshev",
+            iterations=160,
+            chebyshev_rho=0.95,
+            chebyshev_gamma=1.0,
+            **common,
+        )
     )
     physics = rss.ArrangementSpec(
         control_hz=CONTROL_HZ,
@@ -190,7 +196,7 @@ def run(
     steps: int,
     render_every: int = 0,
     coarse: bool = False,
-    mu: float | None = None,
+    mu: float | None = 4.0,
     force_limit: float = ScriptedGripperSpec.force_limit,
     squeeze: float = GRIP_SQUEEZE,
 ):
@@ -378,7 +384,7 @@ def main() -> None:
     parser.add_argument("--steps", type=int, default=round(DURATION * CONTROL_HZ))
     parser.add_argument("--render-every", type=int, default=0)
     parser.add_argument("--coarse", action="store_true", help="run the coarse common-translation solve")
-    parser.add_argument("--mu", type=float, default=None, help="global soft-contact friction coefficient")
+    parser.add_argument("--mu", type=float, default=4.0, help="global soft-contact friction coefficient")
     parser.add_argument(
         "--force-limit", type=float, default=ScriptedGripperSpec.force_limit, help="the jaws' closing budget [N]"
     )
