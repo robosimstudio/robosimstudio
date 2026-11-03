@@ -33,9 +33,9 @@ instead of gripping at half.
 
 **The 12 mm close is a command, not a distance.** Each pad face is commanded
 12 mm inside the loop's measured outer surface. The pads cannot travel that far
--- their faces meet at a 4 mm gap -- and are not allowed to: the 10 N cap stalls
-them first. That is the same arithmetic the claw used, whose pads also overlap at
-full close.
+-- the faces meet at the finger origins -- and are not allowed to: the 10 N cap
+stalls them first. That is the same arithmetic the claw used, whose pads also
+overlap at full close.
 
 **Sticky matching is the scene's, and it has to survive the split.**
 ``contact_matching`` is a ``CollisionPipeline`` property, and ``build_one_way``
@@ -80,21 +80,21 @@ extent), so this is the orientation that puts the jaws across the cord.
 FINGER_OPEN_Q = 0.04
 """One finger's slide coordinate at full open [m]; the MJCF's own range."""
 
-PAD_INNER_OFFSET = 0.002
+PAD_INNER_OFFSET = 0.0
 """Each pad face outboard of its finger's origin [m].
 
-The pad's box is centred 5 mm out and is 3 mm half-thick in the closing
-direction, so the face sits ``0.005 - 0.003`` from the finger body's origin.
+This is the stock DISCOVERSE hand: a 10.5 x 4 x 40 mm pad box centred 2 mm out
+along the closing axis, so the face is the finger body's own origin plane.
 """
 
-PAD_HALF_THICKNESS = 0.003
+PAD_HALF_THICKNESS = 0.002
 """Half a pad's thickness along the closing axis [m], for a scene stating a gap."""
 
 OPEN_HALF_GAP = FINGER_OPEN_Q + PAD_INNER_OFFSET
-"""Half the gap between the pad faces at full open [m]: 42 mm."""
+"""Half the gap between the pad faces at full open [m]: 40 mm."""
 
 CLOSED_HALF_GAP = PAD_INNER_OFFSET
-"""Half the gap at full closed [m]: the faces stop 4 mm apart."""
+"""Half the gap at full closed [m]: the two faces meet."""
 
 SPAN = 2.0 * OPEN_HALF_GAP
 """Pad-face separation at full open [m]; what ``GripperSpec.jaw_gap`` inverts."""
@@ -172,9 +172,9 @@ def pad_forces(sim, forces: np.ndarray, sides, *, name: str = ARM) -> tuple[list
 def finger_command(half_gap: float) -> float:
     """The 0 (open) .. 1 (closed) command that aims the pad faces at ``half_gap``.
 
-    Exact for this hand, where ``GripperSpec.jaw_gap``'s ``1 - gap / span`` is
-    not: the interpolation runs over the finger's 40 mm of travel while the faces
-    start 2 mm outboard, so the two differ by 1.4 mm at the loop's width.
+    Exact for this hand: the pad faces are the finger bodies' own origins, so the
+    command is the inverse of the 40 mm slide and ``GripperSpec.jaw_gap``'s
+    ``1 - gap / span`` gives the same number.
     """
     travel = OPEN_HALF_GAP - CLOSED_HALF_GAP
     return float(np.clip((OPEN_HALF_GAP - half_gap) / travel, 0.0, 1.0))
@@ -203,8 +203,8 @@ register_gripper(
         finger_open_q=(FINGER_OPEN_Q, FINGER_OPEN_Q),
         finger_closed_q=(0.0, 0.0),
         open_width=FINGER_OPEN_Q,
-        # The faces' own separation, measured off the pads rather than derived
-        # from travel: at full open they are 84 mm apart, not 80.
+        # The faces' own separation: the stock pads' inner faces are the finger
+        # origins, 40 mm of slide each side, so the mouth is exactly 80 mm.
         span=SPAN,
         tcp_body="link6",
         tcp_offset=(0.0, 0.0, 0.005),
@@ -212,9 +212,9 @@ register_gripper(
         close_axis=(0.0, 1.0, 0.0),
         finger_bodies=(("left",), ("right",)),
         open_axis_signs=(1.0, -1.0),
-        pad_half_span=FINGER_OPEN_Q + 0.005,
-        pad_thickness=0.012,
-        tip_reach=0.011,
+        pad_half_span=FINGER_OPEN_Q + 0.002,
+        pad_thickness=0.040,
+        tip_reach=0.020,
         housing_half=0.04,
         actuation=grip_actuation(),
     )

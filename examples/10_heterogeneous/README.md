@@ -191,8 +191,9 @@ the upstream revision, MIT license and local gripper changes. RSS controls the
 articulated arm with its kinematic backend and couples finger contact one way
 into the same VBD Clawhauser volume. Its visual shell, six joint axes and
 fingers come from the AIRBOT model; this mode does not validate AIRBOT motors
-or two-way force response. The task-specific fingertip pads and shelves are
-visible and documented in `SOURCE.md`.
+or two-way force response. The hand is the stock one -- upstream's two collision
+boxes per finger, no added pads, shelves or contact geometry -- and `SOURCE.md`
+records the provenance.
 
 Run it on the same CUDA node and Python environment as above:
 
