@@ -67,6 +67,13 @@ The rod and the container, their geometry derived from the mesh (loop hole
 centre and inradius, loop width in the closing direction, tail centre and
 extent), and the measured outcomes:
 
+Current reproduction (2026-11-03): the default pick/drop uses Hanson's
+`SolverVBDCoarse` with Newton `3d3f9e4c`. The clean 600-frame run lifted the toy
+146.5 mm but lost contact at 2.57 s, before transport. The historical results
+below are not validation of this current pairing; see the
+[recorded comparison](../../.agents/reports/BUG_FIX_hanson_baseline_20261103.md).
+
+
 | Scene | What it asks | What it measured |
 |---|---|---|
 | `clawhauser_on_rod.py` | pinch the loop's sides, lift, thread the rod's free end through the hole, seat the toy on the rod, open, withdraw | 3 of 3: seated at frame 150, rod carries 1.212-1.220 N of the 1.227 N toy with the jaws open, 26.2-26.4 mm of bench clearance, peak jaw 4.76-4.78 / 4.68-4.70 N under the 5 N clamp, 4.7e-5 m penetration, 0 inverted tets |

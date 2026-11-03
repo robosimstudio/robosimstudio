@@ -35,7 +35,7 @@ depth, so a sweep over bores is an argument rather than a different file.
 
 Control, for contrast rather than for the result:
 
-    --coarse           run the coarse common-translation solve under load
+    --no-coarse        stock VBD: no common-translation solve under load
 
 Knobs, each reported with its measured effect:
 
@@ -60,7 +60,7 @@ import newton
 import numpy as np
 from loop_geometry import ring_geometry, smooth
 from mesh_quality import MeshQuality, penetration
-from parallel_gripper import GRASP_LIMIT_N, PUSH_LIMIT_N, ParallelGripperSpec, vbd_island
+from parallel_gripper import GRASP_LIMIT_N, PUSH_LIMIT_N, ParallelGripperSpec
 
 import robosimstudio as rss
 from robosimstudio_materials.heterogeneous import HeterogeneousSoftSpec, load_labelled_tets
@@ -132,6 +132,11 @@ PAD_HALF_WIDTH = 0.006
 post: 12 mm across, the post's own width, and 12 mm tall, so it does not extend
 past the finger. The 40 mm archive face is gone. Two patches press the body's
 top, one on each shoulder.
+"""
+PAD_CLEARANCE = 0.001
+"""How far the pads' bottom faces start above the bench [m]. The close starts at
+the ground, so a loop lying there is straddled instead of one assumed to sit at
+the body's mid-plane.
 """
 OPENED_HALF_GAP = 0.034
 """How far apart the jaws open once the toy is in place: 68 mm, outside the
@@ -234,15 +239,14 @@ SOURCE_HASHES = {
 
 def build_scene(
     *,
-    coarse: bool = False,
+    coarse: bool,
     bore: float,
     cap: float,
     push_cap: float,
     mu: float | None,
+    squeeze: float = GRIP_SQUEEZE,
     self_contact: bool = True,
-    claw: str = "vbd",
-    coupler: str = "admm",
-    coupler_iterations: int | None = None,
+    contact_matching: str = "sticky",
 ):
     for relative, expected in SOURCE_HASHES.items():
         actual = hashlib.sha256((ASSET / relative).read_bytes()).hexdigest()
@@ -260,16 +264,15 @@ def build_scene(
 
     # Lying flat, in its own rest pose: no rotation, so the mesh's +z is up and
     # the body's lowest vertex is what rests it on the bench. The loop is a ring
-    # on a stem at the head's end, so lying down it floats at the body's
-    # mid-thickness, beyond the head, with its plane horizontal -- the pads close
-    # on its rim from either side at ``grip_z``.
+    # on a stem at the head's end, lying in a horizontal plane; the pads start
+    # with their bottom faces on the bench and close on it from either side.
     quat = (0.0, 0.0, 0.0, 1.0)
     hole = ring["hole_centre_local"]
     base = ring["base_local_y"]
     # Laid down so the ring's hole sits on the claw's own y: the body lies behind
     # it, and the toy is carried over the bore without a lateral detour.
     pose = (SOURCE_X, float(-hole[1]), float(-vertices[:, 2].min()) + 0.001)
-    grip_z = float(pose[2] + hole[2])
+    grip_z = float(ParallelGripperSpec.pad_half_height + PAD_CLEARANCE)
     # How far the toy hangs below the pinch once it is off the bench: the same
     # 198 mm the standing start measures, because the body hangs from the loop
     # either way. It is what the lift has to clear the rim by.
@@ -287,7 +290,7 @@ def build_scene(
         "hole_inradius_median_m": ring["hole_inradius_median"],
         "loop_reach_m": ring["side_reach"],
         "pad_half_thickness_m": PAD_HALF_THICKNESS,
-        "grip_squeeze_m": GRIP_SQUEEZE,
+        "grip_squeeze_m": squeeze,
         "toy_height_m": float(vertices[:, 1].max() - base),
         "hole_height_m": hole_height,
         # Where the jaws close and how wide the thing they close on is: the loop's
@@ -316,7 +319,7 @@ def build_scene(
     print(json.dumps({"geometry": geometry}), flush=True)
 
     common = {
-        "iterations": 80,
+        "iterations": 12,
         "particle_enable_self_contact": self_contact,
         # Millimetre-scale self-contact: the solver's own default margin is
         # 0.2 m, which makes every particle pair touch and the toy explode.
@@ -341,40 +344,20 @@ def build_scene(
             **common,
         )
         if coarse
-        else rss.backend(
-            "robosimstudio_materials.chebyshev_acceleration.SolverVBDChebyshev",
-            chebyshev_rho=0.9,
-            chebyshev_collision_mask=True,
-            **common,
-        )
+        else rss.backend("vbd", **common)
     )
-    # The claw on MuJoCo, the FEM on VBD: its pad contacts are MuJoCo's, not
-    # VBD's penalty contacts, and the two islands meet through the coupler.
-    claw_backend = rss.backend(claw)
-    # The claw shares VBD's island by default; only a split island needs a coupler.
-    split = claw != "vbd"
     physics = rss.ArrangementSpec(
         control_hz=CONTROL_HZ,
         substeps=SUBSTEPS,
         use_cuda_graph=False,
-        backends=(("soft", vbd), ("rigid", claw_backend if split else vbd), ("*", vbd)),
-        **(
-            {}
-            if not split
-            else {
-                "coupling": rss.coupler(
-                    coupler,
-                    mode="staggered",
-                    **({} if coupler_iterations is None else {"iterations": int(coupler_iterations)}),
-                )
-            }
-        ),
+        backends=(("soft", vbd), ("rigid", vbd), ("*", vbd)),
         collision=rss.CollisionSpec(
             soft_contact_margin=CONTACT_GAP,
             full_surface_contact=False,
             contact_ke=CONTACT_KE,
             contact_kd=25.0,
             broad_phase="nxn",
+            contact_matching=contact_matching,
         ),
     )
     scene = rss.Scene(cell="bench_075", physics=physics, name="clawhauser_stuff_into_bottle")
@@ -438,7 +421,7 @@ def build_scene(
             name="bottle_loop_gripper",
             center=(SOURCE_X + float(hole[0]), 0.0, grip_z),
             half_gap=ring["side_reach"] + PAD_HALF_THICKNESS + 0.012,
-            closed_half_gap=ring["side_reach"] + PAD_HALF_THICKNESS - GRIP_SQUEEZE,
+            closed_half_gap=ring["side_reach"] + PAD_HALF_THICKNESS - squeeze,
             pad_half_thickness=PAD_HALF_THICKNESS,
             pad_half_width=PAD_HALF_WIDTH,
             force_limit=cap,
@@ -462,7 +445,7 @@ def build_scene(
     scene.add(camera)
     sim = scene.build(device="cuda:0", warmup=False, use_cuda_graph=False)
     entity = obj.entity
-    if not type(vbd_island(sim.pipeline.program.solver)).__name__.startswith("SolverVBD"):
+    if not type(sim.pipeline.program.solver).__name__.startswith("SolverVBD"):
         raise RuntimeError(f"expected a VBD solver, got {type(sim.pipeline.program.solver).__name__}")
     if sim.model.tet_count != len(tets) or len(entity.tet_part_labels) != len(tets):
         raise RuntimeError("RSS lost Clawhauser tetrahedra or part labels")
@@ -670,15 +653,14 @@ def run(
     *,
     steps: int,
     render_every: int = 0,
-    coarse: bool = False,
+    coarse: bool = True,
     bore: float = BORE_RADIUS,
     cap: float = GRASP_LIMIT_N,
     push_cap: float = PUSH_LIMIT_N,
     mu: float | None = None,
+    squeeze: float = GRIP_SQUEEZE,
     enable_self_contact: bool = True,
-    claw: str = "vbd",
-    coupler: str = "admm",
-    coupler_iterations: int | None = None,
+    contact_matching: str = "sticky",
 ) -> dict:
     out.mkdir(parents=True, exist_ok=True)
     sim, obj, grip, camera, ring, glass_shapes, glass_bodies, geometry = build_scene(
@@ -687,10 +669,9 @@ def run(
         cap=cap,
         push_cap=push_cap,
         mu=mu,
+        squeeze=squeeze,
         self_contact=enable_self_contact,
-        claw=claw,
-        coupler=coupler,
-        coupler_iterations=coupler_iterations,
+        contact_matching=contact_matching,
     )
     entity = obj.entity
     particles = entity.particles
@@ -699,7 +680,7 @@ def run(
     # from a loop contact: the loop sits between the pads on the way down.
     part_of_particle = np.zeros(len(particles), dtype=np.int32)
     part_of_particle[tets] = entity.tet_part_labels[:, None]
-    solver = vbd_island(sim.pipeline.program.solver)
+    solver = sim.pipeline.program.solver
     self_contact = {
         "enabled": bool(getattr(solver, "particle_enable_self_contact", False)),
         "margin_m": float(getattr(solver, "particle_self_contact_margin", 0.0)),
@@ -1225,14 +1206,19 @@ def main() -> None:
     parser.add_argument("--out", type=Path, default=OUTPUT / "run")
     parser.add_argument("--steps", type=int, default=round(DURATION * CONTROL_HZ))
     parser.add_argument("--render-every", type=int, default=0)
-    parser.add_argument("--coarse", dest="coarse", action="store_true", help="run the coarse common-translation solve")
-    parser.add_argument("--claw", default="vbd", help="backend for the claw: vbd shares the FEM's island")
-    parser.add_argument("--coupler", default="admm", help="island coupler: admm, proxy or one_way")
-    parser.add_argument("--coupler-iterations", type=int, default=None, help="ADMM iterations per substep")
+    parser.add_argument("--no-coarse", dest="coarse", action="store_false")
     parser.add_argument("--bore", type=float, default=BORE_RADIUS, help="container inner radius [m]")
     parser.add_argument("--cap", type=float, default=GRASP_LIMIT_N, help="jaw closing clamp [N]")
     parser.add_argument("--push-cap", type=float, default=PUSH_LIMIT_N, help="carrier push clamp [N]")
+    parser.add_argument("--force-limit", type=float, default=None, help="alias for --cap, the sweep's name")
+    parser.add_argument("--squeeze", type=float, default=GRIP_SQUEEZE, help="close travel past the loop [m]")
     parser.add_argument("--mu", type=float, default=None, help="global soft-contact friction coefficient")
+    parser.add_argument(
+        "--contact-matching",
+        choices=("sticky", "disabled"),
+        default="sticky",
+        help="sticky keeps the pads' contact points across passes",
+    )
     parser.add_argument(
         "--no-self-contact", dest="self_contact", action="store_false", help="turn the toy's self-contact off"
     )
@@ -1242,14 +1228,13 @@ def main() -> None:
         steps=args.steps,
         render_every=args.render_every,
         coarse=args.coarse,
-        claw=args.claw,
-        coupler=args.coupler,
-        coupler_iterations=args.coupler_iterations,
         bore=args.bore,
-        cap=args.cap,
+        cap=args.cap if args.force_limit is None else args.force_limit,
         push_cap=args.push_cap,
         mu=args.mu,
+        squeeze=args.squeeze,
         enable_self_contact=args.self_contact,
+        contact_matching=args.contact_matching,
     )
 
 

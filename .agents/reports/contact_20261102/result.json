@@ -1,0 +1,65 @@
+{
+  "geometry": {
+    "hole_centre_local": [
+      0.0033,
+      0.0874,
+      0.0002
+    ],
+    "loop_reach_m": 0.02313200461977851,
+    "pad_half_thickness_m": 0.003,
+    "grip_squeeze_m": 0.006,
+    "grip_z_m": 0.010700000000000001,
+    "grip_xy_offset_m": [
+      0.0018613155,
+      -0.007
+    ],
+    "hole_height_m": 0.19785359491255872,
+    "lift_m": 0.23722959816722788,
+    "carry_m": 0.08,
+    "lower_m": 0.0440953028944008,
+    "carry_axis": "y",
+    "force_cap_n": 5.0,
+    "resting_pose": "lying flat, no rotation"
+  },
+  "weight_n": 1.2268926395179949,
+  "stop_reason": "dropped",
+  "released": true,
+  "lifted_m": 0.050640881061553955,
+  "moved_y_m": 0.09221109002828598,
+  "pre_lower_moved_y_m": 0.10347773879766464,
+  "rolled_after_release_m": -0.005983483046293259,
+  "landed_frame": 323,
+  "drift_after_landing_m": 0.007506534657364677,
+  "rest_speed_m_s": 0.00014632971115119956,
+  "settled_clearance_m": 0.0006979107856750488,
+  "max_finger_contacts": 46,
+  "held_until_open": true,
+  "minimum_transit_clearance_m": 0.04054725170135498,
+  "max_inverted_tetrahedra": 0,
+  "local_inversion": false,
+  "nonfinite": false,
+  "max_penetration_m": 3.62720456905663e-05,
+  "quality": {
+    "minimum_J_by_part": [
+      0.9038441777229309,
+      0.43523794412612915,
+      0.9704501628875732
+    ],
+    "inverted_tet_substeps_by_part": [
+      0,
+      0,
+      0
+    ],
+    "nonfinite_tet_substeps_by_part": [
+      0,
+      0,
+      0
+    ]
+  },
+  "steps": 477,
+  "success": true,
+  "peak_jaw_drive_n": [
+    5.0,
+    5.0
+  ]
+}

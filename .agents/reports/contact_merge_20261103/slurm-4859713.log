@@ -1,0 +1,68 @@
+{"rss_revision": "ac28ac30e69072257ac76c24d51fce3b026e677b", "newton_revision": "3d3f9e4c13fd0e60e7e53a9870946c0983d1d14c", "rss_import": "/nobackup/proj/disk/ehpc-dev-2026d08-170/personal/yiduo/contact-merge-20261103/robosimstudio/robosimstudio/__init__.py", "newton_import": "/nobackup/proj/disk/ehpc-dev-2026d08-170/personal/yiduo/contact-merge-20261103/newton/newton/__init__.py", "warp_version": "1.18.0", "python": "3.12.15 (main, Oct 21 2026, 17:46:20) [Clang 23.1.3 ]", "slurm_job_id": "4859713", "validation": "One 300-frame standalone pickup, X carry, open and settle episode", "command": "python -u outputs/contact_merge_20261103/validate_once.py"}
+{"geometry": {"hole_centre_local": [0.0033, 0.0874, 0.0002], "loop_reach_m": 0.02313200461977851, "pad_half_thickness_m": 0.003, "grip_squeeze_m": 0.006, "grip_z_m": 0.007, "hole_height_m": 0.19785359491255872, "lift_m": 0.24092959816722787, "carry_m": 0.08, "force_cap_n": 5.0, "resting_pose": "lying flat, no rotation"}}
+Warp 1.18.0 initialized:
+   CUDA Toolkit 13.4, Driver 13.0
+   Devices:
+     "cpu"      : "aarch64"
+     "cuda:0"   : "NVIDIA GH200 120GB" (95 GiB, sm_90, mempool enabled)
+   Kernel cache:
+     /nobackup/proj/disk/ehpc-dev-2026d08-170/personal/yiduo/newton/.cache/warp/1.18.0
+Module warp._src.coloring 811e0ea load on device 'cpu' took 19.40 ms  (cached)
+Module newton._src.utils.mesh 92b663b load on device 'cpu' took 27.50 ms  (cached)
+Module validate_and_correct_inertia_kernel_1ff2ac62 1ff2ac6 load on device 'cuda:0' took 41.41 ms  (cached)
+Module newton._src.geometry.bvh 0003cad load on device 'cuda:0' took 33.93 ms  (cached)
+Module newton._src.geometry.kernels 5bdbb1d load on device 'cuda:0' took 53.73 ms  (cached)
+Module newton._src.solvers.vbd.rigid_vbd_kernels 7f1383d load on device 'cpu' took 4936.59 ms  (compiled)
+Module newton._src.solvers.vbd.rigid_vbd_kernels 76a42af load on device 'cuda:0' took 11009.22 ms  (compiled)
+Module newton._src.solvers.solver d7b7ff4 load on device 'cuda:0' took 25.99 ms  (cached)
+Module create_eval_articulation_fk_tile__locals__eval_articulation_fk_tile_0be48094 68fd26a load on device 'cuda:0' took 59.41 ms  (cached)
+[rss] cuda:0 (asked for) · CUDA graphs off · renderer tiled (NVIDIA GH200 120GB (sm_90) has no RT cores)
+{"mass_kg": 0.12506550861549387, "weight_n": 1.2268926395179949, "start_centre_m": [0.47177398204803467, -0.0888085812330246, 0.7885492444038391]}
+Module parallel_gripper 84da0bd load on device 'cuda:0' took 891.62 ms  (compiled)
+Module newton._src.geometry.soft_contact_match 1538970 load on device 'cuda:0' took 202.02 ms  (compiled)
+Module newton._src.sim.collide f4f4dee load on device 'cuda:0' took 30.54 ms  (cached)
+Module newton._src.geometry.broad_phase_nxn 0c4afcd load on device 'cuda:0' took 27.36 ms  (cached)
+Module narrow_phase_primitive_write_contact_False_False_False 5f0fed3 load on device 'cuda:0' took 58.24 ms  (cached)
+Module narrow_phase_gjk_mpr_True_False_write_contact_support_map_lean_post_process_minkowski_only 961f72d load on device 'cuda:0' took 26.47 ms  (cached)
+Module newton._src.geometry.narrow_phase 1a1acac load on device 'cuda:0' took 39.88 ms  (cached)
+Module newton._src.geometry.contact_sort 896bb11 load on device 'cuda:0' took 36.04 ms  (cached)
+Module newton._src.geometry.contact_match a5624f9 load on device 'cuda:0' took 375.93 ms  (compiled)
+Module newton._src.geometry.self_contact_match c6db141 load on device 'cuda:0' took 354.76 ms  (compiled)
+Module newton._src.geometry.kernels 64fc9c0 load on device 'cuda:0' took 32.62 ms  (cached)
+Module newton._src.geometry.kernels 0af315c load on device 'cuda:0' took 43.60 ms  (cached)
+Module newton._src.solvers.xpbd.kernels 49a0574 load on device 'cuda:0' took 52.57 ms  (cached)
+Module newton._src.solvers.vbd.particle_vbd_kernels e0c6705 load on device 'cuda:0' took 5510.73 ms  (compiled)
+Module create_accumulate_body_body_contacts_per_body__locals__accumulate_body_body_contacts_per_body_94d724d6 5729c2b load on device 'cuda:0' took 50.11 ms  (cached)
+Module create_solve_rigid_body__locals__solve_rigid_body_f5a3e3ed f5a3e3e load on device 'cuda:0' took 33.57 ms  (cached)
+Module create_update_duals_body_body_contacts__locals__update_duals_body_body_contacts_b19bbc98 c387c66 load on device 'cuda:0' took 40.11 ms  (cached)
+Module robosimstudio_materials.chebyshev_acceleration 9f79578 load on device 'cuda:0' took 285.19 ms  (compiled)
+Module mesh_quality ea9f419 load on device 'cuda:0' took 24.17 ms  (cached)
+Module newton._src.sim.articulation 0ac6fce load on device 'cuda:0' took 48.95 ms  (cached)
+Module robosimstudio.core.readback 4427528 load on device 'cuda:0' took 15.82 ms  (cached)
+[sim] rendering with tiled, the colliders alone: NVIDIA GH200 120GB (sm_90) has no RT cores (ROBOSIMSTUDIO_RENDERER=rtx to override)
+Module newton._src.sensors.warp_raytrace.camera_utils 4ca4fe3 load on device 'cuda:0' took 44.43 ms  (cached)
+Module newton._src.sensors.warp_raytrace.render_context a6d3748 load on device 'cuda:0' took 19.70 ms  (cached)
+Module create_kernel__locals__render_megakernel_3586ca1e 98d53c4 load on device 'cuda:0' took 40.63 ms  (cached)
+Module robosimstudio.solvers.render.tiled a61c3f5 load on device 'cuda:0' took 24.21 ms  (cached)
+{"self_contact_pairs": 0, "self_contact_min_dist_m": null, "coarse_path_m": null, "frame": 1, "time_s": 0.03333333333333333, "body_centre_m": [0.47175589203834534, -0.08889199793338776, 0.7833759188652039], "minimum_z_m": 0.7503544688224792, "inverted_tetrahedra": 0, "finger_contacts": 0, "max_penetration_m": 0.00034553115256130695}
+{"self_contact_pairs": 0, "self_contact_min_dist_m": null, "coarse_path_m": null, "frame": 16, "time_s": 0.5333333333333333, "body_centre_m": [0.47214147448539734, -0.09080440551042557, 0.768843412399292], "minimum_z_m": 0.7504347562789917, "inverted_tetrahedra": 0, "finger_contacts": 5, "max_penetration_m": 0.0002652436960488558}
+{"self_contact_pairs": 0, "self_contact_min_dist_m": null, "coarse_path_m": null, "frame": 31, "time_s": 1.0333333333333334, "body_centre_m": [0.47215819358825684, -0.09083627909421921, 0.7688465714454651], "minimum_z_m": 0.7504364848136902, "inverted_tetrahedra": 0, "finger_contacts": 5, "max_penetration_m": 0.00026351516135036945}
+{"self_contact_pairs": 0, "self_contact_min_dist_m": null, "coarse_path_m": null, "frame": 46, "time_s": 1.5333333333333334, "body_centre_m": [0.47213616967201233, -0.09086476266384125, 0.7688500881195068], "minimum_z_m": 0.750436544418335, "inverted_tetrahedra": 0, "finger_contacts": 0, "max_penetration_m": 0.00026345555670559406}
+{"self_contact_pairs": 0, "self_contact_min_dist_m": null, "coarse_path_m": null, "frame": 61, "time_s": 2.033333333333333, "body_centre_m": [0.4721493124961853, -0.09086417406797409, 0.7688478827476501], "minimum_z_m": 0.7504366636276245, "inverted_tetrahedra": 0, "finger_contacts": 0, "max_penetration_m": 0.0002633363474160433}
+{"self_contact_pairs": 0, "self_contact_min_dist_m": null, "coarse_path_m": null, "frame": 76, "time_s": 2.533333333333333, "body_centre_m": [0.4721490740776062, -0.09086409211158752, 0.7688469886779785], "minimum_z_m": 0.7504367232322693, "inverted_tetrahedra": 0, "finger_contacts": 0, "max_penetration_m": 0.0002632767427712679}
+{"self_contact_pairs": 0, "self_contact_min_dist_m": null, "coarse_path_m": null, "frame": 91, "time_s": 3.033333333333333, "body_centre_m": [0.47214895486831665, -0.09086373448371887, 0.7688463926315308], "minimum_z_m": 0.7504366040229797, "inverted_tetrahedra": 0, "finger_contacts": 0, "max_penetration_m": 0.00026339595206081867}
+{"self_contact_pairs": 0, "self_contact_min_dist_m": null, "coarse_path_m": null, "frame": 106, "time_s": 3.533333333333333, "body_centre_m": [0.4721491038799286, -0.09086356312036514, 0.7688456177711487], "minimum_z_m": 0.7504366040229797, "inverted_tetrahedra": 0, "finger_contacts": 0, "max_penetration_m": 0.00026339595206081867}
+{"self_contact_pairs": 0, "self_contact_min_dist_m": null, "coarse_path_m": null, "frame": 121, "time_s": 4.033333333333333, "body_centre_m": [0.4721488952636719, -0.09086333215236664, 0.7688454389572144], "minimum_z_m": 0.7504366636276245, "inverted_tetrahedra": 0, "finger_contacts": 0, "max_penetration_m": 0.0002633363474160433}
+{"self_contact_pairs": 0, "self_contact_min_dist_m": null, "coarse_path_m": null, "frame": 136, "time_s": 4.533333333333333, "body_centre_m": [0.4721491038799286, -0.09086307883262634, 0.7688449621200562], "minimum_z_m": 0.7504366040229797, "inverted_tetrahedra": 0, "finger_contacts": 0, "max_penetration_m": 0.00026339595206081867}
+{"self_contact_pairs": 0, "self_contact_min_dist_m": null, "coarse_path_m": null, "frame": 151, "time_s": 5.033333333333333, "body_centre_m": [0.4721488058567047, -0.09086303412914276, 0.7688446044921875], "minimum_z_m": 0.7504366040229797, "inverted_tetrahedra": 0, "finger_contacts": 0, "max_penetration_m": 0.00026339595206081867}
+{"self_contact_pairs": 0, "self_contact_min_dist_m": null, "coarse_path_m": null, "frame": 166, "time_s": 5.533333333333333, "body_centre_m": [0.4721488952636719, -0.09086298942565918, 0.7688446640968323], "minimum_z_m": 0.7504366636276245, "inverted_tetrahedra": 0, "finger_contacts": 0, "max_penetration_m": 0.0002633363474160433}
+{"self_contact_pairs": 0, "self_contact_min_dist_m": null, "coarse_path_m": null, "frame": 181, "time_s": 6.033333333333333, "body_centre_m": [0.4721488952636719, -0.09086290746927261, 0.7688446044921875], "minimum_z_m": 0.7504364848136902, "inverted_tetrahedra": 0, "finger_contacts": 0, "max_penetration_m": 0.00026351516135036945}
+{"self_contact_pairs": 0, "self_contact_min_dist_m": null, "coarse_path_m": null, "frame": 196, "time_s": 6.533333333333333, "body_centre_m": [0.4721490144729614, -0.09086281806230545, 0.7688446640968323], "minimum_z_m": 0.7504366040229797, "inverted_tetrahedra": 0, "finger_contacts": 0, "max_penetration_m": 0.00026339595206081867}
+{"self_contact_pairs": 0, "self_contact_min_dist_m": null, "coarse_path_m": null, "frame": 211, "time_s": 7.033333333333333, "body_centre_m": [0.47214892506599426, -0.09086277335882187, 0.7688446044921875], "minimum_z_m": 0.750436544418335, "inverted_tetrahedra": 0, "finger_contacts": 0, "max_penetration_m": 0.00026345555670559406}
+{"self_contact_pairs": 0, "self_contact_min_dist_m": null, "coarse_path_m": null, "frame": 226, "time_s": 7.533333333333333, "body_centre_m": [0.47214871644973755, -0.09086289256811142, 0.7688446044921875], "minimum_z_m": 0.7504366040229797, "inverted_tetrahedra": 0, "finger_contacts": 0, "max_penetration_m": 0.00026339595206081867}
+{"self_contact_pairs": 0, "self_contact_min_dist_m": null, "coarse_path_m": null, "frame": 241, "time_s": 8.033333333333333, "body_centre_m": [0.472148597240448, -0.09086281806230545, 0.7688446044921875], "minimum_z_m": 0.750436544418335, "inverted_tetrahedra": 0, "finger_contacts": 0, "max_penetration_m": 0.00026345555670559406}
+{"self_contact_pairs": 0, "self_contact_min_dist_m": null, "coarse_path_m": null, "frame": 256, "time_s": 8.533333333333333, "body_centre_m": [0.4721491038799286, -0.09086284786462784, 0.768844485282898], "minimum_z_m": 0.7504366040229797, "inverted_tetrahedra": 0, "finger_contacts": 0, "max_penetration_m": 0.00026339595206081867}
+{"self_contact_pairs": 0, "self_contact_min_dist_m": null, "coarse_path_m": null, "frame": 271, "time_s": 9.033333333333333, "body_centre_m": [0.4721488058567047, -0.09086277335882187, 0.7688445448875427], "minimum_z_m": 0.750436544418335, "inverted_tetrahedra": 0, "finger_contacts": 0, "max_penetration_m": 0.00026345555670559406}
+{"self_contact_pairs": 0, "self_contact_min_dist_m": null, "coarse_path_m": null, "frame": 286, "time_s": 9.533333333333333, "body_centre_m": [0.47214898467063904, -0.09086277335882187, 0.7688445448875427], "minimum_z_m": 0.7504366040229797, "inverted_tetrahedra": 0, "finger_contacts": 0, "max_penetration_m": 0.00026339595206081867}
+{"self_contact_pairs": 0, "self_contact_min_dist_m": null, "coarse_path_m": null, "frame": 300, "time_s": 10.0, "body_centre_m": [0.4721488654613495, -0.09086279571056366, 0.7688446044921875], "minimum_z_m": 0.7504366040229797, "inverted_tetrahedra": 0, "finger_contacts": 0, "max_penetration_m": 0.00026339595206081867}
+{"weight_n": 1.2268926395179949, "stop_reason": "not-lifted", "released": true, "lifted_m": 8.225440979003906e-05, "moved_x_m": -1.1920928955078125e-07, "rolled_after_release_m": -5.185604095458984e-06, "landed_frame": 44, "drift_after_landing_m": 1.8576967550596842e-05, "rest_speed_m_s": 5.659009025024865e-06, "settled_clearance_m": 0.00043642520904541016, "max_finger_contacts": 5, "held_until_open": false, "minimum_transit_clearance_m": 0.00043648481369018555, "max_inverted_tetrahedra": 0, "local_inversion": false, "nonfinite": false, "max_penetration_m": 0.00034553115256130695, "steps": 300, "checks": {"complete_cycle": true, "held_until_open": false, "transit_clearance": false, "carry_distance": false, "released": true, "table_support": true, "settled_speed": true, "mesh_quality": true, "recorded_penetration": true, "jaw_force_cap": true}, "success": false, "peak_jaw_drive_n": [5.0, 5.0], "failed_checks": ["held_until_open", "transit_clearance", "carry_distance"], "self_contact": {"enabled": true, "margin_m": 0.002, "rest_exclusion_m": 0.006, "pair_buffer": "solver.contacts"}, "contact_matching": "sticky", "video_error": null, "mean_frame_ms": 511.1845883833333, "timing_s": {"setup": 23.190760747000013, "stepping_with_quality_hook": 151.25115056200138, "diagnostics_and_state_readback": 0.8570437499995478, "render_and_video_append": 0.9100205400022787}}

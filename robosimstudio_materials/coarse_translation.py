@@ -114,6 +114,7 @@ def _contact_block(
     residual: wp.array[wp.vec3],
     hessian: wp.array[wp.mat33],
     invalid_world: wp.array[int],
+    anchored: bool,
 ):
     c = wp.tid()
     if c >= wp.min(count[0], capacity) or not _soft_contact_force_enabled(c, contact_filter):
@@ -152,6 +153,7 @@ def _contact_block(
             margin,
             dt,
             use_log_barrier,
+            anchored,
         )
     else:
         weights = barycentric[c]
@@ -181,12 +183,13 @@ def _contact_block(
             body_com,
             shape,
             body_pos,
-            body_velocity,
-            normal,
+            body_velocity,            normal,
             margin,
             dt,
             use_log_barrier,
+            anchored,
         )
+
     # Whole-object translation moves every corner together. Include this
     # contact Hessian ONCE, with (sum bary)^2, not sum of squared barycentrics.
     wp.atomic_add(residual, w, weight_sum * f)
@@ -397,6 +400,10 @@ class _TranslationBlock:
                     self.residual,
                     self.hessian,
                     self.invalid_world,
+                    # Same friction model as the particle iteration it follows:
+                    # with sticky matching the slip is the drift from the kept
+                    # contact point, not this step's motion.
+                    bool(contacts._soft_contact_points_persist),
                 ],
                 device=model.device,
             )

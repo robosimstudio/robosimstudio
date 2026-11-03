@@ -1,0 +1,16 @@
+{
+  "hole_centre_local": [
+    0.0033,
+    0.0874,
+    0.0002
+  ],
+  "loop_reach_m": 0.02313200461977851,
+  "pad_half_thickness_m": 0.003,
+  "grip_squeeze_m": 0.006,
+  "grip_z_m": 0.007,
+  "hole_height_m": 0.19785359491255872,
+  "lift_m": 0.24092959816722787,
+  "carry_m": 0.08,
+  "force_cap_n": 5.0,
+  "resting_pose": "lying flat, no rotation"
+}

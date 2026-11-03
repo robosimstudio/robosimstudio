@@ -26,7 +26,7 @@ from pathlib import Path
 import numpy as np
 from loop_geometry import ring_geometry, smooth
 from mesh_quality import MeshQuality, penetration
-from parallel_gripper import GRASP_LIMIT_N, ParallelGripperSpec, vbd_island
+from parallel_gripper import GRASP_LIMIT_N, ParallelGripperSpec
 
 import robosimstudio as rss
 from robosimstudio_materials.heterogeneous import HeterogeneousSoftSpec, load_labelled_tets
@@ -88,11 +88,12 @@ SOURCE_HASHES = {
 
 def build_scene(
     *,
-    coarse: bool = False,
+    coarse: bool,
+    mu: float | None = None,
+    force_limit: float = GRASP_LIMIT_N,
+    squeeze: float = GRIP_SQUEEZE,
     self_contact: bool = True,
-    claw: str = "vbd",
-    coupler: str = "admm",
-    coupler_iterations: int | None = None,
+    contact_matching: str = "sticky",
 ):
     for relative, expected in SOURCE_HASHES.items():
         actual = hashlib.sha256((ASSET / relative).read_bytes()).hexdigest()
@@ -124,18 +125,18 @@ def build_scene(
         "hole_centre_local": np.round(hole, 4).tolist(),
         "loop_reach_m": ring["side_reach"],
         "pad_half_thickness_m": PAD_HALF_THICKNESS,
-        "grip_squeeze_m": GRIP_SQUEEZE,
+        "grip_squeeze_m": squeeze,
         "grip_z_m": grip_z,
         "hole_height_m": hole_height,
         "lift_m": lift,
         "carry_m": TARGET_X - SOURCE_X,
-        "force_cap_n": GRASP_LIMIT_N,
+        "force_cap_n": force_limit,
         "resting_pose": "lying flat, no rotation",
     }
     print(json.dumps({"geometry": geometry}), flush=True)
 
     common = {
-        "iterations": 80,
+        "iterations": 12,
         "particle_enable_self_contact": self_contact,
         "particle_self_contact_radius": 0.002,
         "particle_self_contact_margin": 0.002,
@@ -155,40 +156,25 @@ def build_scene(
             **common,
         )
         if coarse
-        else rss.backend(
-            "robosimstudio_materials.chebyshev_acceleration.SolverVBDChebyshev",
-            chebyshev_rho=0.9,
-            chebyshev_collision_mask=True,
-            **common,
-        )
+        else rss.backend("vbd", **common)
     )
-    # The claw on MuJoCo, the FEM on VBD: its pad contacts are MuJoCo's, not
-    # VBD's penalty contacts, and the two islands meet through the coupler.
-    claw_backend = rss.backend(claw)
-    # The claw shares VBD's island by default; only a split island needs a coupler.
-    split = claw != "vbd"
     physics = rss.ArrangementSpec(
         control_hz=CONTROL_HZ,
         substeps=SUBSTEPS,
         use_cuda_graph=False,
-        backends=(("soft", vbd), ("rigid", claw_backend if split else vbd), ("*", vbd)),
-        **(
-            {}
-            if not split
-            else {
-                "coupling": rss.coupler(
-                    coupler,
-                    mode="staggered",
-                    **({} if coupler_iterations is None else {"iterations": int(coupler_iterations)}),
-                )
-            }
-        ),
+        backends=(("soft", vbd), ("rigid", vbd), ("*", vbd)),
         collision=rss.CollisionSpec(
             soft_contact_margin=CONTACT_GAP,
             full_surface_contact=False,
             contact_ke=CONTACT_KE,
             contact_kd=25.0,
             broad_phase="nxn",
+            # VBD measures body-particle friction by the motion inside each
+            # collision pass, which creeps under any static tangential load: the
+            # pad pinch slides the loop out however high the friction is. Sticky
+            # matching keeps each pad contact's points across passes, and friction
+            # then acts on the drift from them.
+            contact_matching=contact_matching,
         ),
     )
     scene = rss.Scene(cell="bench_075", physics=physics, name="clawhauser_pick_drop")
@@ -208,7 +194,10 @@ def build_scene(
             name="pick_drop_gripper",
             center=grip,
             half_gap=ring["side_reach"] + PAD_HALF_THICKNESS + 0.012,
-            closed_half_gap=ring["side_reach"] + PAD_HALF_THICKNESS - GRIP_SQUEEZE,
+            # The close travels past the loop's measured width by `squeeze`; how
+            # hard it presses is the drive's own cap, not this travel.
+            closed_half_gap=ring["side_reach"] + PAD_HALF_THICKNESS - squeeze,
+            force_limit=force_limit,
             pad_half_thickness=PAD_HALF_THICKNESS,
             pad_half_width=PAD_HALF_WIDTH,
             duration=DURATION,
@@ -220,22 +209,26 @@ def build_scene(
         name="overview",
         width=960,
         height=540,
-        # Framed for the lying start: the toy rests toward the camera, so the eye
-        # is pulled back and the view is aimed between the toy's rest and the place
-        # it is carried to.
-        eye=(0.835, -0.89, 1.476),
-        look_at=(0.51, -0.05, 0.95),
+        # Side on and level with the loop: the pads close across the frame and the
+        # lift is vertical, so the grasp reads as a pinch on the object's side
+        # rather than as a plan view of the bench.
+        eye=(0.02, -0.29, 1.05),
+        look_at=(0.473, -0.01, 0.785),
         fov_y=45.0,
     )
     camera = scene.add(camera_spec)
     sim = scene.build(device="cuda:0", warmup=False, use_cuda_graph=False)
     entity = obj.entity
-    if not type(vbd_island(sim.pipeline.program.solver)).__name__.startswith("SolverVBD"):
+    if not type(sim.pipeline.program.solver).__name__.startswith("SolverVBD"):
         raise RuntimeError(f"expected a VBD solver, got {type(sim.pipeline.program.solver).__name__}")
     if sim.model.tet_count != len(tets) or len(entity.tet_part_labels) != len(tets):
         raise RuntimeError("RSS lost Clawhauser tetrahedra or part labels")
     if sim.model.attachment_particle_body_count:
         raise RuntimeError("the contact grasp scene must not contain particle attachments")
+    if mu is not None:
+        # Newton VBD exposes one global soft-contact friction coefficient; this is
+        # it, and here it is the knob the sweep turns.
+        sim.model.soft_contact_mu = float(mu)
     model_tets = sim.model.tet_indices.numpy()[entity.tet_range[0] : entity.tet_range[1]]
     if not np.array_equal(model_tets - entity.particles[0], tets):
         raise RuntimeError("Newton changed the source tetrahedron order")
@@ -359,24 +352,26 @@ def run(
     *,
     steps: int,
     render_every: int = 0,
-    coarse: bool = False,
+    coarse: bool = True,
+    mu: float | None = None,
+    force_limit: float = GRASP_LIMIT_N,
+    squeeze: float = GRIP_SQUEEZE,
     enable_self_contact: bool = True,
-    claw: str = "vbd",
-    coupler: str = "admm",
-    coupler_iterations: int | None = None,
+    contact_matching: str = "sticky",
 ) -> dict:
     out.mkdir(parents=True, exist_ok=True)
     sim, obj, jaw, camera, geometry = build_scene(
         coarse=coarse,
+        mu=mu,
+        force_limit=force_limit,
+        squeeze=squeeze,
         self_contact=enable_self_contact,
-        claw=claw,
-        coupler=coupler,
-        coupler_iterations=coupler_iterations,
+        contact_matching=contact_matching
     )
     entity = obj.entity
     particles = entity.particles
     tets = entity.source_tets
-    solver = vbd_island(sim.pipeline.program.solver)
+    solver = sim.pipeline.program.solver
     contacts = sim.pipeline.contacts
     # Self-contact pairs are written by whichever detector the solver built. This
     # scene drives detection from RSS, so the solver owns a tri-mesh detector and
@@ -497,6 +492,7 @@ def run(
     )
     result = judge(geometry, diagnostics, quality, entity, steps)
     result["self_contact"] = self_contact
+    result["contact_matching"] = contact_matching
     result["video_error"] = video_error
     result["mean_frame_ms"] = 1000.0 * (time.perf_counter() - started) / max(1, len(diagnostics))
     (out / "result.json").write_text(json.dumps(result, indent=2) + "\n")
@@ -509,23 +505,40 @@ def main() -> None:
     parser.add_argument("--out", type=Path, default=OUTPUT / "run")
     parser.add_argument("--steps", type=int, default=round(DURATION * CONTROL_HZ))
     parser.add_argument("--render-every", type=int, default=0)
-    parser.add_argument("--coarse", action="store_true", help="run the coarse common-translation solve")
-    parser.add_argument("--claw", default="vbd", help="backend for the claw: vbd shares the FEM's island")
-    parser.add_argument("--coupler", default="admm", help="island coupler: admm, proxy or one_way")
-    parser.add_argument("--coupler-iterations", type=int, default=None, help="ADMM iterations per substep")
+    parser.add_argument("--no-coarse", action="store_true", help="stock VBD, no common-translation solve")
+    parser.add_argument("--mu", type=float, default=None, help="global soft-contact friction coefficient")
+    parser.add_argument(
+        "--force-limit",
+        type=float,
+        default=GRASP_LIMIT_N,
+        help="the jaws' closing budget [N]; the drive never exceeds it",
+    )
+    parser.add_argument(
+        "--squeeze",
+        type=float,
+        default=GRIP_SQUEEZE,
+        help="how far past the loop's measured width the closed pads aim [m]",
+    )
     parser.add_argument(
         "--no-self-contact", dest="self_contact", action="store_false", help="turn the toy's self-contact off"
+    )
+    parser.add_argument(
+        "--contact-matching",
+        choices=("sticky", "disabled"),
+        default="sticky",
+        help="sticky keeps the pads' contact points across passes; disabled is the creeping control",
     )
     args = parser.parse_args()
     run(
         args.out,
         steps=args.steps,
         render_every=args.render_every,
-        coarse=args.coarse,
+        coarse=not args.no_coarse,
+        mu=args.mu,
+        force_limit=args.force_limit,
+        squeeze=args.squeeze,
         enable_self_contact=args.self_contact,
-        claw=args.claw,
-        coupler=args.coupler,
-        coupler_iterations=args.coupler_iterations,
+        contact_matching=args.contact_matching,
     )
 
 

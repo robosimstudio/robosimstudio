@@ -1,0 +1,250 @@
+{
+  "candidate_first_10_s": {
+    "frames": 300,
+    "duration_s": 10.0,
+    "first_finger_contact": {
+      "frame": 12,
+      "time_s": 0.4
+    },
+    "last_finger_contact": {
+      "frame": 43,
+      "time_s": 1.4333333333333333
+    },
+    "peak_whole_object_clearance_m": 0.0004367232322692871,
+    "minimum_transit_clearance_m": 0.00043648481369018555,
+    "held_until_open": false,
+    "carry_phase_moved_x_m": -1.1920928955078125e-07,
+    "final_half_second_contacts_max": 0,
+    "final_half_second_clearance_range_m": [
+      0.00043642520904541016,
+      0.0004366636276245117
+    ],
+    "final_half_second_peak_centroid_speed_m_s": 5.659009025024864e-06,
+    "max_frame_inverted_tets": 0,
+    "peak_self_contact_pairs": 0,
+    "checks_from_existing_diagnostics": {
+      "held_until_open": false,
+      "transit_clearance": false,
+      "carry_distance": false,
+      "released": true,
+      "table_support": true,
+      "settled_speed": true
+    }
+  },
+  "hanson_first_10_s": {
+    "frames": 300,
+    "duration_s": 10.0,
+    "first_finger_contact": {
+      "frame": 14,
+      "time_s": 0.4666666666666667
+    },
+    "last_finger_contact": {
+      "frame": 76,
+      "time_s": 2.533333333333333
+    },
+    "peak_whole_object_clearance_m": 0.14652985334396362,
+    "minimum_transit_clearance_m": 0.0006874203681945801,
+    "held_until_open": false,
+    "carry_phase_moved_x_m": -0.00020292401313781738,
+    "final_half_second_contacts_max": 0,
+    "final_half_second_clearance_range_m": [
+      0.0006901025772094727,
+      0.0006939172744750977
+    ],
+    "final_half_second_peak_centroid_speed_m_s": 0.007450367525526002,
+    "max_frame_inverted_tets": 0,
+    "peak_self_contact_pairs": 46,
+    "checks_from_existing_diagnostics": {
+      "held_until_open": false,
+      "transit_clearance": false,
+      "carry_distance": false,
+      "released": true,
+      "table_support": true,
+      "settled_speed": false
+    }
+  },
+  "hanson_full_20_s": {
+    "frames": 600,
+    "duration_s": 20.0,
+    "first_finger_contact": {
+      "frame": 14,
+      "time_s": 0.4666666666666667
+    },
+    "last_finger_contact": {
+      "frame": 76,
+      "time_s": 2.533333333333333
+    },
+    "peak_whole_object_clearance_m": 0.14652985334396362,
+    "minimum_transit_clearance_m": 0.0006874203681945801,
+    "held_until_open": false,
+    "carry_phase_moved_x_m": -0.00020292401313781738,
+    "final_half_second_contacts_max": 0,
+    "final_half_second_clearance_range_m": [
+      0.0006876587867736816,
+      0.0006943345069885254
+    ],
+    "final_half_second_peak_centroid_speed_m_s": 0.008083679024486805,
+    "max_frame_inverted_tets": 0,
+    "peak_self_contact_pairs": 46,
+    "checks_from_existing_diagnostics": {
+      "held_until_open": false,
+      "transit_clearance": false,
+      "carry_distance": false,
+      "released": true,
+      "table_support": true,
+      "settled_speed": false
+    }
+  },
+  "candidate_native_result": {
+    "geometry": {
+      "hole_centre_local": [
+        0.0033,
+        0.0874,
+        0.0002
+      ],
+      "loop_reach_m": 0.02313200461977851,
+      "pad_half_thickness_m": 0.003,
+      "grip_squeeze_m": 0.006,
+      "grip_z_m": 0.007,
+      "hole_height_m": 0.19785359491255872,
+      "lift_m": 0.24092959816722787,
+      "carry_m": 0.08,
+      "force_cap_n": 5.0,
+      "resting_pose": "lying flat, no rotation"
+    },
+    "weight_n": 1.2268926395179949,
+    "stop_reason": "not-lifted",
+    "released": true,
+    "lifted_m": 8.225440979003906e-05,
+    "moved_x_m": -1.1920928955078125e-07,
+    "rolled_after_release_m": -5.185604095458984e-06,
+    "landed_frame": 44,
+    "drift_after_landing_m": 1.8576967550596842e-05,
+    "rest_speed_m_s": 5.659009025024865e-06,
+    "settled_clearance_m": 0.00043642520904541016,
+    "max_finger_contacts": 5,
+    "held_until_open": false,
+    "minimum_transit_clearance_m": 0.00043648481369018555,
+    "max_inverted_tetrahedra": 0,
+    "local_inversion": false,
+    "nonfinite": false,
+    "max_penetration_m": 0.00034553115256130695,
+    "quality": {
+      "minimum_J_by_part": [
+        0.782354474067688,
+        0.5466853380203247,
+        0.8716955780982971
+      ],
+      "inverted_tet_substeps_by_part": [
+        0,
+        0,
+        0
+      ],
+      "nonfinite_tet_substeps_by_part": [
+        0,
+        0,
+        0
+      ]
+    },
+    "steps": 300,
+    "checks": {
+      "complete_cycle": true,
+      "held_until_open": false,
+      "transit_clearance": false,
+      "carry_distance": false,
+      "released": true,
+      "table_support": true,
+      "settled_speed": true,
+      "mesh_quality": true,
+      "recorded_penetration": true,
+      "jaw_force_cap": true
+    },
+    "success": false,
+    "peak_jaw_drive_n": [
+      5.0,
+      5.0
+    ],
+    "failed_checks": [
+      "held_until_open",
+      "transit_clearance",
+      "carry_distance"
+    ],
+    "self_contact": {
+      "enabled": true,
+      "margin_m": 0.002,
+      "rest_exclusion_m": 0.006,
+      "pair_buffer": "solver.contacts"
+    },
+    "contact_matching": "sticky",
+    "video_error": null,
+    "mean_frame_ms": 511.1845883833333,
+    "timing_s": {
+      "setup": 23.190760747000013,
+      "stepping_with_quality_hook": 151.25115056200138,
+      "diagnostics_and_state_readback": 0.8570437499995478,
+      "render_and_video_append": 0.9100205400022787
+    },
+    "whole_process_seconds": 194.24627843099984
+  },
+  "hanson_native_result": {
+    "geometry": {
+      "hole_centre_local": [
+        0.0033,
+        0.0874,
+        0.0002
+      ],
+      "loop_reach_m": 0.02313200461977851,
+      "pad_half_thickness_m": 0.003,
+      "grip_squeeze_m": 0.006,
+      "grip_z_m": 0.007,
+      "hole_height_m": 0.19785359491255872,
+      "lift_m": 0.24092959816722787,
+      "carry_m": 0.08,
+      "force_cap_n": 5.0,
+      "resting_pose": "lying flat, no rotation"
+    },
+    "weight_n": 1.2268926395179949,
+    "stop_reason": "dropped",
+    "released": true,
+    "lifted_m": 0.14584219455718994,
+    "moved_x_m": 0.0003896951675415039,
+    "rolled_after_release_m": -0.0030643045902252197,
+    "landed_frame": 82,
+    "drift_after_landing_m": 0.03216489124983368,
+    "rest_speed_m_s": 0.005892413835606889,
+    "settled_clearance_m": 0.000687718391418457,
+    "max_finger_contacts": 4,
+    "max_inverted_tetrahedra": 0,
+    "local_inversion": false,
+    "max_penetration_m": 3.5885022953152657e-05,
+    "quality": {
+      "minimum_J_by_part": [
+        0.9585262537002563,
+        0.0966789647936821,
+        0.5051372647285461
+      ],
+      "inverted_tet_substeps_by_part": [
+        0,
+        0,
+        0
+      ],
+      "nonfinite_tet_substeps_by_part": [
+        0,
+        0,
+        0
+      ]
+    },
+    "steps": 600,
+    "success": false,
+    "self_contact": {
+      "enabled": true,
+      "margin_m": 0.002,
+      "rest_exclusion_m": 0.006,
+      "pair_buffer": "solver.detector"
+    },
+    "contact_matching": "sticky",
+    "video_error": null,
+    "mean_frame_ms": 748.0725182366663
+  },
+  "limits": "Postprocessing existing recordings only. No new simulation or score changes. Hanson native result includes whole-20s substep quality and maximum recorded penetration, but no saved peak jaw effort. Bundle comparison cannot isolate an individual causal change."
+}
