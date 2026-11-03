@@ -220,7 +220,7 @@ parallel hand by default; `--claw claw` runs the scripted claw described above,
 which stays as the reference the arm is measured against. `arm_gripper.py` is
 the shared module: the MJCF asset, the embodiment, the hand's registry entry, the
 route/IK planner and the build-time checks. The grasp's numbers do not change --
-a 10 N closing clamp, the pads commanded 16 mm past the loop's measured
+a 20 N closing clamp, the pads commanded 16 mm past the loop's measured
 half-width, and the pipeline's global `mu`, 8.0 by default on the stock pads --
 and neither does the task: each
 scene states a tool-centre path and a pad-face gap, the arm's IK turns it into
@@ -255,18 +255,18 @@ read through it returns `None`: the self-contact pair buffers and the coarse
 solve's path reported nothing for that reason. Each scene unwraps it first
 (`arm_gripper.vbd_solver`).
 
-**The 10 N limit is the actuator's.** The MJCF declares
+**The 20 N limit is the actuator's.** The MJCF declares
 `actuatorfrcrange="-5 5"` on each finger joint; the hand's `ActuationSpec` raises
-it to 10 N, restates the same number as `effort_limit`, and `check_arm` asserts
+it to 20 N, restates the same number as `effort_limit`, and `check_arm` asserts
 the built model carries it on both finger DOFs before the first step. What the
 scenes report as `peak_force_n` is the pads' measured squeeze -- the component of
 their contact force along the closing axis -- because the raw vector also carries
-friction: on the pick-and-drop's carry the two pads read `-10.1 N` and `+10.1 N`
-along the jaws' axis with their total loads at 11.1-11.8 N. The total is reported
-beside it as `peak_pad_force_n`. The gate allows it half again, which is the paper
-fold's own bound for the same stack: a 10 N `effort_limit` measured 9.8 N
-holding, 13.5 N pressing and never over 15 N at any step. Measured here, the
-rod's close spiked to 14.6 N as the pads landed and settled at 10.1 / 10.2 N.
+friction. Ten was the claw's clamp and the paper fold's; on this loop it stalled
+the pads 5.6 mm into an 8.3 mm cord, which crept out (1.96x ring stretch, lost at
+frame 61 of the lift). At 20 the pads read 16-21 N through the lift and the toy
+leaves the bench. The gate allows the cap half again -- the paper fold's own bound
+for the same stack: a 10 N `effort_limit` measured 9.8 N holding, 13.5 N pressing
+and never over 15 N at any step.
 
 **The arm starts where its route starts.** The claw begins at its grasp pose;
 the arm's home keyframe is 340 mm above it, so a run that let the phases play out

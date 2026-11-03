@@ -21,8 +21,8 @@ drive's own clamp rather than whatever closing gap the loop's compliance leaves.
 
 Two things this scene is built to show. The rod and its post are rigid and never
 move, so nothing is scripted once the jaws open. And every jaw number is bounded:
-the claw's two padded fingers slide under a 10 N budget; the arm's hand is an
-actuator whose force range is the same 10 N, so its ``peak_force_n`` is the force
+the claw's two padded fingers slide under a 20 N budget; the arm's hand is an
+actuator whose force range is the same 20 N, so its ``peak_force_n`` is the force
 the pads could feel rather than a command. ``peak_torque_nm`` is the claw's, and
 absent on the arm.
 
@@ -58,7 +58,7 @@ import newton
 import numpy as np
 from loop_geometry import ring_geometry, smooth
 from mesh_quality import MeshQuality, penetration
-from parallel_gripper import GRASP_LIMIT_N, ParallelGripperSpec
+from parallel_gripper import ParallelGripperSpec
 
 import robosimstudio as rss
 from robosimstudio_materials.heterogeneous import HeterogeneousSoftSpec, load_labelled_tets
@@ -198,7 +198,7 @@ which is round where they meet it, slides straight back out of the pinch on the
 first lifted step: five finger contacts through the close, none from the lift
 on, and the toy never left the bench, in three identical runs. At 6 mm the drive
 sits at its clamp and the grasp holds through lift, thread and seat -- the
-squeeze is a bounded 10 N, which is what that clamp is for.
+squeeze is a bounded 20 N, which is what that clamp is for.
 """
 # The seat is the slow one on purpose. Its descent is what brings the loop's
 # hole down onto the rod, and the catch is an impact: the guided ramp runs at a
@@ -238,7 +238,7 @@ def build_scene(
     coarse: bool,
     rod_radius: float = ROD_RADIUS,
     mu: float | None = 8.0,
-    force_limit: float = GRASP_LIMIT_N,
+    force_limit: float = arm_gripper.GRASP_LIMIT_N,
     squeeze: float = GRIP_SQUEEZE,
     self_contact: bool = True,
     claw: str = "arm",
@@ -344,7 +344,7 @@ def build_scene(
     # The arm is an articulated robot and resolves to MuJoCo, so it is its own
     # island; the toy keeps VBD. `one_way` with `slide_feedback` is what carries
     # the grip: the finger stops where the loop pushes back with its actuator's
-    # force, so the 10 N ceiling is the grip. Sticky matching is the scene's, and
+    # force, so the 20 N ceiling is the grip. Sticky matching is the scene's, and
     # the coupler forwards it into its own collision pipeline.
     split = claw != "claw"
     physics = rss.ArrangementSpec(
@@ -397,7 +397,7 @@ def build_scene(
                 name="rod_loop_gripper",
                 # The loop's widest point, which is the hole's own centre height: the
                 # pads' faces come to rest on that width, and the squeeze is the aim
-                # past it that the jaw drive clamps at 10 N. The pose is in the
+                # past it that the jaw drive clamps at 20 N. The pose is in the
                 # work-surface frame, like the statics above and every other entity's
                 # -- an absolute height here would be lifted by the frame twice.
                 center=(SOURCE_X + float(hole[0]), -GRIP_TO_BODY, grip_z),
@@ -617,7 +617,7 @@ def run(
     coarse: bool = False,
     rod_radius: float = ROD_RADIUS,
     mu: float | None = 8.0,
-    force_limit: float = GRASP_LIMIT_N,
+    force_limit: float = arm_gripper.GRASP_LIMIT_N,
     squeeze: float = GRIP_SQUEEZE,
     enable_self_contact: bool = True,
     claw: str = "arm",
@@ -935,7 +935,9 @@ def main() -> None:
     parser.add_argument("--coarse", dest="coarse", action="store_true", help="run the coarse common-translation solve")
     parser.add_argument("--rod-radius", type=float, default=ROD_RADIUS, help="rod radius [m]")
     parser.add_argument("--mu", type=float, default=8.0, help="global soft-contact friction coefficient")
-    parser.add_argument("--force-limit", type=float, default=GRASP_LIMIT_N, help="the jaws' closing budget [N]")
+    parser.add_argument(
+        "--force-limit", type=float, default=arm_gripper.GRASP_LIMIT_N, help="the jaws' closing budget [N]"
+    )
     parser.add_argument("--squeeze", type=float, default=GRIP_SQUEEZE, help="close travel past the loop [m]")
     parser.add_argument(
         "--no-self-contact", dest="self_contact", action="store_false", help="turn the toy's self-contact off"

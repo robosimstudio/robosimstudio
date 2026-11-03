@@ -5,7 +5,7 @@ The claw these scenes used to carry was a mechanism on a kinematic guide: a
 level carrier and two prismatic jaws, prescribed along a path. The arm replaces
 both halves of that -- it reaches, its own fingers close on the loop, and the toy
 hangs from the pads -- while the grasp's numbers stay the ones the claw was
-measured at: a 10 N closing clamp, a close commanded 16 mm past the loop's
+measured at: a 20 N closing clamp, a close commanded 16 mm past the loop's
 measured half-width, and the pipeline's global soft-contact ``mu``.
 
 **Two islands, joined one way.** The arm is an ``articulated`` robot and resolves
@@ -24,16 +24,16 @@ reads that force back for ``peak_force_n`` without changing the solve.
 toy has no reaction worth solving, and the two-way split is what ``93133b4``
 tried for the claw and dropped at the merge.
 
-**The 10 N limit is the model's.** The MJCF declares
-``actuatorfrcrange="-5 5"`` on each finger joint. This module raises it to 10 and
+**The clamp is the model's.** The MJCF declares
+``actuatorfrcrange="-5 5"`` on each finger joint. This module raises it to 20 and
 restates the same number as an ``ActuationSpec``, which Newton's MuJoCo solver
 writes into the actuator's ``forcerange``; :func:`check_arm` asserts the built
 model carries it on both finger DOFs, so a model edited back to 5 fails here
-instead of gripping at half.
+instead of gripping at a quarter.
 
 **The 16 mm close is a command, not a distance.** Each pad face is commanded
 16 mm inside the loop's measured outer surface. The pads cannot travel that far
--- the faces meet at the finger origins -- and are not allowed to: the 10 N cap
+-- the faces meet at the finger origins -- and are not allowed to: the clamp
 stalls them first. That is the same arithmetic the claw used, whose pads also
 overlap at full close.
 
@@ -99,8 +99,14 @@ CLOSED_HALF_GAP = PAD_INNER_OFFSET
 SPAN = 2.0 * OPEN_HALF_GAP
 """Pad-face separation at full open [m]; what ``GripperSpec.jaw_gap`` inverts."""
 
-GRASP_LIMIT_N = 10.0
-"""The jaws' closing budget [N]: one finger's actuator force, never more."""
+GRASP_LIMIT_N = 20.0
+"""The jaws' closing budget [N]: one finger's actuator force, never more.
+
+Ten was the claw's clamp and the paper fold's, and on this loop it stalls the
+pads 5.6 mm into an 8.3 mm cord, where the round cord creeps out (1.96x ring
+stretch, lost at frame 61 of the lift). Twenty holds it: the pads read 16-21 N
+through the lift and the toy leaves the bench.
+"""
 
 CLOSE_TRAVEL = 0.016
 """How far past a measured half-width the pads are commanded [m].

@@ -7,7 +7,7 @@ measures whether the grip held, how far the toy moved, whether it came to rest
 on the bench, and what the mesh did.
 
 The default mover is the AIRBOT Play arm with its own parallel hand
-(`arm_gripper`): it reaches the loop, its fingers close on the cord under a 10 N
+(`arm_gripper`): it reaches the loop, its fingers close on the cord under a 20 N
 clamp, and it carries the toy along the same tool-centre path. `--claw claw`
 runs the scripted parallel claw this scene was built on -- a level carrier on a
 prismatic guide, two jaws on native prismatic slides -- which stays available
@@ -31,7 +31,7 @@ import arm_gripper
 import numpy as np
 from loop_geometry import ring_geometry, smooth
 from mesh_quality import MeshQuality, penetration
-from parallel_gripper import GRASP_LIMIT_N, ParallelGripperSpec
+from parallel_gripper import ParallelGripperSpec
 
 import robosimstudio as rss
 from robosimstudio_materials.heterogeneous import HeterogeneousSoftSpec, load_labelled_tets
@@ -102,7 +102,7 @@ def build_scene(
     *,
     coarse: bool,
     mu: float | None = 8.0,
-    force_limit: float = GRASP_LIMIT_N,
+    force_limit: float = arm_gripper.GRASP_LIMIT_N,
     squeeze: float = GRIP_SQUEEZE,
     self_contact: bool = True,
     claw: str = "arm",
@@ -181,7 +181,7 @@ def build_scene(
     # The arm is an articulated robot and resolves to MuJoCo, so it is its own
     # island; the toy keeps VBD. `one_way` with `slide_feedback` is what carries
     # the grip: the finger stops where the loop pushes back with its actuator's
-    # force, so the 10 N ceiling is the grip. Sticky matching is the scene's, and
+    # force, so the 20 N ceiling is the grip. Sticky matching is the scene's, and
     # the coupler forwards it into its own collision pipeline.
     split = claw != "claw"
     physics = rss.ArrangementSpec(
@@ -436,7 +436,7 @@ def run(
     render_every: int = 0,
     coarse: bool = False,
     mu: float | None = 8.0,
-    force_limit: float = GRASP_LIMIT_N,
+    force_limit: float = arm_gripper.GRASP_LIMIT_N,
     squeeze: float = GRIP_SQUEEZE,
     enable_self_contact: bool = True,
     claw: str = "arm",
@@ -637,7 +637,7 @@ def main() -> None:
     parser.add_argument(
         "--force-limit",
         type=float,
-        default=GRASP_LIMIT_N,
+        default=arm_gripper.GRASP_LIMIT_N,
         help="the jaws' closing budget [N]; the drive never exceeds it",
     )
     parser.add_argument(

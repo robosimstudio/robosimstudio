@@ -17,12 +17,12 @@ of it is inside, what the press deformed, whether the rim holds it after the jaw
 open, and what the jaws spent to get it there.
 
 The default mover is the AIRBOT Play arm with its own parallel hand
-(`arm_gripper`): it reaches the ring, its fingers close on the cord under a 10 N
+(`arm_gripper`): it reaches the ring, its fingers close on the cord under a 20 N
 clamp, and it follows the same tool-centre path. `--claw claw` runs the scripted
 parallel claw this scene was built on -- a level carrier, two prismatic jaws and
 a carrier push -- which stays as the reference the arm is measured against.
 
-The claw's budgets are separate by construction: two 10 N jaws and a 200 N carrier
+The claw's budgets are separate by construction: two 20 N jaws and a 200 N carrier
 push. The arm has one hand and one arm, so on it the press is the same pads that
 hold the toy, and ``peak_force_n`` is the force they would feel while pressing
 rather than only while closing. Its ceiling is the arm's own actuators -- six
@@ -63,7 +63,7 @@ import newton
 import numpy as np
 from loop_geometry import ring_geometry, smooth
 from mesh_quality import MeshQuality, penetration
-from parallel_gripper import GRASP_LIMIT_N, PUSH_LIMIT_N, ParallelGripperSpec
+from parallel_gripper import PUSH_LIMIT_N, ParallelGripperSpec
 
 import robosimstudio as rss
 from robosimstudio_materials.heterogeneous import HeterogeneousSoftSpec, load_labelled_tets
@@ -668,7 +668,7 @@ def press_path(positions: np.ndarray, dt: float, start_half_gap: float = RELEASE
     press_s = PRESS_DEPTH / PRESS_RATE
     hold_end = press_s + PRESS_HOLD
     # Open before rising: under the press the pads are loaded into the plush, and
-    # 10 N of jaw cannot slide out from under that normal on its own. Rising while
+    # 20 N of jaw cannot slide out from under that normal on its own. Rising while
     # opening dragged the toy back up with the pads, by 26 mm.
     open_end = hold_end + JAM_OPEN
     rise_end = open_end + JAM_WITHDRAW
@@ -701,7 +701,7 @@ def run(
     render_every: int = 0,
     coarse: bool = False,
     bore: float = BORE_RADIUS,
-    cap: float = GRASP_LIMIT_N,
+    cap: float = arm_gripper.GRASP_LIMIT_N,
     push_cap: float = PUSH_LIMIT_N,
     mu: float | None = 8.0,
     squeeze: float = GRIP_SQUEEZE,
@@ -1090,7 +1090,7 @@ def run(
                 # actuators, which the model already carries.
                 row["pressing"] = press_frame is not None
                 if shape_forces is not None:
-                    # The squeeze is the grip, where the 10 N clamp binds; the pad's
+                    # The squeeze is the grip, where the 20 N clamp binds; the pad's
                     # total load is what carries the press, friction included.
                     load, squeeze = arm_gripper.pad_forces(sim, shape_forces(), finger_sides)
                 else:
@@ -1343,7 +1343,7 @@ def main() -> None:
     parser.add_argument("--render-every", type=int, default=0)
     parser.add_argument("--coarse", dest="coarse", action="store_true", help="run the coarse common-translation solve")
     parser.add_argument("--bore", type=float, default=BORE_RADIUS, help="container inner radius [m]")
-    parser.add_argument("--cap", type=float, default=GRASP_LIMIT_N, help="jaw closing clamp [N]")
+    parser.add_argument("--cap", type=float, default=arm_gripper.GRASP_LIMIT_N, help="jaw closing clamp [N]")
     parser.add_argument("--push-cap", type=float, default=PUSH_LIMIT_N, help="carrier push clamp [N]")
     parser.add_argument("--force-limit", type=float, default=None, help="alias for --cap, the sweep's name")
     parser.add_argument("--squeeze", type=float, default=GRIP_SQUEEZE, help="close travel past the loop [m]")
