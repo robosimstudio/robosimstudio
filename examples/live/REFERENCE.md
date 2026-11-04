@@ -162,7 +162,7 @@ scene.add(rss.robot("yam_bimanual"))  # a scene needs something that moves befor
 | `camera fit --point X,Y,Z=U,V ... --ref STILL [--name N] [--fov DEG] [--free-center]` | The pinhole that puts world points (metres, the frame `CameraSpec` uses) on their pixels in the still: six or more, spread over the picture and in depth. Prints the `rss.CameraSpec(...)` to paste, its field of view, and each point's reprojection error in pixels (a point read off wrong is the one far above the rest); `run/camfit_<name>.png` marks each clicked pixel (yellow) and where the fit puts its point (cyan). `--fov` holds the field of view, `--free-center` solves the principal point too (ten or more points). Needs no page. |
 | `compare [--ref PHOTO] [--camera N] [--key NAME=HOW ...] [--note TEXT]` | The scene beside the photograph: the pair at full size and a look sheet; per keyed thing, its size, offset and overlap; and how far the whole picture's colours are from the photo's, over the frame and behind the keyed things. |
 | `compare --take NAME [--key ...]` | A recorded take beside the clip's timeline: the clip's anchors above, the take's frames at the same point below, and what moved in the take. |
-| `check [--camera N] [--key ...] [--object NAME ...]` | The gate: builds, finite state, camera at the clip's aspect, every named thing present, penetration and drift at rest under their bars. |
+| `check [--camera N] [--clip CLIP] [--key ...] [--object NAME ...]` | The gate: builds, finite state, camera at the clip's aspect, every named thing present, penetration and drift at rest under their bars; with `--clip` (the camera's own clip) a camera on a wrist is held to the hand it shows (the `hand` line, *The gate*). |
 | `log [--last N]` | Every compare, check, take and `snapshot --note` so far: what it left (PASS/FAIL, the picture: a snapshot's pair when it made one) and the `scene.py` it measured. |
 | `play [NAME] [--record TAKE --camera N --every K --also R,R] [--wait [--wait-limit S]]` | Play a routine the scene file binds, as its button on the page does; `--record` films a frame every `K` control steps (4). `--also gl,tiled,blender` draws each filmed frame of the same run with those renderers too, over the camera's plate when it has one: `TAKE.renderers/<renderer>.mp4` each and `TAKE.renderers/all.mp4` side by side (a folder made afresh for each take of that name), so renderers are compared on one run rather than on runs that drift apart. Each draws every filmed frame on the page's loop, so `--also blender` holds the page for a Cycles render a frame; a frame one fails is black in its video, three running stop it (`also_missed`, `also_failed` in `TAKE.json`), and the page's own renderer named there is left out (`also_skipped`). `--wait` returns when it ends and its take is written, printing the page's log as it goes, exits 1 with the traceback if it failed, and gives up after `--wait-limit` seconds (3600). |
 | `physics [NAME] [--only frozen,open,...] [--settle-mm MM] [--note TEXT]` | Replay a routine seven ways (written, frozen, open, built, heavy, drop, plain), each from a reset scene, and say whether its physics is real (*The physics replays*): as written, with the robot frozen, with the fingers held open, with the robot as built, with the handled things twice as heavy, with the fingers opened early in the carry (`drop`), and played with nothing hooked in (`plain`). Writes `run/physics.json` and a log line; takes as many times the routine's length as it plays replays. |
@@ -202,7 +202,7 @@ clean plate composites under all four, and `compare`'s per-thing readings
 
 | Renderer | Draws | Runs where | A 960x540 still |
 | --- | --- | --- | --- |
-| `rtx` (default) | the path tracer: materials, the `lab` room's light, the scenery | an NVIDIA GPU with RT cores | under a second; the first in a process compiles shaders |
+| `rtx` (default) | the path tracer: materials, the `lab` room's light, the scenery | an NVIDIA GPU with RT cores | a few seconds, the first through a camera a few more; the first in a process compiles shaders. Minutes for every new camera mean the renderer cannot write its cache (`ovrtx/bin/cache` in the environment, read-only in a sandbox): `status`'s `renderer_cache` says so -- make that folder writable rather than switching renderer |
 | `blender` | Cycles: the finishes and the `lab` light, as `rtx` does; no scenery | anywhere Blender 5 is installed (`ROBOSIMSTUDIO_BLENDER`, `blender` on the PATH, or Blender.app); Metal on a Mac | about a second on a GPU or a many-core CPU |
 | `gl` | flat colour and a sun, from the shapes as drawn; cloth, ropes and grains from their particles (a liquid as its grains) | anywhere: EGL on a GPU, software GL on a CPU, CGL on a Mac | milliseconds, and about 5 µs more a grain |
 | `tiled` | flat colour, from the colliders | anywhere Warp runs | milliseconds on a GPU, a second or two on a CPU |
@@ -362,6 +362,28 @@ holds the camera's aspect to the clip's in `ref/timeline.json`, within 2%;
 against a photo, `compare` says when it had to stretch the photo to the
 camera's aspect. A line given nothing to look at (`objects` with no `--key`
 or `--object`) is a SKIP. The bars are defaults, and `check` blocks nothing.
+
+`--clip ref/<clip>` adds the `hand` line for a camera that rides the robot
+(`parent_frame`). A wrist camera carries the hand: in its clip the palm, the
+camera's housing and the fingers' usual place stay in the same pixels while
+the world sweeps past, so what changes in under 30% of 60 frames spread over
+the clip is the hand. The line draws the robot through the camera as the scene
+stands (run it from a reset, before the routine moves the arms) and reads its
+overlap with that hand:
+
+```
+FAIL  hand         the robot drawn over the clip's hand (what stays still through the clip): IoU 0.00 (bar 0.3); the clip's hand is centred 51% across, 10% down, the drawn robot 49% across, 87% down; turned 180 degrees it would read 0.15: is the camera mounted turned 180 degrees? (check_hand_cam_right.png: the clip's hand yellow, the drawn robot cyan)
+```
+
+It also tries the drawn robot turned 180 degrees and mirrored, and names one
+that reads clearly better: a wrist camera is often mounted turned on its arm.
+Open `run/check_hand_<camera>.png` -- the clip's first frame, its hand yellow,
+the drawn robot outlined cyan -- and move the mount (`xform`: its roll first),
+the field of view and the arm's first pose until the outline lies on the
+yellow. Two wrist views of one clip that were about right but drawn too wide
+read 0.28 and 0.32; one turned 180 degrees read 0.00. A camera that rides
+nothing gets a SKIP, and a clip in which nothing stays still is no wrist
+clip.
 
 ### The physics replays
 

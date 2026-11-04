@@ -1080,6 +1080,133 @@ def write_strip(base: Path, tiles: list[tuple[np.ndarray, np.ndarray, str]], til
 
 
 # ------------------------------------------------------------------ the gate
+HAND_TOL = 20
+"""How far (0-255, in any channel) a pixel of a clip may stray from the clip's median and still count as unchanged."""
+HAND_STILL = 0.3
+"""A pixel of a wrist camera's clip is the hand's when it changes in under this share of the frames: the hand rides
+with the camera while the world sweeps past it (its fingers move as they open and close, so not every pixel of them
+qualifies; the palm, the camera's housing and the fingers' usual place do)."""
+HAND_IOU = 0.3
+"""The overlap of the drawn robot with the clip's hand below which a wrist camera is wrong: its mount, its roll, its
+field of view or the arm's first pose. Measured on two twins of one clip: wrist views about right but drawn too wide
+read 0.28 and 0.32, one turned 180 degrees on its mount 0.00. The picture says more than the number: the cyan
+outline lies on the yellow."""
+HAND_ORIENTATIONS = (
+    ("as mounted", lambda m: m),
+    ("turned 180 degrees", lambda m: m[::-1, ::-1]),
+    ("mirrored left-right", lambda m: m[:, ::-1]),
+    ("mirrored top-bottom", lambda m: m[::-1]),
+)
+"""The ways a camera's picture can come out turned or mirrored that the hand line tries the drawn robot in."""
+
+
+def change_map(frames: np.ndarray, tol: int = HAND_TOL) -> np.ndarray:
+    """Per pixel, the share of ``frames`` (``uint8 [n, h, w, 3]``) that differ from the frames' median by more than
+    ``tol`` in some channel: 0 where nothing ever passes, near 1 where the picture always changes."""
+    med = np.median(frames, axis=0).astype(np.int16)
+    out = np.zeros(frames.shape[1:3], dtype=np.float32)
+    for frame in frames:
+        out += np.abs(frame.astype(np.int16) - med).max(axis=2) > tol
+    return out / max(1, len(frames))
+
+
+def _centre(mask: np.ndarray) -> tuple[float, float]:
+    """A mask's centre as a share of the picture's width and height (0.5, 0.5 is the middle)."""
+    ys, xs = np.nonzero(mask)
+    return float(xs.mean() / mask.shape[1]), float(ys.mean() / mask.shape[0])
+
+
+def hand_reading(change: np.ndarray, robot: np.ndarray) -> dict:
+    """Where a wrist camera's clip has the robot's own parts against where the render draws the robot.
+
+    ``change`` is :func:`change_map` of the camera's clip, ``robot`` the render's robot pixels through the same
+    camera at the scene's first state, both the camera's size. The clip's hand is what stays still while the world
+    moves (:data:`HAND_STILL`); the reading is the drawn robot's overlap with it (IoU), where each is centred, and the
+    overlap the drawn robot would have turned or mirrored (:data:`HAND_ORIENTATIONS`) -- one that does much better
+    says how the camera is mounted. ``ok`` is None where the clip has no still part (a camera on no robot)."""
+    still = change < HAND_STILL
+    out: dict = {"clip_hand_share": round(float(still.mean()), 4), "robot_share": round(float(robot.mean()), 4)}
+    if still.mean() < 0.005:
+        return {
+            **out,
+            "ok": None,
+            "detail": "no part of the clip stays still while the rest moves: no hand rides this camera to hold it to",
+        }
+    if not robot.any():
+        cx, cy = _centre(still)
+        return {
+            **out,
+            "ok": False,
+            "detail": f"the render draws none of the robot through this camera, where the clip's hand covers "
+            f"{100 * still.mean():.0f}% of the picture (centred {100 * cx:.0f}% across, {100 * cy:.0f}% down)",
+        }
+
+    def iou(m: np.ndarray) -> float:
+        return float((m & still).sum() / max(1, (m | still).sum()))
+
+    scores = {name: round(iou(turn(robot)), 3) for name, turn in HAND_ORIENTATIONS}
+    here = scores["as mounted"]
+    # a camera can be mounted turned; a mirrored picture is a recording flipped, so a turn within a hair of a
+    # mirror is the likelier reading
+    best = max(scores, key=lambda k: scores[k] + (0.03 if k == "turned 180 degrees" else 0.0))
+    (cx, cy), (rx, ry) = _centre(still), _centre(robot)
+    turned = best != "as mounted" and scores[best] >= here + 0.05
+    ok = here >= HAND_IOU and not (turned and scores[best] >= here + 0.1)
+    detail = (
+        f"the robot drawn over the clip's hand (what stays still through the clip): IoU {here:.2f} (bar {HAND_IOU:g}); "
+        f"the clip's hand is centred {100 * cx:.0f}% across, {100 * cy:.0f}% down, the drawn robot "
+        f"{100 * rx:.0f}% across, {100 * ry:.0f}% down"
+    )
+    if turned:
+        detail += f"; {best} it would read {scores[best]:.2f}: is the camera mounted {best}?"
+    return {
+        **out,
+        "ok": ok,
+        "detail": detail,
+        "iou": here,
+        "orientations": scores,
+        "clip_centre": (cx, cy),
+        "robot_centre": (rx, ry),
+    }
+
+
+def _outline(mask: np.ndarray) -> np.ndarray:
+    from scipy.ndimage import binary_erosion
+
+    return mask & ~binary_erosion(mask, iterations=2)
+
+
+def hand_line(server: Any, cam: Any, clip: str, *, count: int = 60) -> dict:
+    """:func:`hand_reading` for camera ``cam`` (resolved, riding a body) against its clip, with the picture
+    ``run/check_hand_<camera>.png``: the clip's first frame, its hand tinted yellow and the drawn robot outlined cyan.
+    The scene is read as it stands: run it from a reset, before the routine moves the arms."""
+    from . import frames as F
+
+    sim = server.sim
+    frames = F.sample(clip, count=count, width=cam.width, height=cam.height)
+    change = change_map(frames)
+    names = dict(sim.scene.handles.segmentation_names())
+    robot_labels = [label for label, name in names.items() if name == "__robot__"]
+    renderer = sim.make_renderer("tiled", cameras=[cam], channels=["seg"])
+    try:
+        seg = np.asarray(renderer.render(sim.state)[cam.name]["seg"]).astype(np.int64)
+    finally:
+        renderer.close()
+    if seg.shape != change.shape:
+        raise ValueError(f"the render is {seg.shape[::-1]} and the clip {change.shape[::-1]}")
+    robot = np.isin(seg, robot_labels)
+    reading = hand_reading(change, robot)
+    pic = frames[0].astype(np.float32)
+    still = change < HAND_STILL
+    pic[still] = 0.55 * pic[still] + 0.45 * np.array([255.0, 220.0, 0.0])
+    pic[_outline(robot)] = (0.0, 255.0, 255.0)
+    path = Path(server.run_dir) / f"check_hand_{cam.name}.png"
+    stills.save_png(pic.astype(np.uint8), path)
+    reading["picture"] = str(path)
+    reading["detail"] += f" ({path.name}: the clip's hand yellow, the drawn robot cyan)"
+    return reading
+
+
 def gate(
     server: Any,
     *,
@@ -1090,8 +1217,12 @@ def gate(
     settle_mm: float = 2.0,
     penetration_mm: float = 1.0,
     timeline: dict | None = None,
+    clip: str = "",
 ) -> dict:
-    """What a photograph cannot tell: the scene builds, stays finite, has its camera and its things, and holds still."""
+    """What a photograph cannot tell: the scene builds, stays finite, has its camera and its things, and holds still.
+
+    With ``clip`` (the camera's own clip) a camera riding the robot is held to it as well: the ``hand`` line
+    (:func:`hand_line`), read at the scene as it stands, before the rest check steps it."""
     sim = server.sim
     keys = list(keys or [])
     wanted = list(objects or []) or [k.name for k in keys]
@@ -1130,6 +1261,16 @@ def gate(
                 "" if ok else f" -- aspect off by {100 * abs(clip_aspect / cam_aspect - 1):.0f}%"
             )
         add("camera", ok, detail)
+    if clip and cam is not None:
+        if getattr(cam, "parent_body", -1) < 0:
+            add("hand", None, f"{cam.name} rides no body: the hand line holds a wrist camera to its clip")
+        else:
+            try:
+                hand = hand_line(server, cam, clip)
+            except Exception as e:  # a clip that cannot be read is a failed line, not a gate with no report
+                add("hand", False, f"could not read {Path(clip).name}: {type(e).__name__}: {e}")
+            else:
+                add("hand", hand["ok"], hand["detail"])
 
     have = set(sim.names())
     missing = [n for n in wanted if n not in have]

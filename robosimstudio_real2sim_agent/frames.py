@@ -33,6 +33,7 @@ __all__ = [
     "plate",
     "probe",
     "read_timeline",
+    "sample",
     "write_timeline",
 ]
 
@@ -242,6 +243,27 @@ def cut(
         "timeline": str(timeline),
         "report": "\n".join(f"{a['t']:6.2f} s  {a['file']}  {a['label']}" for a in anchors),
     }
+
+
+def sample(clip: str | Path, *, count: int = 60, width: int = 0, height: int = 0) -> Any:
+    """``count`` frames spread evenly over the whole clip, as ``uint8 [n, h, w, 3]``, scaled to ``width`` x
+    ``height`` when given (a camera's size). Raises ``FileNotFoundError`` for a clip that is not there and
+    ``ValueError`` for one that gives fewer than three frames."""
+    import numpy as np
+
+    clip_path = Path(clip)
+    if not clip_path.is_file():
+        raise FileNotFoundError(f"no clip at {clip}")
+    meta = probe(clip_path)
+    w, h = int(width or meta["width"]), int(height or meta["height"])
+    rate = max(3, int(count)) / max(meta["duration"], 1e-3)
+    argv = [_ffmpeg(), "-v", "error", "-i", str(clip_path), "-vf", f"fps={rate:.6f},scale={w}:{h}"]
+    argv += ["-f", "rawvideo", "-pix_fmt", "rgb24", "-"]
+    raw = subprocess.run(argv, check=True, stdin=subprocess.DEVNULL, capture_output=True).stdout
+    n = len(raw) // (w * h * 3)
+    if n < 3:
+        raise ValueError(f"only {n} frames came out of {clip}")
+    return np.frombuffer(raw[: n * w * h * 3], dtype=np.uint8).reshape(n, h, w, 3)
 
 
 def _paint_in(image: Any, hole: Any) -> Any:
