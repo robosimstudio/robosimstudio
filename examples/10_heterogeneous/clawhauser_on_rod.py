@@ -181,16 +181,6 @@ PAD_CLEARANCE = 0.001
 the ground, so a loop lying there is straddled instead of one assumed to sit at
 the body's mid-plane.
 """
-LOOP_SAG = 0.050
-"""How far the loop settles below the pads once it is carried [m].
-
-The claw holds the loop at the point it commands, so the path's heights are the
-loop's. The stock hand lets the cord ride down its 40 mm faces: measured at the
-thread, the pads hold at 0.9969 m and the loop's centre at 0.9465 -- 50 mm
-lower, and on the rod that put the hole under the rod instead of around it (the
-loop hit it at 30 N and slid off). Every height stated for the loop is raised by
-this much, for the pads.
-"""
 GRIP_TO_BODY = 0.006
 """How far inboard of the loop's widest band the pads close [m].
 
@@ -312,7 +302,6 @@ def build_scene(
         "seat_z_m": seat_height,
         "thread_z_m": thread_height,
         "thread_lift_m": THREAD_LIFT,
-        "loop_sag_m": LOOP_SAG,
         "withdraw_z_m": WITHDRAW_Z,
         "grip_centre_m": [SOURCE_X + float(hole[0]), -GRIP_TO_BODY, float(grip_z)],
     }
@@ -551,11 +540,9 @@ def arm_route(sim, geometry: dict, capacity: int, dt: float):
     )
     reach = float(geometry["reach_m"])
     squeeze = float(geometry["grip_squeeze_m"])
-    # The hand lets the cord settle below the pads; the claw does not, so the sag
-    # is the arm's and is added here rather than to the shared geometry.
-    lift = float(geometry["lift_m"]) + LOOP_SAG
+    lift = geometry["lift_m"]
     slide = geometry["slide_m"]
-    seat = (TABLE_Z + geometry["seat_z_m"] + LOOP_SAG - SEAT_FLOOR) - (TABLE_Z + geometry["loop_z_m"])
+    seat = (TABLE_Z + geometry["seat_z_m"] - SEAT_FLOOR) - (TABLE_Z + geometry["loop_z_m"])
     # The planned descent is a ramp at SEAT_RATE, bounded below by the seat's own
     # floor: a smoothstep would reach the rod at twice that rate.
     floor = min(0.0, seat - lift)
