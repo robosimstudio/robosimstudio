@@ -404,7 +404,8 @@ NOTE  grip     the fingers pressed flower_1 0.7 N (p95 0.7) by hand 2; ...; the 
   joint torque at the real arm's, named by the robot or its own joints (a
   YAM's 27 Nm and 10 Nm; a UR3's, UR5's, UR10's or UR16's; a Panda's 87 Nm and
   12 Nm; for another robot, or a Universal Robots arm of no stated size,
-  friction only). It
+  friction only), and where the twin set its own gripper servo it puts back
+  the registered hand's (the YAM's 50 N clamp). It
   passes when the routine finishes and the things end where the written run
   left them (within 50 mm and 30°): a grip that only holds at a friction no
   rubber pad has fails here, even when the routine's own checks miss it.
@@ -448,7 +449,15 @@ NOTE  grip     the fingers pressed flower_1 0.7 N (p95 0.7) by hand 2; ...; the 
   than 2% fails; a handled thing lighter than expanded polystyrene or heavier
   than lead (its mass over its colliders' volume), and a collider nothing
   draws touching a handled thing (an invisible shelf or lip), are NOTEs to
-  explain.
+  explain. A handled thing's drawn shapes that do not collide (a leaf, a
+  label) reaching more than 10 mm outside its colliders fail -- they pass
+  through what they meet -- and 3 to 10 mm is a NOTE.
+- **robot** compares the robot the scene was built with to the registered one
+  of its name. A copy of its file (in the twin's folder, edited or not), or
+  arm or gripper servo gains and force limits of the twin's own (`arm=`,
+  `gripper=`), fail: use the registered robot, placed with `at=` and
+  `arms_at=`. A robot built from a file nothing registered is a NOTE: its
+  limits are the file's own and are not checked.
 - **settle** reads how the scene's own settle, before the first step, moved
   each thing from where it was put, and how deep each sits in something at
   the reset: deeper than a soft contact sinks (5 mm), or more than 1 mm deep
@@ -499,8 +508,9 @@ physics, so it works whichever way the routine was written. A replay other
 than `written` is cut a little past the written run's length (10%, at least
 25 steps) when its routine is still going: one waiting for a pose the frozen
 arm never reaches is read as not done. A routine's own checks stopping it is
-a reading, not an error: the line quotes them. A deformable is read by its particles; `built`
-and `heavy` change neither its friction nor its mass. `physics` resets the
+a reading, not an error: the line quotes them. A deformable is read by its own particles; `built`
+and `heavy` change neither its friction nor its mass, and `drop` follows only a rigid thing's carry,
+so where what moved is deformable `heavy` and `drop` are NOTEs that say so. `physics` resets the
 scene when it ends; it is refused while a routine plays.
 
 ### The take

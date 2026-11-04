@@ -371,6 +371,49 @@ class Replays(unittest.TestCase):
         mu[mild] = after[mild]
         m.shape_material_mu.assign(mu)
 
+    def test_the_registered_robot_reads_as_itself_and_an_override_does_not(self) -> None:
+        import robosimstudio as rss
+        from robosimstudio_real2sim_agent import physics
+
+        facts = physics.model_facts(self.sim)
+        self.assertEqual(
+            facts["robot_spec"],
+            {
+                "name": "yam_bimanual",
+                "registered": True,
+                "as": "yam_bimanual",
+                "file": "",
+                "arm": "",
+                "gripper": "",
+                "hand": "",
+                "other": "",
+            },
+        )
+        self.assertEqual(facts["drawn_only_mm"], {})
+        scene = rss.Scene(cell="bench_075", name="physics_servo_override")
+        scene.add(rss.robot("yam_bimanual", gripper=rss.ActuationSpec(target_ke=2000, target_kd=40, effort_limit=25)))
+        scene.add(rss.box(name="cube", half=(0.02,) * 3, at=(0.0, 0.0, 0.03)))
+        with redirect_stdout(io.StringIO()):
+            sim = scene.build()
+        spec = physics.model_facts(sim)["robot_spec"]
+        self.assertIn("gripper servo is the twin's own", spec["gripper"])
+        rows = np.asarray(sim.scene.handles.arms["right"].gripper_dofs)
+        before = sim.model.joint_target_ke.numpy()[rows].copy()
+        damping = sim.model.joint_damping.numpy().copy()
+        built = physics.AsBuilt(sim)
+        built.apply()
+        self.assertGreater(built.lowered["servo"], 0)
+        self.assertFalse(np.allclose(sim.model.joint_target_ke.numpy()[rows], before), "the hand's own gains")
+        from robosimstudio.robots.registry import get_embodiment, resolve_gripper
+
+        yam = get_embodiment("yam_bimanual")
+        clamp = resolve_gripper(yam, yam.arms[0]).actuation
+        if clamp.joint_damping is not None:
+            np.testing.assert_allclose(sim.model.joint_damping.numpy()[rows], clamp.joint_damping, rtol=1e-6)
+        built.restore()
+        np.testing.assert_allclose(sim.model.joint_target_ke.numpy()[rows], before)
+        np.testing.assert_allclose(sim.model.joint_damping.numpy(), damping)
+
     def test_the_model_read_finds_a_free_cube_free(self) -> None:
         from robosimstudio_real2sim_agent import physics
 

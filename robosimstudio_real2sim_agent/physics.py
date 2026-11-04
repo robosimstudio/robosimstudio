@@ -66,6 +66,7 @@ import math
 import re
 import traceback
 from collections.abc import Iterator
+from pathlib import Path
 from typing import Any, ClassVar, NamedTuple
 
 import newton
@@ -104,6 +105,10 @@ FAILED = "the replay itself failed"
 
 SETTLE_MM = 2.0
 """How far a thing may move with the robot frozen: a resting contact settles by a fraction of a millimetre."""
+
+DRAWN_ONLY_MM = (3.0, 10.0)
+"""How far a handled thing's drawn shapes that do not collide may reach outside its colliders before it is a NOTE, and
+before it FAILs [mm]: a leaf or a label drawn and never touched passes through whatever it meets."""
 
 END_MM, END_DEG = 50.0, 30.0
 """How near a replay must end each handled thing to where the written run left it [mm, deg]."""
@@ -556,6 +561,238 @@ class _SideContacts:
         return a, b, self._gap[:n].numpy().astype(np.float64)
 
 
+def drawn_only_reach(sim: Any) -> dict[str, float]:
+    """Per handled thing, how far its drawn shapes that do not collide reach outside its colliders [mm], over each
+    rigid part (bodies held together by fixed joints, in the frame of the first) by the box of each shape's own
+    points there (the larger of the per-axis overhangs); things that reach no farther than a millimetre are left out.
+    What is drawn and does not collide passes through what it meets. A part held to the world by fixed joints only
+    (a lamp, a vase of flowers on the bench) is scenery, and a part with a collider whose shape cannot be measured
+    makes no claim."""
+    from scipy.spatial.transform import Rotation
+
+    from robosimstudio.core.render.plate import static_bodies
+    from robosimstudio.core.render.visual import shape_geometry
+
+    m = sim.model
+    fixed = static_bodies(m)
+    flags, kind, scale, xf = (
+        m.shape_flags.numpy(),
+        m.shape_type.numpy(),
+        m.shape_scale.numpy(),
+        m.shape_transform.numpy(),
+    )
+    sb = m.shape_body.numpy()
+    sources = getattr(m, "shape_source", None) or [None] * len(flags)
+    visible, collide = int(newton.ShapeFlags.VISIBLE), int(newton.ShapeFlags.COLLIDE_SHAPES)
+    welds: list[tuple[int, int]] = []
+    if int(getattr(m, "joint_count", 0) or 0):
+        jt, jp, jc = m.joint_type.numpy(), m.joint_parent.numpy(), m.joint_child.numpy()
+        welds = [(int(p), int(c)) for t, p, c in zip(jt, jp, jc, strict=False) if int(t) == int(newton.JointType.FIXED)]
+    body_q = None
+
+    def corners(i: int) -> np.ndarray | None:  # the shape's own points in its body's frame (a round mesh stays round)
+        geom = shape_geometry(sources[i], int(kind[i]), scale[i])
+        if geom is None:
+            return None
+        v = np.asarray(geom[0], dtype=np.float64)
+        return Rotation.from_quat(np.asarray(xf[i, 3:], dtype=np.float64)).apply(v) + xf[i, :3]
+
+    def into(points: np.ndarray, body: int, root: int) -> np.ndarray:
+        nonlocal body_q
+        if body == root:
+            return points
+        if body_q is None:
+            body_q = np.asarray(sim.state.body_q.numpy(), dtype=np.float64)
+        rb, rr = Rotation.from_quat(body_q[body, 3:]), Rotation.from_quat(body_q[root, 3:])
+        return rr.inv().apply(rb.apply(points) + body_q[body, :3] - body_q[root, :3])
+
+    out = {}
+    for name, t in things(sim).items():
+        bodies = [b for b in t["bodies"] if b >= 0 and not (b < len(fixed) and fixed[b])]
+        group = {b: b for b in bodies}
+
+        def top(b: int, group: dict[int, int] = group) -> int:
+            while group[b] != b:
+                b = group[b]
+            return b
+
+        for p, c in welds:
+            if p in group and c in group:
+                group[max(top(p), top(c))] = min(top(p), top(c))
+        parts: dict[int, list[int]] = {}
+        for b in bodies:
+            parts.setdefault(top(b), []).append(b)
+        worst = 0.0
+        for root, members in parts.items():
+            hit, drawn, unmeasured = [], [], False
+            for x in (int(x) for x in t["shapes"]):
+                b, f = int(sb[x]), int(flags[x])
+                if b not in members or not f & (visible | collide):
+                    continue
+                pts = corners(x)
+                if f & collide:
+                    if pts is None:
+                        unmeasured = True
+                        break
+                    hit.append(into(pts, b, root))
+                elif pts is not None:
+                    drawn.append(into(pts, b, root))
+            if unmeasured or not drawn:
+                continue
+            d = np.vstack(drawn)
+            if not hit:  # a part drawn and never touched at all: all of it reaches past
+                worst = max(worst, float(np.ptp(d, axis=0).max()) * 1000.0)
+                continue
+            c = np.vstack(hit)
+            over = np.maximum(d.max(0) - c.max(0), c.min(0) - d.min(0)).max()
+            worst = max(worst, float(over) * 1000.0)
+        if worst > 1.0:
+            out[name] = round(worst, 1)
+    return out
+
+
+ROBOT_FIELDS = (
+    "gravcomp",
+    "gravcomp_restate",
+    "enable_self_collisions",
+    "cross_arm_collisions",
+    "hull_colliders",
+    "decompose_colliders",
+    "decompose_threshold",
+    "monolithic",
+)
+"""The fields of a robot that change its physics besides its file, servos and hands, held to the registered one's
+(its mount, look, planner and fixed-joint collapse are the twin's to choose)."""
+
+
+@functools.lru_cache(maxsize=64)
+def _body_names(path: str, stamp: float) -> frozenset[str]:
+    """The body (MJCF) or link (URDF) names of a robot file (``stamp`` its mtime, so an edit is read again)."""
+    try:
+        text = Path(path).read_text(errors="replace")
+    except OSError:
+        return frozenset()
+    return frozenset(re.findall(r"""<(?:body|link)\b[^>]*?\bname=["']([^"']+)["']""", text))
+
+
+def _robot_file(spec: Any) -> Path | None:
+    from robosimstudio.paths import resolve_asset
+
+    try:
+        return resolve_asset(spec.asset)
+    except (FileNotFoundError, AttributeError, TypeError, OSError):
+        return None
+
+
+def _servo_words(a: Any) -> str:
+    if a is None:
+        return "the file's own"
+    effort = f", {a.effort_limit:g} limit" if getattr(a, "effort_limit", 0) else ""
+    return f"gains {a.target_ke:g}/{a.target_kd:g}{effort}"
+
+
+def _hand_servo(spec: Any, arm: Any) -> Any:
+    """The servo a finger DOF of ``arm`` is built with: the robot's stated gripper servo, else its hand's own."""
+    from robosimstudio.robots.registry import resolve_gripper
+
+    if spec.gripper_actuation is not None:
+        return spec.gripper_actuation
+    try:
+        hand = resolve_gripper(spec, arm)
+    except (KeyError, ValueError):
+        return None
+    return getattr(hand, "actuation", None)
+
+
+def _registered_arm(reg: Any, arm: Any, i: int) -> Any:
+    same = [a for a in reg.arms if a.name == arm.name]
+    return same[0] if same else (reg.arms[i] if i < len(reg.arms) else None)
+
+
+def shipped_robot(spec: Any) -> tuple[Any, str]:
+    """The library's robot ``spec`` is, matched by its file -- or, for a file the library does not ship, by the bodies
+    of a copy of one it does (a copy, edited or not, keeps them) -- and a few words when it is such a copy; ``(None,
+    "")`` where it is no robot the library ships (a file of the twin's own, registered by it or not)."""
+    from robosimstudio.paths import resolve_path
+    from robosimstudio.robots.registry import get_embodiment, list_embodiments
+
+    try:
+        root = resolve_path("embodiments")
+    except FileNotFoundError:
+        return None, ""
+    shipped = []
+    for name in list_embodiments():
+        reg = get_embodiment(name)
+        f = _robot_file(reg)
+        if f is not None and f.is_relative_to(root):
+            shipped.append((reg, f))
+    mine = _robot_file(spec)
+    if mine is None:
+        return None, ""
+    same = [reg for reg, f in shipped if f == mine]
+    if same:  # several robots share one file (a hand apart): the one of this name, else the one it departs least from
+        return min(same, key=lambda reg: (reg.name != spec.name, sum(map(bool, _departures(spec, reg).values())))), ""
+    names = _body_names(str(mine), mine.stat().st_mtime)
+    best, share = None, 0.0
+    for reg, f in shipped:
+        theirs = _body_names(str(f), f.stat().st_mtime)
+        if len(theirs) >= 6 and len(theirs & names) / len(theirs) > share:  # a few generic names match anything
+            best, share = (reg, f), len(theirs & names) / len(theirs)
+    if best is None or share < 0.8:
+        return None, ""
+    return best[0], f"its file {mine} is a copy of the registered {best[0].name}'s {best[1].name}"
+
+
+def _departures(spec: Any, reg: Any, resident: bool = False) -> dict[str, str]:
+    """How ``spec`` differs from the registered ``reg`` beyond its file: arm servo, each arm's hand and its servo,
+    and :data:`ROBOT_FIELDS` (but cross-arm collisions on a scene-resident robot, which its scene's import decides)."""
+    out = {"arm": "", "gripper": "", "hand": "", "other": ""}
+    if spec.arm_actuation != reg.arm_actuation:
+        out["arm"] = (
+            f"its arm servo is the twin's own ({_servo_words(spec.arm_actuation)}; "
+            f"registered: {_servo_words(reg.arm_actuation)})"
+        )
+    hands, servos = [], []
+    for i, arm in enumerate(spec.arms):
+        theirs = _registered_arm(reg, arm, i)
+        if theirs is None:
+            continue
+        mine_hand, reg_hand = arm.gripper or spec.gripper, theirs.gripper or reg.gripper
+        if mine_hand != reg_hand or arm.gripper_mount != theirs.gripper_mount:
+            hands.append(f"{arm.name} {mine_hand or 'none'} (registered: {reg_hand or 'none'})")
+        a, r = _hand_servo(spec, arm), _hand_servo(reg, theirs)
+        if a != r:
+            servos.append(f"{arm.name} {_servo_words(a)} (registered: {_servo_words(r)})")
+    if hands:
+        out["hand"] = "its hand is the twin's own: " + ", ".join(hands)
+    if servos:
+        out["gripper"] = "its gripper servo is the twin's own: " + ", ".join(dict.fromkeys(servos))
+    other = [
+        f"{k} {getattr(spec, k)!r} (registered: {getattr(reg, k)!r})"
+        for k in ROBOT_FIELDS
+        if getattr(spec, k, None) != getattr(reg, k, None) and not (resident and k == "cross_arm_collisions")
+    ]
+    if other:
+        out["other"] = "its " + ", ".join(other)
+    return out
+
+
+def robot_departures(sim: Any) -> dict[str, Any]:
+    """How the robot the scene was built with differs from the library's robot it is (:func:`shipped_robot`): its
+    file, its arm servo, each arm's hand and gripper servo, its other physics (each a few words, empty when the
+    same), or ``registered: False`` when it is no robot the library ships (a file of the twin's own, whose limits
+    cannot be held to anything). A mount (``at=``, ``arms_at=``) is not a departure."""
+    emb = getattr(sim.scene, "embodiment", None)
+    spec = getattr(emb, "spec", None)
+    if spec is None or getattr(spec, "asset", None) is None:
+        return {}
+    reg, copied = shipped_robot(spec)
+    if reg is None:
+        return {"name": spec.name, "registered": False, "file": str(getattr(spec.asset, "path", ""))}
+    departed = _departures(spec, reg, resident=bool(getattr(emb, "scene_resident", False)))
+    return {"name": spec.name, "registered": True, "as": reg.name, "file": copied, **departed}
+
+
 def model_facts(sim: Any) -> dict[str, Any]:
     """What the model holds that the contact rule is about, and the numbers the robot runs on.
 
@@ -593,6 +830,8 @@ def model_facts(sim: Any) -> dict[str, Any]:
         },
         "finger_mu": {a: sorted({round(float(v), 3) for v in mu[s]}) for a, s in fing.items()},
         "hands": [real_hand(sim, arm, name) for name, arm in sim.scene.handles.arms.items()],
+        "robot_spec": robot_departures(sim),
+        "drawn_only_mm": drawn_only_reach(sim),
     }
     kinds = _joint_kinds()
     free, fixed_kind = kinds.get("free", -1), kinds.get("fixed", -2)
@@ -798,6 +1037,11 @@ def _joint_kinds() -> dict[str, int]:
 def _turn_deg(q0: np.ndarray, q1: np.ndarray) -> float:
     d = abs(float(np.dot(q0 / np.linalg.norm(q0), q1 / np.linalg.norm(q1))))
     return math.degrees(2 * math.acos(min(1.0, d)))
+
+
+def _own_points(probe: Any, name: str) -> np.ndarray:
+    """Deformable ``name``'s own particles: its probe is over the whole model, with the thing's set by its name."""
+    return np.asarray(probe.points(name if name in getattr(probe, "sets", {}) else None))
 
 
 class Broken(BaseException):
@@ -1154,7 +1398,7 @@ class Replay:
         for name, p in (sim.particle_probes() or {}).items() if sampled else ():
             try:
                 p.update(sim.state, None)
-                pts = np.asarray(p.points())
+                pts = _own_points(p, name)
             except Exception:
                 continue
             if len(pts):
@@ -1360,6 +1604,34 @@ class Replay:
         return out
 
 
+def _mimic_linkage(model: Any) -> dict[int, tuple[int, ...]]:
+    """Each DOF an enabled mimic row ties to another, mapped to every DOF of its linkage (the robot entity's
+    ``_geared_dofs``, read off the model): a finger an equality carries has the driven one's joint physics."""
+    try:
+        j0 = model.constraint_mimic_joint0.numpy()
+        j1 = model.constraint_mimic_joint1.numpy()
+        on = model.constraint_mimic_enabled.numpy() if hasattr(model, "constraint_mimic_enabled") else np.ones(len(j0))
+        starts = model.joint_qd_start.numpy()
+    except AttributeError:
+        return {}
+    parent: dict[int, int] = {}
+
+    def root(j: int) -> int:
+        parent.setdefault(j, j)
+        while parent[j] != j:
+            parent[j] = parent[parent[j]]
+            j = parent[j]
+        return j
+
+    for a, b, e in zip(j0, j1, on, strict=False):
+        if e and a >= 0 and b >= 0:
+            parent[root(int(a))] = root(int(b))
+    linkages: dict[int, list[int]] = {}
+    for j in list(parent):
+        linkages.setdefault(root(j), []).extend(range(int(starts[j]), int(starts[j + 1])))
+    return {d: tuple(sorted(m)) for m in linkages.values() for d in m}
+
+
 class AsBuilt:
     """The robot as built, for the length of a replay: friction at most :data:`REAL_MU`, the real arm's torque.
 
@@ -1379,12 +1651,20 @@ class AsBuilt:
     """
 
     MASS: ClassVar[tuple[str, ...]] = ("body_mass", "body_inv_mass", "body_inertia", "body_inv_inertia")
-    FLAGS: ClassVar[dict[str, int]] = {"shape_material_mu": _SHAPE_PROPERTIES, "joint_effort_limit": _JOINT_DOF}
+    FLAGS: ClassVar[dict[str, int]] = {
+        "shape_material_mu": _SHAPE_PROPERTIES,
+        "joint_effort_limit": _JOINT_DOF,
+        "joint_target_ke": _JOINT_DOF,
+        "joint_target_kd": _JOINT_DOF,
+        "joint_damping": _JOINT_DOF,
+        "joint_friction": _JOINT_DOF,
+        "joint_armature": _JOINT_DOF,
+    }
 
     def __init__(self, sim: Any, heavier: float = 1.0) -> None:
         self.sim, self.heavier = sim, float(heavier)
-        self.saved: dict[str, tuple[np.ndarray, np.ndarray]] = {}
-        """Per array: the rows changed, and what they held."""
+        self.saved: dict[str, list[tuple[np.ndarray, np.ndarray]]] = {}
+        """Per array: each change's rows and what they held, in the order made (put back in reverse)."""
         self.lowered: dict[str, int] | None = None
         """How many shapes' friction and arm joints' torque :meth:`apply` lowered, once it has finished: none at all,
         and the scene was already as built."""
@@ -1392,7 +1672,7 @@ class AsBuilt:
     def _change(self, name: str, rows: np.ndarray, new: np.ndarray) -> None:
         array = getattr(self.sim.model, name)
         values = array.numpy()
-        self.saved[name] = (rows, values[rows].copy())
+        self.saved.setdefault(name, []).append((rows, values[rows].copy()))
         values[rows] = new
         array.assign(values)
         tuning.reach_island_copies(self.sim.pipeline, name)  # an island that keeps its own copy sees it too
@@ -1422,6 +1702,17 @@ class AsBuilt:
             if cut.any():
                 self._change("joint_effort_limit", rows[cut], real[cut])
                 flags |= _JOINT_DOF
+        # the registered hand's own servo, where the twin set its own (finger DOFs counted)
+        lowered["servo"] = 0
+        changed: set[int] = set()
+        for name, (rows, values) in self._registered_gripper().items():
+            now = getattr(m, name).numpy()[rows]
+            differ = ~np.isclose(now, values.astype(now.dtype), rtol=1e-5, atol=1e-6)
+            if differ.any():
+                self._change(name, rows[differ], values[differ].astype(now.dtype))
+                changed.update(int(r) for r in rows[differ])
+                flags |= _JOINT_DOF
+        lowered["servo"] = len(changed)
         if self.heavier != 1.0:
             fixed = _fixed_bodies(m)
             rows = np.asarray(
@@ -1436,12 +1727,64 @@ class AsBuilt:
             tuning.notify(self.sim.pipeline, flags)
         self.lowered = lowered
 
+    def _registered_gripper(self) -> dict[str, tuple[np.ndarray, np.ndarray]]:
+        """Where a finger's servo is the twin's own rather than the registered hand's: per joint array, the rows and
+        the registered servo's values -- gains and force limit on the driven DOFs, damping, friction and armature on
+        their whole linkage, as the robot's own build writes them -- for the library's robot it is
+        (:func:`shipped_robot`). Empty where it is the registered servo or no robot the library ships. What the
+        registered servo leaves to the file (a limit it does not state) cannot be put back, nor limits the twin's
+        servo widened; the ``robot`` line fails any of it."""
+        emb = getattr(self.sim.scene, "embodiment", None)
+        spec = getattr(emb, "spec", None)
+        if spec is None or getattr(spec, "asset", None) is None:
+            return {}
+        reg, _ = shipped_robot(spec)
+        if reg is None:
+            return {}
+        out: dict[str, tuple[list[int], list[float]]] = {}
+
+        def put(name: str, rows: Any, value: float) -> None:
+            got = out.setdefault(name, ([], []))
+            for r in rows:
+                got[0].append(int(r))
+                got[1].append(float(value))
+
+        linkage = _mimic_linkage(self.sim.model)
+        for i, arm in enumerate(spec.arms):
+            theirs = _registered_arm(reg, arm, i)
+            handle = self.sim.scene.handles.arms.get(arm.name)
+            if theirs is None or (arm.gripper or spec.gripper, arm.gripper_mount) != (
+                theirs.gripper or reg.gripper,
+                theirs.gripper_mount,
+            ):
+                continue  # another hand: the registered one's servo is not its own (the robot line fails the swap)
+            act = _hand_servo(reg, theirs)
+            if handle is None or act is None or _hand_servo(spec, arm) == act:
+                continue
+            dofs = [int(d) for d in handle.gripper_dofs]
+            for k, dof in enumerate(dofs):
+                put("joint_target_ke", [dof], act.ke_for(k))
+                put("joint_target_kd", [dof], act.kd_for(k))
+                if act.effort_for(k):
+                    put("joint_effort_limit", [dof], act.effort_for(k))
+            tied = sorted({t for d in dofs for t in linkage.get(d, (d,))})
+            if act.joint_damping is not None:
+                put("joint_damping", tied, act.joint_damping)
+            if act.joint_friction is not None:
+                put("joint_friction", tied, act.joint_friction)
+            if act.armature:
+                put("joint_armature", tied, act.armature)
+            if act.armature_exact is not None:  # after armature, the driven DOFs only, as the build writes it
+                put("joint_armature", dofs, act.armature_exact)
+        return {k: (np.asarray(r, np.int64), np.asarray(v)) for k, (r, v) in out.items()}
+
     def restore(self) -> None:
         flags = 0
-        for name, (rows, old) in self.saved.items():
+        for name, changes in self.saved.items():
             array = getattr(self.sim.model, name)
             values = array.numpy()
-            values[rows] = old
+            for rows, old in reversed(changes):
+                values[rows] = old
             array.assign(values)
             tuning.reach_island_copies(self.sim.pipeline, name)
             flags |= self.FLAGS.get(name, _BODY_INERTIAL)
@@ -1868,6 +2211,34 @@ def _within_spread(
     return _miss_words(worst.thing, dim, by[worst.thing].amount[dim])
 
 
+def _robot_line(model: dict, line: Any) -> None:
+    """``robot``: the robot is the registered one -- its own file, hands, servos and physics -- placed with ``at=``
+    and ``arms_at=``."""
+    spec = model.get("robot_spec")
+    if not spec:
+        return
+    if not spec.get("registered"):
+        line(
+            None,
+            "robot",
+            f"{spec.get('name') or 'the robot'} is built from {spec.get('file') or 'a file'}, which "
+            "the library does not ship: its servo gains and limits are the file's own and are not checked",
+        )
+        return
+    gone = [spec[k] for k in ("file", "arm", "hand", "gripper", "other") if spec.get(k)]
+    known = spec.get("as") or spec["name"]
+    if gone:
+        line(
+            False,
+            "robot",
+            f"{spec['name']} is not the registered {known}: "
+            + "; ".join(gone)
+            + ": use the registered robot, placed with at= (and arms_at= for each arm)",
+        )
+    else:
+        line(True, "robot", f"the registered {known}, its own file, hands and servos")
+
+
 def _model_lines(
     model: dict,
     written: dict,
@@ -1894,6 +2265,17 @@ def _model_lines(
                 f"{k} weighs {t['mass_kg'] * 1000:g} g in {t['volume_l']:g} l ({rho:g} kg/m³, "
                 + ("lighter than expanded polystyrene" if light else "heavier than lead")
                 + "): say what it is"
+            )
+    note_mm, fail_mm = DRAWN_ONLY_MM
+    for k, reach in sorted((model.get("drawn_only_mm") or {}).items(), key=lambda kv: -kv[1]):
+        if reach > fail_mm:
+            bad.append(
+                f"{k}: drawn parts that do not collide reach {reach:g} mm outside its colliders, and pass through "
+                "what they meet: give them colliders or draw them inside"
+            )
+        elif reach > note_mm:
+            notes.append(
+                f"{k}: drawn parts that do not collide reach {reach:g} mm outside its colliders: say what they are"
             )
     touched = {h for t in written.get("things", {}).values() for h in t.get("hidden_touch", [])}
     if touched:
@@ -1975,7 +2357,14 @@ def _drop_line(model: dict, runs: dict, written: dict, line: Any, axes: dict | N
         line(None, "drop", "not read: the written replay did not finish")
         return
     if not carried:
-        line(True, "drop", "nothing was lifted off its support, so nothing to release")
+        if soft := [k for k in _moved(written) if k in written.get("deformables", {})]:
+            line(
+                None,
+                "drop",
+                f"not read: what the routine moved is a deformable ({soft[0]}), and drop follows a rigid thing",
+            )
+        else:
+            line(True, "drop", "nothing was lifted off its support, so nothing to release")
         return
     if drop.get("held_rows") == 0:
         line(None, "drop", "not read: this hand has no fingers to open")
@@ -2214,6 +2603,7 @@ def verdict(model: dict, runs: dict[str, dict], settle_mm: float = SETTLE_MM) ->
     written = runs.get("written") or {}
     names = _moved(written)
     frozen = runs.get("frozen")
+    _robot_line(model, line)
     _model_lines(model, written, names, line, settle_mm, frozen)
     if written:
         flew = {
@@ -2452,7 +2842,8 @@ def verdict(model: dict, runs: dict[str, dict], settle_mm: float = SETTLE_MM) ->
             )
             line(None, "built", f"{same}, so it only played the same model again, and {miss}: {why}")
     elif built:
-        ok, detail, misses = held(built, robot)
+        servo = " and the registered hand's own servo" if (lowered or {}).get("servo") else ""
+        ok, detail, misses = held(built, robot + servo)
         seen = (
             _within_spread(misses, built, plain.run, plain.misses, written, axes)
             if ok is False and plain.readable
@@ -2486,8 +2877,18 @@ def verdict(model: dict, runs: dict[str, dict], settle_mm: float = SETTLE_MM) ->
             line(ok, "built", detail)
     heavy = runs.get("heavy")
     if heavy:
-        ok, detail, _ = held(heavy, f"the handled things {HEAVY:g} times as heavy")
-        line(True if ok else None, "heavy", detail if ok is not False else detail + " (the grasp's margin)")
+        servo = " and the registered hand's own servo" if (heavy.get("lowered") or {}).get("servo") else ""
+        soft = [k for k in names if k in written.get("deformables", {})]  # heavy scales only a body's mass
+        what = f"the rigid handled things {HEAVY:g} times as heavy ({', '.join(soft)}: not)" if soft else ""
+        ok, detail, _ = held(heavy, (what or f"the handled things {HEAVY:g} times as heavy") + servo)
+        if ok and soft and set(soft) == set(names):
+            line(
+                None,
+                "heavy",
+                f"not read: what the routine moved is a deformable ({soft[0]}), which heavy makes no heavier",
+            )
+        else:
+            line(True if ok else None, "heavy", detail if ok is not False else detail + " (the grasp's margin)")
     if written:
         grip = []
         for k in names:

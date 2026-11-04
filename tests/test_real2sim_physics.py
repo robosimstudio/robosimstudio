@@ -65,6 +65,15 @@ def _words(result: dict) -> dict[str, bool | None]:
     return {c["name"]: c["ok"] for c in result["checks"]}
 
 
+def linear_4310_clamp():
+    """The registered YAM's arena hand's own servo (its 50 N clamp), or None where it has none."""
+    from robosimstudio.robots.registry import get_embodiment, resolve_gripper
+
+    yam = get_embodiment("yam_bimanual")
+    hand = resolve_gripper(yam, yam.arms[0])
+    return getattr(hand, "actuation", None)
+
+
 class Verdict(unittest.TestCase):
     def test_real_physics_passes_every_line(self) -> None:
         result = physics.verdict(CLEAN, _clean_runs())
@@ -991,6 +1000,25 @@ class UnreadThings(unittest.TestCase):
         self.assertEqual(physics.unread_things(sim, ["box"]), {"box": "its solver could not be placed"})
 
 
+class OwnParticles(unittest.TestCase):
+    """Each deformable is read by its own particles, not the whole model's cloud its probe is over."""
+
+    def _probe(self):
+        from robosimstudio.core.probes.particle import ParticleProbe
+
+        probe = ParticleProbe(types.SimpleNamespace(particle_count=4), {"pouch": [0, 1], "scrunchie": [2, 3]})
+        probe.update_arrays(np.array([[0, 0, 0], [0, 0, 0.2], [1, 0, 0], [1, 0, 0]]), np.zeros((4, 3)))
+        return probe
+
+    def test_each_thing_reads_its_own_set(self) -> None:
+        probe = self._probe()
+        np.testing.assert_allclose(physics._own_points(probe, "pouch").mean(0), [0, 0, 0.1])
+        np.testing.assert_allclose(physics._own_points(probe, "scrunchie").mean(0), [1, 0, 0])
+
+    def test_a_probe_without_the_set_reads_every_particle(self) -> None:
+        self.assertEqual(len(physics._own_points(self._probe(), "towel")), 4)
+
+
 class StudyLines(unittest.TestCase):
     """The lines the physics study added: model, settle, a lasting flight, drop, plain, and drift that is elasticity."""
 
@@ -1052,6 +1080,20 @@ class StudyLines(unittest.TestCase):
         runs = self._drop_runs(fell=True)
         runs["written"].pop("carried")
         self.assertIs(_words(physics.verdict(CLEAN, runs))["drop"], True)
+
+    def test_drop_and_heavy_leave_a_deformable_carry_unread(self) -> None:
+        runs = self._drop_runs(fell=True)
+        for r in ("written", "heavy"):
+            runs[r]["things"]["crate"]["moved_max_mm"] = 0.0
+            runs[r]["deformables"] = {"scrunchie": {**_thing(112.0), "end_mm": 8.0}}
+        runs["written"].pop("carried")
+        words = _words(physics.verdict(CLEAN, runs))
+        self.assertIsNone(words["drop"])
+        self.assertIsNone(words["heavy"])
+        runs["heavy"]["things"]["crate"]["moved_max_mm"] = runs["written"]["things"]["crate"]["moved_max_mm"] = 300.0
+        result = physics.verdict(CLEAN, runs)  # a rigid thing moved too: heavy reads it, and says what it left out
+        self.assertIs(_words(result)["heavy"], True)
+        self.assertIn("the rigid handled things 2 times as heavy (scrunchie: not)", result["report"])
 
     def test_drop_reads_a_fall_off_the_heights_after_the_release(self) -> None:
         # dropped right over where the written run set it down: it ends there too, but it fell while the written
@@ -1270,6 +1312,150 @@ class StudyLines(unittest.TestCase):
         self.assertIsNone(_words(physics.verdict(stem, runs))["frozen"])
         door = {**CLEAN, "elastic_parts": ["stem#1"]}  # one sprung joint (a door) is not a stem
         self.assertIs(_words(physics.verdict(door, runs))["frozen"], False)
+
+    def test_the_robot_line_holds_the_robot_to_the_registered_one(self) -> None:
+        runs = _clean_runs()
+        same = {
+            "name": "yam_bimanual",
+            "registered": True,
+            "file": "",
+            "arm": "",
+            "gripper": "",
+            "hand": "",
+            "other": "",
+        }
+        self.assertIs(_words(physics.verdict({**CLEAN, "robot_spec": same}, runs))["robot"], True)
+        copied = {**same, "file": "its file is twin/assets/yam/arms.xml, not the registered embodiments/yam/..."}
+        result = physics.verdict({**CLEAN, "robot_spec": copied}, runs)
+        self.assertIs(_words(result)["robot"], False)
+        self.assertFalse(result["passed"])
+        servo = {**same, "gripper": "its gripper servo is the twin's own (gains 2000/40, 25 limit; registered: ...)"}
+        self.assertIn(
+            "gripper servo is the twin's own", physics.verdict({**CLEAN, "robot_spec": servo}, runs)["report"]
+        )
+        inline = {"name": "ur5e_gasket", "registered": False, "file": "assets/ur5e.xml"}
+        self.assertIsNone(_words(physics.verdict({**CLEAN, "robot_spec": inline}, runs))["robot"])
+        self.assertNotIn("robot", _words(physics.verdict(CLEAN, runs)), "no robot facts read, no line")
+
+    def test_a_robot_the_twin_registered_from_its_own_folder_is_its_own_file(self) -> None:
+        from dataclasses import replace
+
+        import robosimstudio as rss
+        from robosimstudio.robots.registry import EMBODIMENTS, get_embodiment, register_embodiment
+
+        EMBODIMENTS.load()
+        yam = get_embodiment("yam_bimanual")
+        here = Path(__file__).resolve().parent / "twin_robot_probe" / "arms.xml"
+        own = replace(yam, name="study_twin_registered_yam", asset=rss.AssetSpec(path=str(here)))
+        register_embodiment(own)
+        self.addCleanup(EMBODIMENTS.forget, "study_twin_registered_yam")
+
+        def sim(spec):
+            return types.SimpleNamespace(scene=types.SimpleNamespace(embodiment=types.SimpleNamespace(spec=spec)))
+
+        self.assertEqual(
+            physics.robot_departures(sim(yam)),
+            {
+                "name": "yam_bimanual",
+                "registered": True,
+                "as": "yam_bimanual",
+                "file": "",
+                "arm": "",
+                "gripper": "",
+                "hand": "",
+                "other": "",
+            },
+        )
+        renamed = replace(
+            yam,
+            name="yam_of_the_twin",
+            gripper_actuation=rss.ActuationSpec(target_ke=2000, target_kd=40, effort_limit=500),
+        )
+        read = physics.robot_departures(sim(renamed))
+        self.assertEqual((read["registered"], read["as"]), (True, "yam_bimanual"), "a renamed YAM is still the YAM")
+        self.assertIn("gripper servo is the twin's own", read["gripper"])
+        swapped = physics.robot_departures(sim(replace(yam, enable_self_collisions=True, gripper="franka_hand")))
+        self.assertIn("enable_self_collisions", swapped["other"])
+        self.assertEqual(swapped["hand"], "", "each YAM arm names its own hand, so the robot-wide one is not used")
+        same_file = replace(yam, asset=rss.AssetSpec(path=str(physics._robot_file(yam))))
+        self.assertEqual(physics.robot_departures(sim(same_file))["file"], "", "the same file, however it is named")
+        hand = linear_4310_clamp()
+        if hand is not None:
+            clamp = physics.robot_departures(sim(replace(yam, gripper_actuation=hand)))
+            self.assertEqual(clamp["gripper"], "", "gripper= the hand's own servo is no departure")
+        read = physics.robot_departures(sim(own))
+        self.assertIs(read["registered"], False, "registered by the twin, from a file the library does not ship")
+        self.assertEqual(read["file"], str(here))
+
+    def test_a_copy_of_the_robot_file_fails_whatever_it_is_named(self) -> None:
+        import tempfile
+        from dataclasses import replace
+
+        import robosimstudio as rss
+        from robosimstudio.robots.registry import EMBODIMENTS, get_embodiment
+
+        EMBODIMENTS.load()
+        yam = get_embodiment("yam_bimanual")
+        folder = Path(tempfile.mkdtemp(prefix="twin-robot-"))
+        copy = folder / "arms.xml"
+        copy.write_text(physics._robot_file(yam).read_text().replace('pos="0 0.3', 'pos="0 0.31'))  # an arm moved
+        own = folder / "ur.xml"
+        own.write_text('<mujoco><worldbody><body name="base"><body name="shoulder"/></body></worldbody></mujoco>')
+
+        def sim(spec):
+            return types.SimpleNamespace(scene=types.SimpleNamespace(embodiment=types.SimpleNamespace(spec=spec)))
+
+        for name in ("yam_bimanual", "keybox_yam"):
+            read = physics.robot_departures(sim(replace(yam, name=name, asset=rss.AssetSpec(path=str(copy)))))
+            self.assertEqual((read["registered"], read["as"]), (True, "yam_bimanual"), name)
+            self.assertIn("is a copy of the registered yam_bimanual", read["file"])
+        self.assertIs(
+            physics.robot_departures(sim(replace(yam, name="ur", asset=rss.AssetSpec(path=str(own)))))["registered"],
+            False,
+            "a robot of the twin's own, nothing like a shipped one",
+        )
+        suction = get_embodiment("yam_bimanual_suction")
+        read = physics.robot_departures(sim(replace(suction, name="twin_suction")))
+        self.assertEqual((read["as"], read["hand"], read["gripper"]), ("yam_bimanual_suction", "", ""))
+
+    def test_drawn_parts_that_do_not_collide_fail_past_a_centimetre(self) -> None:
+        runs = _clean_runs()
+        result = physics.verdict({**CLEAN, "gravity": 9.81, "drawn_only_mm": {"flower_1": 62.0}}, runs)
+        self.assertIs(_words(result)["model"], False)
+        self.assertIn("flower_1: drawn parts that do not collide reach 62 mm outside its colliders", result["report"])
+        self.assertIsNone(
+            _words(physics.verdict({**CLEAN, "gravity": 9.81, "drawn_only_mm": {"cap": 5.0}}, runs))["model"]
+        )
+
+    def test_drawn_only_reach_measures_past_the_colliders(self) -> None:
+        import newton
+
+        arr = lambda v: types.SimpleNamespace(numpy=lambda: np.asarray(v))  # noqa: E731
+        box = int(newton.GeoType.BOX)
+        vis, col = int(newton.ShapeFlags.VISIBLE), int(newton.ShapeFlags.COLLIDE_SHAPES)
+        # a stem collider 1 x 1 x 5 cm; a drawn-only leaf 4 cm long reaching 3 cm past it in x; a drawn-only label inside
+        model = types.SimpleNamespace(
+            shape_flags=arr([col, vis, vis]),
+            shape_type=arr([box, box, box]),
+            shape_scale=arr([[0.005, 0.005, 0.025], [0.02, 0.002, 0.005], [0.004, 0.004, 0.01]]),
+            shape_transform=arr([[0, 0, 0, 0, 0, 0, 1], [0.015, 0, 0, 0, 0, 0, 1], [0, 0, 0, 0, 0, 0, 1]]),
+            shape_body=arr([0, 0, 0]),
+            shape_source=[None, None, None],
+            body_count=1,
+            joint_count=0,
+        )
+        flower = types.SimpleNamespace(bodies=[0], body=0, shapes=[0, 1, 2], static=False)
+        sim = types.SimpleNamespace(
+            model=model, scene=types.SimpleNamespace(handles=types.SimpleNamespace(objects={"flower": flower}))
+        )
+        self.assertAlmostEqual(physics.drawn_only_reach(sim)["flower"], 30.0, places=1)
+        flower.shapes = [0, 2]
+        self.assertEqual(physics.drawn_only_reach(sim), {}, "a drawn part inside its collider")
+        flower.shapes = [0, 1, 2]
+        model.joint_count = 1  # the stem welded to the world: a vase on the bench, scenery
+        model.joint_type = arr([int(newton.JointType.FIXED)])
+        model.joint_parent, model.joint_child = arr([-1]), arr([0])
+        self.assertEqual(physics.drawn_only_reach(sim), {}, "scenery welded to the world is left out")
 
     def test_shape_volumes(self) -> None:
         import newton

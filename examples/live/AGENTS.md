@@ -48,10 +48,17 @@ itself; Claude Code through `CLAUDE.md`. Every command and reading is in
 2. **The physics is real.** The robot moves things only through its fingers'
    contact: no pose written onto a thing, no weld, attachment, latch, spring
    or dragger, no motor on a thing's own joints, no keyframed or scripted
-   motion of a thing, no collider added to the fingers (if the grip needs
-   purchase, enlarge a real feature of the thing and report it). Deformable
-   things are simulated as the material they are and behave like the clip
-   (how they bend, sag and slide). `./ctl physics` says whether it holds:
+   motion of a thing, no collider added to the fingers. The robot is the
+   registered one as it ships: its own file (no copy of it in the twin's
+   folder) and its own servo gains and force limits (no `arm=` or `gripper=`
+   of the twin's), placed with `at=` and, for each arm of a two-arm robot,
+   `arms_at=`. A thing keeps its real size and features: a grasp that will
+   not hold is fixed in the approach or the contact point, not by enlarging
+   the thing or stiffening the robot, and anything changed about a thing is
+   a departure the report names. Every visible part of a handled thing
+   collides (no leaf or label drawn that passes through what it meets).
+   Deformable things are simulated as the material they are and behave like
+   the clip (how they bend, sag and slide). `./ctl physics` says whether it holds:
    with the robot frozen nothing moves (a few millimetres is a note to
    explain); with the fingers held open the task
    does not happen (or the report says what carries the thing: a support, a
