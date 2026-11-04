@@ -172,3 +172,65 @@ class RtxCacheWarning(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+MJCF = """<mujoco><worldbody>
+  <body name="link_6">
+    <body name="camera_mount" pos="0.01 0.08 0.066" quat="0.906 0.423 0 0">
+      <body name="camera_frame" pos="0.009 0 0" quat="0 0 0 1">
+        <camera name="wrist" pos="0 0 0" quat="0 1 0 0" fovy="58"/>
+      </body>
+    </body>
+  </body>
+</worldbody></mujoco>"""
+
+
+class RobotCameras(unittest.TestCase):
+    def _cameras(self) -> dict:
+        path = Path(tempfile.mkdtemp(prefix="robot-cam-")) / "arm.xml"
+        path.write_text(MJCF)
+        return checks.robot_cameras(path)
+
+    def test_a_camera_is_found_from_every_body_above_it_in_camera_axes(self) -> None:
+        cams = self._cameras()
+        self.assertEqual(set(cams), {"link_6", "camera_mount", "camera_frame"}, "a collapse folds into any of them")
+        frame, fovy, name = cams["camera_frame"][0]
+        self.assertEqual((fovy, name), (58.0, "wrist"))
+        # MuJoCo's camera looks down its -z with +y up; turned half about x it is the frame body's own +z ahead
+        np.testing.assert_allclose(frame, np.eye(4), atol=1e-9)
+
+    def test_the_pose_on_the_body_it_rides_composes_the_bodies_between(self) -> None:
+        on_link, _, _ = self._cameras()["link_6"][0]
+        np.testing.assert_allclose(on_link[:3, 3][1:], [0.08, 0.066], atol=0.02)
+        self.assertAlmostEqual(float(np.linalg.det(on_link[:3, :3])), 1.0, places=6)
+
+    def test_a_camera_oriented_some_other_way_is_not_read(self) -> None:
+        path = Path(tempfile.mkdtemp(prefix="robot-cam-")) / "arm.xml"
+        path.write_text(
+            '<mujoco><worldbody><body name="b"><camera name="c" xyaxes="1 0 0 0 1 0"/></body></worldbody></mujoco>'
+        )
+        self.assertEqual(checks.robot_cameras(path), {})
+
+
+class MountReading(unittest.TestCase):
+    def test_the_robots_own_camera_rolled_half_round_passes(self) -> None:
+        mount = np.eye(4)
+        rolled = np.diag([-1.0, -1.0, 1.0, 1.0])
+        reading = checks.mount_reading(rolled, 58.0, mount, 58.0)
+        self.assertTrue(reading["ok"], reading)
+        self.assertEqual((reading["offset_mm"], reading["axis_deg"]), (0.0, 0.0))
+        self.assertAlmostEqual(abs(reading["roll_deg"]), 180.0, places=3)
+
+    def test_a_camera_moved_tilted_or_opened_fails(self) -> None:
+        mount = np.eye(4)
+        moved = np.eye(4)
+        moved[:3, 3] = (0.0, 0.06, 0.0)
+        self.assertFalse(checks.mount_reading(moved, 58.0, mount, 58.0)["ok"], "60 mm off")
+        c, s_ = np.cos(np.radians(40)), np.sin(np.radians(40))
+        tilted = np.eye(4)
+        tilted[:3, :3] = [[1, 0, 0], [0, c, -s_], [0, s_, c]]
+        reading = checks.mount_reading(tilted, 58.0, mount, 58.0)
+        self.assertFalse(reading["ok"])
+        self.assertAlmostEqual(reading["axis_deg"], 40.0, places=3)
+        self.assertFalse(checks.mount_reading(mount, 110.0, mount, 58.0)["ok"], "a field of view opened to 110")
+        self.assertTrue(checks.mount_reading(mount, 65.0, mount, 58.0)["ok"], "within a quarter of it")

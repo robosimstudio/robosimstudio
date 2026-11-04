@@ -29,6 +29,7 @@ from __future__ import annotations
 
 import hashlib
 import json
+import math
 import time
 from pathlib import Path
 from typing import Any
@@ -1086,11 +1087,12 @@ HAND_STILL = 0.3
 """A pixel of a wrist camera's clip is the hand's when it changes in under this share of the frames: the hand rides
 with the camera while the world sweeps past it (its fingers move as they open and close, so not every pixel of them
 qualifies; the palm, the camera's housing and the fingers' usual place do)."""
-HAND_IOU = 0.3
-"""The overlap of the drawn robot with the clip's hand below which a wrist camera is wrong: its mount, its roll, its
-field of view or the arm's first pose. Measured on two twins of one clip: wrist views about right but drawn too wide
-read 0.28 and 0.32, one turned 180 degrees on its mount 0.00. The picture says more than the number: the cyan
-outline lies on the yellow."""
+HAND_IOU = 0.1
+"""The overlap of the drawn robot with the clip's hand below which a wrist camera is wrong: turned the wrong way, or
+looking somewhere else. The camera's place and field of view are held by the mount (:data:`MOUNT_MM`), so this only
+has to tell a camera the right way round from one that is not. Measured on one two-arm clip with each camera at the
+robot's own mount and the clip's roll: 0.28 to 0.33 on the left, 0.15 on the right (its fingers stand at another
+opening for most of the clip); turned the wrong way, 0.00 on both."""
 HAND_ORIENTATIONS = (
     ("as mounted", lambda m: m),
     ("turned 180 degrees", lambda m: m[::-1, ::-1]),
@@ -1170,6 +1172,112 @@ def hand_reading(change: np.ndarray, robot: np.ndarray) -> dict:
     }
 
 
+MOUNT_MM = 20.0
+"""How far a wrist camera may sit from the robot's own camera on that arm [mm] before the hand line fails it."""
+MOUNT_DEG = 15.0
+"""How far its view may point from the robot's own camera's [deg]; a roll about the view is free (cameras are
+mounted turned)."""
+MOUNT_FOV = 0.25
+"""How far its vertical field of view may stray from the robot's own camera's, as a share of it. A twin that fitted
+only the hand once moved its cameras 60 mm off the robot's and opened them to 89 and 110 degrees against the
+camera's 58: the hand lined up and nothing else in the view did."""
+_MJ_TO_CAMERA = np.diag([1.0, -1.0, -1.0, 1.0])
+"""A MuJoCo camera looks down its -z with +y up; a CameraSpec looks down +z with +y down: a half turn about x."""
+
+
+def _mj_frame(element: Any) -> np.ndarray | None:
+    """The 4x4 an MJCF ``<body>`` or ``<camera>`` element places itself at, from its ``pos`` and ``quat`` (w x y z);
+    None for one oriented some other way (``euler``, ``axisangle``, ``xyaxes``, ``zaxis``), which is not read."""
+    from robosimstudio.core.math import transform_matrix
+
+    if any(element.get(k) is not None for k in ("euler", "axisangle", "xyaxes", "zaxis")):
+        return None
+    pos = [float(v) for v in (element.get("pos") or "0 0 0").split()]
+    w, x, y, z = [float(v) for v in (element.get("quat") or "1 0 0 0").split()]
+    norm = math.sqrt(w * w + x * x + y * y + z * z) or 1.0
+    return transform_matrix([*pos, x / norm, y / norm, z / norm, w / norm])
+
+
+def robot_cameras(mjcf: str | Path) -> dict[str, list[tuple[np.ndarray, float, str]]]:
+    """The cameras a robot's MJCF file carries, by the name of every body above each one: per body, each camera's
+    pose relative to it in a CameraSpec's axes (+z ahead, +y down), its vertical field of view and its name. A body
+    a fixed-joint collapse folds away still finds its cameras from the body it was folded into."""
+    import xml.etree.ElementTree as ET
+
+    root = ET.parse(str(mjcf)).getroot()
+    parent = {child: el for el in root.iter() for child in el}
+    out: dict[str, list[tuple[np.ndarray, float, str]]] = {}
+    for cam in root.iter("camera"):
+        local = _mj_frame(cam)
+        if local is None:
+            continue
+        local = local @ _MJ_TO_CAMERA
+        fovy = float(cam.get("fovy") or 45.0)
+        el = parent.get(cam)
+        while el is not None and el.tag == "body":
+            if el.get("name"):
+                out.setdefault(el.get("name"), []).append((local.copy(), fovy, cam.get("name") or ""))
+            frame = _mj_frame(el)
+            if frame is None:
+                break
+            local = frame @ local
+            el = parent.get(el)
+    return out
+
+
+def mount_reading(local: np.ndarray, fov_y: float, mount: np.ndarray, mount_fov: float) -> dict:
+    """How far a camera's pose on its body (``local``, 4x4 in CameraSpec axes) and its vertical field of view are from
+    the robot's own camera's: the offset [mm], the angle between the two views [deg], the roll about the view [deg],
+    and the two fields of view. ``ok`` is whether all are within :data:`MOUNT_MM`, :data:`MOUNT_DEG` and
+    :data:`MOUNT_FOV`; the roll is reported, never held."""
+    off = float(np.linalg.norm(local[:3, 3] - mount[:3, 3]) * 1000.0)
+    za, zb = local[:3, 2], mount[:3, 2]
+    axis = math.degrees(math.acos(max(-1.0, min(1.0, float(np.dot(za, zb))))))
+    xa = local[:3, 0] - np.dot(local[:3, 0], zb) * zb
+    roll = math.degrees(math.atan2(float(np.dot(np.cross(mount[:3, 0], xa), zb)), float(np.dot(mount[:3, 0], xa))))
+    fov_off = abs(fov_y / mount_fov - 1.0) if mount_fov else 0.0
+    ok = off <= MOUNT_MM and axis <= MOUNT_DEG and fov_off <= MOUNT_FOV
+    return {
+        "ok": ok,
+        "offset_mm": round(off, 1),
+        "axis_deg": round(axis, 1),
+        "roll_deg": round(roll, 1),
+        "fov_y": round(fov_y, 1),
+        "mount_fov_y": round(mount_fov, 1),
+    }
+
+
+def _own_camera(sim: Any, cam: Any) -> tuple[np.ndarray, float, str] | None:
+    """The robot's own camera on the body ``cam`` rides, from the registered robot's file (the scene's own when it
+    is not one the library ships), nearest to where ``cam`` sits; None where its file carries none there."""
+    from robosimstudio.paths import resolve_asset
+
+    from . import physics
+
+    spec = getattr(getattr(sim.scene, "embodiment", None), "spec", None)
+    if spec is None or getattr(spec, "asset", None) is None:
+        return None
+    reg, _ = physics.shipped_robot(spec)
+    try:
+        path = resolve_asset((reg or spec).asset)
+    except Exception:
+        return None
+    if path is None or Path(path).suffix.lower() != ".xml":
+        return None
+    label = str(list(sim.model.body_label)[cam.parent_body])
+    found = robot_cameras(path).get(label.rsplit("/", 1)[-1], [])
+    if not found:
+        return None
+    local = cam.world_matrix
+    return min(found, key=lambda m: float(np.linalg.norm(m[0][:3, 3] - local[:3, 3])))
+
+
+def _xform_words(m: np.ndarray) -> str:
+    from robosimstudio.core.math import xform_from_matrix
+
+    return "(" + ", ".join(f"{v:.4g}" for v in xform_from_matrix(m)) + ")"
+
+
 def _outline(mask: np.ndarray) -> np.ndarray:
     from scipy.ndimage import binary_erosion
 
@@ -1204,6 +1312,26 @@ def hand_line(server: Any, cam: Any, clip: str, *, count: int = 60) -> dict:
     stills.save_png(pic.astype(np.uint8), path)
     reading["picture"] = str(path)
     reading["detail"] += f" ({path.name}: the clip's hand yellow, the drawn robot cyan)"
+    try:
+        own = _own_camera(sim, cam)
+    except Exception as e:  # a robot file that will not parse leaves the mount unread, said
+        own, reading["detail"] = None, reading["detail"] + f"; the robot's own camera was not read ({e})"
+    if own is not None:
+        mount = mount_reading(cam.world_matrix, cam.fov_y_from_intrinsics, own[0], own[1])
+        reading["mount"] = mount
+        words = (
+            f"; it sits {mount['offset_mm']:.0f} mm and {mount['axis_deg']:.0f} deg from the robot's own camera "
+            f"{own[2]!r}, rolled {mount['roll_deg']:.0f} deg, with a {mount['fov_y']:.0f} deg field of view against "
+            f"its {mount['mount_fov_y']:.0f}"
+        )
+        if not mount["ok"]:
+            reading["ok"] = False
+            words += (
+                f" (bars {MOUNT_MM:g} mm, {MOUNT_DEG:g} deg, {100 * MOUNT_FOV:.0f}%): a wrist camera is the robot's "
+                f"own -- start it at xform={_xform_words(own[0])}, fov_y={own[1]:g} and fit its roll and a few "
+                "millimetres, not its place"
+            )
+        reading["detail"] += words
     return reading
 
 
