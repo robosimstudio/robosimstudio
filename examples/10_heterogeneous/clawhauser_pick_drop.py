@@ -61,11 +61,8 @@ a deep overshoot is what holds it. On the arm it is the same arithmetic -- each
 pad face is commanded this far inside the loop's outer surface -- and it
 saturates, because the pads' faces meet at a 4 mm gap; the clamp stops them.
 """
-ARM_BASE = (-0.48, 0.0, 0.132, 0.0, 0.0, 0.0, 1.0)
-"""Where the arm stands, in the work-surface frame: on the bench's near side,
-0.35 m from the loop. An embodiment's mount is stated in that frame; the IK and
-the measured poses are world, so `arm_route` adds the cell's origin."""
-CELL = "bench_075"
+ARM_BASE = arm_gripper.MOUNT
+CELL = arm_gripper.CELL
 PAD_HALF_THICKNESS = 0.003
 PAD_HALF_WIDTH = 0.006
 PAD_CLEARANCE = 0.001

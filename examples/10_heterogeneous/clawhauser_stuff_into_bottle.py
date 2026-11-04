@@ -123,11 +123,8 @@ the loop cannot roll them, and the flat face plus its friction is the grip.
 """
 PAD_HALF_THICKNESS = 0.003
 """The pad box's half-extent along the closing axis, as ``gripper.py`` builds it."""
-ARM_BASE = (-0.48, 0.0, 0.132, 0.0, 0.0, 0.0, 1.0)
-"""Where the arm stands, in the work-surface frame: on the bench's near side,
-0.35 m from the ring. An embodiment's mount is stated in that frame; the IK and
-the measured poses are world, so `arm_centre` adds the cell's origin."""
-CELL = "bench_075"
+ARM_BASE = arm_gripper.MOUNT
+CELL = arm_gripper.CELL
 PAD_HALF_WIDTH = 0.006
 """The pad is a 12 mm square patch on the inner end of the 10 x 12 x 30 mm finger
 post: 12 mm across, the post's own width, and 12 mm tall, so it does not extend
@@ -713,6 +710,20 @@ def run(
     }
     if self_contact["enabled"] != enable_self_contact:
         raise RuntimeError("the solver's self-contact setting does not match the scene's")
+    # The solver owns the self-contact detector, so its pairs live in the solver's
+    # buffer, not ``sim.pipeline.contacts``. Read whichever one is populated.
+    pair_info, pair_buffer = None, "absent"
+    for name, info in (
+        ("solver.detector", getattr(solver, "trimesh_collision_info", None)),
+        ("solver.contacts", getattr(getattr(solver, "contacts", None), "soft_self_contact_data", None)),
+        ("pipeline.contacts", getattr(sim.pipeline.contacts, "soft_self_contact_data", None)),
+    ):
+        if info is not None:
+            pair_info, pair_buffer = info, name
+            break
+    self_contact["pair_buffer"] = pair_buffer
+    if self_contact["enabled"] and pair_info is None:
+        raise RuntimeError("self-contact is on but no pair buffer was found; the counts would read zero")
     print(json.dumps({"self_contact": self_contact}), flush=True)
     quality = MeshQuality(sim, entity)
     dt = 1.0 / (CONTROL_HZ * SUBSTEPS)
@@ -833,6 +844,24 @@ def run(
             contact_shapes = contacts.soft_contact_shape.numpy()[: min(count, contacts.soft_contact_max)]
             depth = penetration(q, body_q, sim.model, contacts)
             touching = depth > 0.0
+            pairs, nearest = 0, None
+            if pair_info is not None:
+                # ``min_dist`` only means something on rows that found a pair.
+                for pair_counts, distances in (
+                    (
+                        pair_info.vertex_colliding_triangles_count.numpy(),
+                        pair_info.vertex_colliding_triangles_min_dist.numpy(),
+                    ),
+                    (
+                        pair_info.edge_colliding_edges_count.numpy(),
+                        pair_info.edge_colliding_edges_min_dist.numpy(),
+                    ),
+                ):
+                    pairs += int(pair_counts.sum())
+                    hit = pair_counts > 0
+                    if hit.any():
+                        found = float(distances[hit].min())
+                        nearest = found if nearest is None else min(nearest, found)
             finger = np.isin(contact_shapes, finger_shapes)
             in_glass = np.isin(contact_shapes, glass_shapes)
             # Two different penetrations, kept apart. A pad pressed 50 N into the
@@ -904,6 +933,8 @@ def run(
                 "minimum_tet_volume_ratio": float((det / rest_det).min()),
                 "inverted_tetrahedra": int(np.count_nonzero(det <= 0)),
                 "soft_contacts": count,
+                "self_contact_pairs": pairs,
+                "self_contact_min_dist_m": nearest,
                 "finger_contacts": int(np.count_nonzero(finger & touching)),
                 "body_contacts": body_contacts,
                 "container_contacts": int(np.count_nonzero(in_glass & touching)),

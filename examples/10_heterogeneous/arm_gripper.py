@@ -17,11 +17,56 @@ from pathlib import Path
 import numpy as np
 
 import robosimstudio as rss
+from robosimstudio.core.render.palette import BENCH_LIGHT, GROUND
 from robosimstudio.engines.pose import quat_rotate
 from robosimstudio.robots.registry import register_gripper
-from robosimstudio.specs import ActuationSpec, ArmSpec, AssetSpec, EmbodimentSpec, GripperSpec
+from robosimstudio.specs import ActuationSpec, ArmSpec, AssetSpec, CellSpec, EmbodimentSpec, GripperSpec, StaticSpec
 
 ASSET = Path(__file__).resolve().parent / "assets" / "airbot_play" / "airbot_play.xml"
+CELL = "bench_075_airbot"
+"""``bench_075``'s top, extended behind the arm's mount."""
+
+MOUNT = (-0.48, 0.0, 0.132, 0.0, 0.0, 0.0, 1.0)
+"""The arm's base in the work-surface frame: on its pedestal, 0.35 m from the toy.
+
+Lowering it to the bench top changes the IK's wrist roll and the pads miss the
+loop, so the mount height every route was planned and measured at is kept, and
+the pedestal below carries it.
+"""
+
+PEDESTAL_TOP = 0.136
+"""The plinth's height above the bench [m].
+
+The base mesh starts 3.9 mm above the body origin, so this is flush with it.
+"""
+
+rss.register_cell(
+    CellSpec(
+        name=CELL,
+        ground_z=0.0,
+        surface_z=0.75,
+        # The frame stays bench_075's, so every scene coordinate is unchanged.
+        center=(0.6, 0.0, 0.0),
+        half=(0.62, 0.65, 0.375),
+        # bench_075's top reaches x = 0.3025 and the arm's mount is at 0.12, so its
+        # base stood 180 mm off the near edge in mid-air.
+        statics=(
+            StaticSpec(
+                name="table",
+                half_extents=(0.62, 0.65, 0.375),
+                xform=(0.6, 0.0, 0.375, 0.0, 0.0, 0.0, 1.0),
+                color=GROUND,
+            ),
+            StaticSpec(
+                name="arm_pedestal",
+                half_extents=(0.09, 0.09, PEDESTAL_TOP / 2.0),
+                xform=(0.104, 0.0, 0.75 + PEDESTAL_TOP / 2.0, 0.0, 0.0, 0.0, 1.0),
+                color=BENCH_LIGHT,
+            ),
+        ),
+        provenance="bench_075's table extended 180 mm to the AIRBOT's mount",
+    )
+)
 ARM = "right"
 """The arm's name in every scene: the AIRBOT carries one."""
 

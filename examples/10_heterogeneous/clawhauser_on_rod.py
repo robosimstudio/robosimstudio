@@ -171,11 +171,8 @@ a run whose earlier frames had it threaded cleanly.
 """
 PAD_HALF_THICKNESS = 0.003
 """The pad box's half-extent along the closing axis, as ``gripper.py`` builds it."""
-ARM_BASE = (-0.48, 0.0, 0.132, 0.0, 0.0, 0.0, 1.0)
-"""Where the arm stands, in the work-surface frame: on the bench's near side,
-0.35 m from the loop. An embodiment's mount is stated in that frame; the IK and
-the measured poses are world, so `arm_route` adds the cell's origin."""
-CELL = "bench_075"
+ARM_BASE = arm_gripper.MOUNT
+CELL = arm_gripper.CELL
 PAD_CLEARANCE = 0.001
 """How far the pads' bottom faces start above the bench [m]. The close starts at
 the ground, so a loop lying there is straddled instead of one assumed to sit at
@@ -636,6 +633,20 @@ def run(
     }
     if self_contact["enabled"] != enable_self_contact:
         raise RuntimeError("the solver's self-contact setting does not match the scene's")
+    # The solver owns the self-contact detector, so its pairs live in the solver's
+    # buffer, not ``sim.pipeline.contacts``. Read whichever one is populated.
+    pair_info, pair_buffer = None, "absent"
+    for name, info in (
+        ("solver.detector", getattr(solver, "trimesh_collision_info", None)),
+        ("solver.contacts", getattr(getattr(solver, "contacts", None), "soft_self_contact_data", None)),
+        ("pipeline.contacts", getattr(sim.pipeline.contacts, "soft_self_contact_data", None)),
+    ):
+        if info is not None:
+            pair_info, pair_buffer = info, name
+            break
+    self_contact["pair_buffer"] = pair_buffer
+    if self_contact["enabled"] and pair_info is None:
+        raise RuntimeError("self-contact is on but no pair buffer was found; the counts would read zero")
     print(json.dumps({"self_contact": self_contact}), flush=True)
     quality = MeshQuality(sim, entity)
     dt = 1.0 / (CONTROL_HZ * SUBSTEPS)
@@ -713,6 +724,24 @@ def run(
             load = 0.5 * (float(sim.model.soft_contact_ke) + sim.model.shape_material_ke.numpy()[shapes]) * depth
             support = load * contacts.soft_contact_normal.numpy()[:count, 2]
             det = np.linalg.det(owned[tets[:, 1:]] - owned[tets[:, :1]])
+            pairs, nearest = 0, None
+            if pair_info is not None:
+                # ``min_dist`` only means something on rows that found a pair.
+                for pair_counts, distances in (
+                    (
+                        pair_info.vertex_colliding_triangles_count.numpy(),
+                        pair_info.vertex_colliding_triangles_min_dist.numpy(),
+                    ),
+                    (
+                        pair_info.edge_colliding_edges_count.numpy(),
+                        pair_info.edge_colliding_edges_min_dist.numpy(),
+                    ),
+                ):
+                    pairs += int(pair_counts.sum())
+                    hit = pair_counts > 0
+                    if hit.any():
+                        found = float(distances[hit].min())
+                        nearest = found if nearest is None else min(nearest, found)
             row = {
                 "frame": frame + 1,
                 "time_s": (frame + 1) / CONTROL_HZ,
@@ -721,6 +750,8 @@ def run(
                 "minimum_tet_volume_ratio": float((det / rest_det).min()),
                 "inverted_tetrahedra": int(np.count_nonzero(det <= 0)),
                 "soft_contacts": count,
+                "self_contact_pairs": pairs,
+                "self_contact_min_dist_m": nearest,
                 "finger_contacts": int(np.count_nonzero(finger & touching_shape)),
                 "rod_ring_contacts": int(np.count_nonzero(on_rod & np.isin(touching, loop_ids) & touching_shape)),
                 "rod_load_n": float(load[on_rod].sum()),
