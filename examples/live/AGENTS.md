@@ -122,7 +122,9 @@ itself; Claude Code through `CLAUDE.md`. Every command and reading is in
   Over a plate the robot's links, its hands and the things it handles are
   the only rendered pixels: give them the clip's colours and finish (an arm
   can read silver, grey or tan under the clip's light; a rubber part is
-  black), and check them in the composite, not in the free view.
+  black), and check them in the composite, not in the free view. The robot's
+  look is its spec's `color`, `finish` and `appearance` (`replace(...)` of the
+  registered one), never a copy of its file.
 - **A camera on a wrist is calibrated against the hand it carries.** In its
   clip the robot's own palm and fingers sit in the same pixels in every
   frame, so they say where the camera is on the wrist -- its offset, its roll
