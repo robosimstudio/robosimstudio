@@ -132,10 +132,14 @@ itself; Claude Code through `CLAUDE.md`. Every command and reading is in
   of one arm's picture and the bottom of the other's), its field of view --
   and the view follows the arm's joints: read each arm's first pose off the
   fixed cameras and the wrist views together. `./ctl check --camera <wrist
-  camera> --clip ref/<its clip>` draws the robot over the clip's hand; get
-  its `hand` line to PASS, the cyan outline on the yellow, before the
-  routine. A wrist view that does not match is the camera or the arm,
-  never something to explain away.
+  camera> --clip ref/<its clip>` draws the robot over the clip's hand and
+  holds the camera to the robot's own camera on that arm (the registered
+  file's; the line prints it): start there, fit its roll and a few
+  millimetres, and get the `hand` line to PASS, the cyan outline on the
+  yellow, before the routine. Moving the camera or opening its field of view
+  until the hand lines up leaves the rest of the view wrong. A wrist view
+  that does not match is the camera or the arm, never something to explain
+  away.
 - **Read the reference before writing the routine**: every camera, its phases
   with their seconds, and the moments of contact -- which surface of the
   gripper touches which surface of the thing, and what the other hand holds.

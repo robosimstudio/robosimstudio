@@ -368,22 +368,29 @@ or `--object`) is a SKIP. The bars are defaults, and `check` blocks nothing.
 camera's housing and the fingers' usual place stay in the same pixels while
 the world sweeps past, so what changes in under 30% of 60 frames spread over
 the clip is the hand. The line draws the robot through the camera as the scene
-stands (run it from a reset, before the routine moves the arms) and reads its
-overlap with that hand:
+stands (run it from a reset, before the routine moves the arms), reads its
+overlap with that hand, and holds the camera to the robot's own camera on that
+arm, read from the registered robot's file:
 
 ```
-FAIL  hand         the robot drawn over the clip's hand (what stays still through the clip): IoU 0.00 (bar 0.3); the clip's hand is centred 51% across, 10% down, the drawn robot 49% across, 87% down; turned 180 degrees it would read 0.15: is the camera mounted turned 180 degrees? (check_hand_cam_right.png: the clip's hand yellow, the drawn robot cyan)
+FAIL  hand         the robot drawn over the clip's hand (what stays still through the clip): IoU 0.00 (bar 0.1); the clip's hand is centred 51% across, 10% down, the drawn robot 49% across, 87% down; turned 180 degrees it would read 0.15: is the camera mounted turned 180 degrees? (check_hand_cam_right.png: the clip's hand yellow, the drawn robot cyan); it sits 0 mm and 0 deg from the robot's own camera 'right', rolled 0 deg, with a 58 deg field of view against its 58
 ```
 
-It also tries the drawn robot turned 180 degrees and mirrored, and names one
-that reads clearly better: a wrist camera is often mounted turned on its arm.
-Open `run/check_hand_<camera>.png` -- the clip's first frame, its hand yellow,
-the drawn robot outlined cyan -- and move the mount (`xform`: its roll first),
-the field of view and the arm's first pose until the outline lies on the
-yellow. Two wrist views of one clip that were about right but drawn too wide
-read 0.28 and 0.32; one turned 180 degrees read 0.00. A camera that rides
-nothing gets a SKIP, and a clip in which nothing stays still is no wrist
-clip.
+The overlap tells a camera the right way round from one that is not: it
+also tries the drawn robot turned 180 degrees and mirrored, and names one that
+reads clearly better, since a wrist camera is often mounted turned on its arm.
+The mount holds the rest: the camera within 20 mm of the robot's own, its view
+within 15 degrees of that camera's (a roll about the view is free), and its
+field of view within 25% of the camera's. Past any of those the line fails and
+prints the robot's own camera as `xform=(...)`, `fov_y=...`: start there and
+fit the roll. A twin that fitted the hand alone moved its cameras 60-90 mm off
+the robot's and opened them to 89 and 110 degrees against 58; the hand lined
+up and nothing else in the view did. Open `run/check_hand_<camera>.png` -- the
+clip's first frame, its hand yellow, the drawn robot outlined cyan. Measured on
+one clip at the robot's own mount and the clip's roll: 0.28-0.33 on one wrist,
+0.15 on the other, whose fingers stand at another opening for most of the
+clip; turned the wrong way, 0.00. A camera that rides nothing gets a SKIP, and
+a clip in which nothing stays still is no wrist clip.
 
 ### The physics replays
 
@@ -430,7 +437,13 @@ NOTE  grip     the fingers pressed flower_1 0.7 N (p95 0.7) by hand 2; ...; the 
   the registered hand's (the YAM's 50 N clamp). It
   passes when the routine finishes and the things end where the written run
   left them (within 50 mm and 30°): a grip that only holds at a friction no
-  rubber pad has fails here, even when the routine's own checks miss it.
+  rubber pad has fails here, even when the routine's own checks miss it. A
+  thing that ends held up by other things alone, the same ones in both runs
+  (a mug on a peg, a plate in a rack: nothing static under it and no finger
+  on it, read off the last step's contacts), is held to where it ends, not to
+  how it is turned: it swings to where it swings, and one twin's replays left
+  the same mug on the same peg 1 to 13 mm and up to 92° apart. This holds for
+  every line that reads an end.
   When `built` lowered nothing (the scene was already as built, so it only
   played the routine again) and nothing in the scene keeps a friction built
   does not cap (a deformable, or a thing another solver steps), a different
@@ -478,7 +491,13 @@ NOTE  grip     the fingers pressed flower_1 0.7 N (p95 0.7) by hand 2; ...; the 
   of its name. A copy of its file (in the twin's folder, edited or not), or
   arm or gripper servo gains and force limits of the twin's own (`arm=`,
   `gripper=`), fail: use the registered robot, placed with `at=` and
-  `arms_at=`. A robot built from a file nothing registered is a NOTE: its
+  `arms_at=`. So does a robot built by a class of the twin's own (a subclass
+  of the library's swapped into the build), and so does any difference in the
+  built model's numbers from the registered robot built alone: each joint's
+  range, servo gain and damping, force limit and armature, each shape's
+  friction and each body's mass, whatever changed them. Where the bases stand
+  is not compared. Its look -- `color`, `finish`, `appearance` on the spec --
+  is the twin's. A robot built from a file nothing registered is a NOTE: its
   limits are the file's own and are not checked.
 - **settle** reads how the scene's own settle, before the first step, moved
   each thing from where it was put, and how deep each sits in something at
