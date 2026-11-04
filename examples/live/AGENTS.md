@@ -22,7 +22,8 @@ itself; Claude Code through `CLAUDE.md`. Every command and reading is in
   photo's), `./ctl check` (finite, drift, overlap), `./ctl play NAME --record
   TAKE --wait` (film a routine; it is put beside the clip), `./ctl physics`
   (the routine replayed with the robot frozen, the fingers open, the robot
-  as built and the things heavier), `./ctl log`.
+  as built and the things heavier), `./ctl log`. `./ctl check --camera C
+  --clip ref/<C's clip>` holds a camera on a wrist to the hand its clip shows.
   `./ctl camera fit` solves a camera from six or more points whose world
   place you know and whose pixel you read off a still; `./ctl ref plate`
   makes a clean plate of a fixed camera's clip, which a camera takes as its
@@ -44,7 +45,9 @@ itself; Claude Code through `CLAUDE.md`. Every command and reading is in
    of the render matches the clip's: the things at their size and place, and
    the background -- the table, the room, what stands behind -- identical
    (a fixed camera over its clean plate: `compare`'s `picture` line reads
-   near 0 behind the things).
+   near 0 behind the things). The picture you judge is the path tracer's,
+   the renderer the take films with: `up --renderer gl` is for fast work on
+   geometry, not for the look you report.
 2. **The physics is real.** The robot moves things only through its fingers'
    contact: no pose written onto a thing, no weld, attachment, latch, spring
    or dragger, no motor on a thing's own joints, no keyframed or scripted
@@ -68,7 +71,12 @@ itself; Claude Code through `CLAUDE.md`. Every command and reading is in
    run).
 3. **The motion matches.** A `routine` bound in `scene.py` (a Run button on
    the page) does what the clip shows: the same first state, the same last
-   state, the same contacts in between.
+   state, the same contacts in between -- the clip's grasp, which surface of
+   each finger touches which surface of the thing (a pinch on a rim is one
+   finger inside it and one outside, not a squeeze across the whole thing),
+   not another grasp that happens to hold -- at the clip's pace: each phase
+   starts within a second or two of the clip's on the take's strip, and the
+   arm takes the path the clip's does, not a detour of its own.
 
 ## What has mattered on every twin so far
 
@@ -88,9 +96,17 @@ itself; Claude Code through `CLAUDE.md`. Every command and reading is in
   Every static thing still has to be there as a collider under its picture
   (the bench, a box, a tray, a fixture); its look comes from the plate, and
   the shadows of what moves fall on it from overhead, or from `render=`'s
-  `light_direction` when the clip's light comes from elsewhere. A
-  camera that moves (on a wrist) cannot use a plate: what it sees is
-  modelled and textured, with the fixed cameras' plates as its reference.
+  `light_direction` when the clip's light comes from elsewhere. A plate is
+  the clip's own pixels throughout: a region painted in comes from around it
+  (`ref plate --paint`), never a flat fill, and it holds no robot or thing
+  that will not be drawn over it. The clip's pixels go behind a fixed camera
+  and nowhere else: no plate, frame or straightened photo of the clip laid on
+  geometry (a table top, a wall, a plane of the room) -- it carries one
+  camera's glare and parallax into every other view. A camera that moves (on
+  a wrist) cannot use a plate: what it sees is modelled -- the table, the
+  room, the furniture -- with materials of its own (a wood, a paint, a
+  fabric) made to look like the plates, and only a printed face (a label, a
+  tag, a mat's grid) cut out of a still.
 - **The physics is measured, not assumed.** Decide what each thing is --
   rigid, jointed, or one of the materials (a rubber loop is a closed rod, a
   band; a sheet is cloth; a sponge is soft) -- and probe it before filming:
@@ -107,10 +123,17 @@ itself; Claude Code through `CLAUDE.md`. Every command and reading is in
   the only rendered pixels: give them the clip's colours and finish (an arm
   can read silver, grey or tan under the clip's light; a rubber part is
   black), and check them in the composite, not in the free view.
-- **A camera on a wrist is only as right as the arm.** Its view follows the
-  arm's joints: read each arm's first pose off the fixed cameras and the
-  wrist views together, and check the wrist view against its clip before
-  the routine.
+- **A camera on a wrist is calibrated against the hand it carries.** In its
+  clip the robot's own palm and fingers sit in the same pixels in every
+  frame, so they say where the camera is on the wrist -- its offset, its roll
+  (a wrist camera is often mounted turned 180 degrees: the fingers at the top
+  of one arm's picture and the bottom of the other's), its field of view --
+  and the view follows the arm's joints: read each arm's first pose off the
+  fixed cameras and the wrist views together. `./ctl check --camera <wrist
+  camera> --clip ref/<its clip>` draws the robot over the clip's hand; get
+  its `hand` line to PASS, the cyan outline on the yellow, before the
+  routine. A wrist view that does not match is the camera or the arm,
+  never something to explain away.
 - **Read the reference before writing the routine**: every camera, its phases
   with their seconds, and the moments of contact -- which surface of the
   gripper touches which surface of the thing, and what the other hand holds.
