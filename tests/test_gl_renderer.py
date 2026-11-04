@@ -77,6 +77,33 @@ class TestACollapsedDeformable(unittest.TestCase):
             gl.close()
         self.assertTrue(np.isfinite(frame["depth"]).all())
 
+    def test_a_rope_is_drawn_by_its_outside(self) -> None:
+        """A tube's faces wound inward were culled as backs: gl drew the inside of its far wall, a hairline at the
+        bench's depth that a plate composite then trimmed away. Seen from above, the depth is the tube's top."""
+        import newton
+
+        from robosimstudio.core.cameras import CameraSpec
+        from robosimstudio.solvers.render.gl import RendererGL
+
+        builder = newton.ModelBuilder()
+        for i in range(8):
+            builder.add_particle(pos=(0.02 * i, 0.0, 0.2), vel=(0.0, 0.0, 0.0), mass=0.01, radius=0.01)
+        model = builder.finalize(device="cpu")
+        rope = types.SimpleNamespace(particles=np.arange(8), triangles=np.zeros((0, 3), np.int64), tube_radius=0.01,
+                                     point_radius=0.0, surface=None)  # fmt: skip
+        cam = CameraSpec(name="c", width=64, height=48, fov_y=30.0, eye=(0.07, 0.0, 1.0), look_at=(0.07, 0.0, 0.0))
+        try:
+            gl = RendererGL(model, [cam], channels=("rgb", "depth"), deformables={"rope": rope})
+        except RuntimeError as exc:
+            self.skipTest(f"no OpenGL context here: {exc}")
+        try:
+            frame = gl.render(model.state())["c"]
+        finally:
+            gl.close()
+        self.assertAlmostEqual(float(frame["depth"][24, 32]), 1.0 - 0.2 - 0.01, delta=0.002)
+        wide = int(np.count_nonzero(frame["depth"][:, 32] > 0))
+        self.assertGreaterEqual(wide, 2, "as wide as a 20 mm tube is at 0.8 m through 90 px of focal length")
+
 
 class TestWhichGpuItDrawsOn(unittest.TestCase):
     """EGL lists every GPU whatever ``CUDA_VISIBLE_DEVICES`` says; left to MuJoCo, a context lands on GPU 0."""

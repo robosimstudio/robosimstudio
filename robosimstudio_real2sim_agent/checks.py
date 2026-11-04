@@ -426,7 +426,7 @@ def write_look_sheet(base: Path, rgb: np.ndarray, result: dict) -> str:
 class Recorder:
     """Frames, ids and positions off a script as the page plays it, written down when it ends."""
 
-    def __init__(self, server: Any, name: str, *, camera: str = "", every: int = 4) -> None:
+    def __init__(self, server: Any, name: str, *, camera: str = "", every: int = 4, also: Any = ()) -> None:
         from robosimstudio.core.render.video import VideoWriter
 
         self.server = server
@@ -458,23 +458,161 @@ class Recorder:
         self.last_capture = -1
         self._probed: tuple | None = None
         """The probe's step count, reset mark and frame: :meth:`start`'s frame 0 when the scene has not stepped since."""
+        self.also: dict[str, dict[str, Any]] = {}
+        """Per renderer ``--also`` names: its renderer, its video's writer and path. Each films the take's own states."""
+        self.grid: dict[str, Any] | None = None
+        """The side-by-side video's writer and path, while ``--also`` names another renderer."""
+        self.also_skipped: list[str] = []
+        """``--also`` names that are the page's own renderer, which films the take itself."""
+        self.also_dir = self.run_dir / f"{name}.renderers"
+        """The take's ``--also`` videos, one per renderer and ``all.mp4`` side by side: a folder of its own, made
+        afresh as each take of this name begins, so nothing of an earlier one is left to read as this one's."""
+        try:
+            self._open_also(also, VideoWriter)
+        except Exception:
+            self.close()
+            raise
 
-    def _look(self) -> tuple[np.ndarray, np.ndarray, Any]:
-        """The scene as the take films it now: the picture, the named ids, and the particles read for both."""
+    def _open_also(self, also: Any, writer: Any) -> None:
+        """A renderer and a video per name in ``also`` other than the page's own (which films the take itself), and
+        a grid of them all: one run drawn by every renderer, rather than a run per renderer that the sim, not being
+        deterministic, would play differently."""
+        from dataclasses import replace
+
+        from robosimstudio.solvers.render import RENDERERS, backend_class, supported_channels
+
+        def alias(b: str) -> str:  # a dotted path to a registered renderer goes by its alias
+            return next((a for a, path in RENDERERS.items() if path == b), b)
+
+        own = alias(self.sim.platform.renderer_for("")[0])
+        names = [alias(str(b).strip()) for b in (also.split(",") if isinstance(also, str) else also) if str(b).strip()]
+        for b in names:
+            backend_class(b)  # an unknown name fails here, before anything is filmed
+        names = list(dict.fromkeys(names))
+        self.also_skipped = [b for b in names if backend_class(b) is backend_class(own)]
+        if self.also_skipped:
+            print(f"[rss] take {self.name!r}: {own} is the page's own renderer, which films the take itself")
+        names = [b for b in names if b not in self.also_skipped]
+        if not names:
+            return
+        bare = replace(self.cam, background="")
+        for b in names:
+            channels = ["rgb"] + (["depth"] if self.cam.background and "depth" in supported_channels(b) else [])
+            entry = self.also[b] = {"video": self.also_dir / f"{b}.mp4"}  # an alias, or the whole path
+            entry["renderer"] = self.sim.make_renderer(b, cameras=[bare], channels=channels)
+            if getattr(backend_class(b), "warms_up", False):
+                entry["renderer"].render(self.sim.state)  # the first frame only builds the stage
+            entry["writer"] = writer(entry["video"], fps=self.fps)
+        grid = self.also_dir / "all.mp4"
+        self.grid = {"video": grid, "writer": writer(grid, fps=self.fps)}
+        self.grid_labels = [own, *names]
+
+    def _look_also(
+        self, size: tuple[int, int], passed: dict[str, Any] | None, strict: bool = False
+    ) -> dict[str, np.ndarray]:
+        """The state the take films now, through each ``--also`` renderer, over the camera's plate (``passed``,
+        the plate pass the take's own picture was composited on) when it has one.
+
+        A frame a renderer fails is black in its video and tile, as :meth:`Sim.render` keeps a renderer that failed
+        one frame; one that is done (``closed``: a Blender that died) or fails :data:`ALSO_MISSES` frames running is
+        stopped, its video ends there and its tile stays black, said in :meth:`finish`. The take itself, and every
+        other renderer, carry on. ``strict`` (the probe, before anything is filmed) raises instead: a renderer that
+        cannot draw the first frame is refused."""
+        out: dict[str, np.ndarray] = {}
+        black = np.zeros((*size, 3), np.uint8)
+        for b, entry in self.also.items():
+            if not self._drawing(entry):
+                out[b] = black
+                continue
+            try:
+                frame = entry["renderer"].render(self.sim.state)[self.cam.name]
+                rgb = _sized(stills.to_uint8(np.asarray(frame["rgb"])[..., :3]), size)
+                entry["running"] = 0
+            except Exception as exc:
+                if strict:
+                    raise RuntimeError(
+                        f"--also {b}: the first frame would not draw: {type(exc).__name__}: {exc}"
+                    ) from exc
+                entry["running"] = entry.get("running", 0) + 1
+                entry["missed"] = entry.get("missed", 0) + 1
+                if entry["running"] < ALSO_MISSES and not getattr(entry["renderer"], "closed", False):
+                    out[b] = black
+                    continue
+                entry["failed"] = f"{type(exc).__name__}: {exc}"[:300]
+                print(
+                    f"[rss] take {self.name!r}: the {b} renderer stopped ({entry['failed']}); its tile is black from here"
+                )
+                for k in ("renderer", "writer"):  # its video ends where it stopped
+                    try:
+                        entry.pop(k).close()
+                    except Exception:
+                        pass
+                rgb = black
+            else:
+                if passed:
+                    try:  # the renderer drew: a composite that fails leaves its picture raw, not the renderer stopped
+                        depth = frame.get("depth")
+                        if depth is not None and np.shape(depth)[:2] != size:
+                            depth = None  # a depth of another size cannot trim this composite: the collider mask alone
+                        rgb = stills.to_uint8(self.sim.over_plate(self.cam, rgb, depth=depth, plate_pass=passed))
+                    except Exception as exc:
+                        if "raw" not in entry:
+                            entry["raw"] = f"{type(exc).__name__}: {exc}"[:300]
+                            print(f"[rss] take {self.name!r}: {b}'s frames go unplated ({entry['raw']})")
+            out[b] = rgb
+        return out
+
+    def _drawing(self, entry: dict) -> bool:
+        """Whether an ``--also`` renderer is still drawn: it has not stopped, and its video or the grid still takes
+        its frames."""
+        grid = self.grid is not None and "writer" in self.grid
+        return "failed" not in entry and ("writer" in entry or grid)
+
+    def _look(self, strict: bool = False) -> tuple[np.ndarray, np.ndarray, Any, dict[str, np.ndarray]]:
+        """The scene as the take films it now: the picture, the named ids, the particles read for both, and the same
+        state through each ``--also`` renderer still drawing, composited on the one plate pass."""
         sim = self.sim
         sim.sync()
         frame = self.renderer.render(sim.state)[self.cam.name]
-        rgb = stills.render_still(sim, self.cam)
+        shared = bool(self.cam.background) and any(self._drawing(e) for e in self.also.values())
+        passed = sim.plate_pass(self.cam) if shared else None
+        rgb = stills.to_uint8(sim.render(self.cam, plate_pass=passed)["rgb"][..., :3])
         q = _particles(sim) if self.deformable_labels else None  # once a frame, for the ids and the samples both
         seg = name_deformables(sim, self.cam, np.asarray(frame["seg"]).astype(np.int32), self.deformable_labels, q)
-        return rgb, seg, q
+        return rgb, seg, q, self._look_also(rgb.shape[:2], passed, strict=strict)
 
     def probe(self) -> None:
         """Film one frame and encode it once, before anything the take would replace is touched: a camera, a
-        renderer, an id lookup or a video encoder that fails, fails here. The frame is kept for :meth:`start`."""
-        look = self._look()
-        self.writer.try_encode(look[0])
+        renderer (an ``--also`` one too), an id lookup or a video encoder that fails, fails here. The frame is kept
+        for :meth:`start`."""
+        look = self._look(strict=True)
+        self._write(look, encode=True)
         self._probed = (int(self.sim.step_count), reset_mark(self.sim), look)
+
+    def _write(self, look: tuple, encode: bool = False) -> None:
+        """Hand one look's pictures to their writers: the take's, each ``--also`` renderer's and the grid's; or, with
+        ``encode``, only try that each encodes (the probe)."""
+        rgb, extra = look[0], look[3]
+        (self.writer.try_encode if encode else self.writer.append)(rgb)  # the take's own: its failure is the take's
+        sides: list[tuple[dict, Any]] = [(self.also[b], f) for b, f in extra.items() if "writer" in self.also[b]]
+        if self.grid is not None and "writer" in self.grid:
+            labels = [self.grid_labels[0]] + [
+                f"{b} (stopped)" if "failed" in self.also[b] else b for b in self.grid_labels[1:]
+            ]
+            sides.append((self.grid, lambda: grid_frame([rgb, *extra.values()], labels)))
+        for entry, side in sides:  # an --also video or the grid that will not encode stops alone, said in finish
+            try:
+                frame = side() if callable(side) else side  # the grid drawn here: its failure is the grid's
+                (entry["writer"].try_encode if encode else entry["writer"].append)(frame)
+            except Exception as exc:
+                if encode:
+                    raise
+                # the video, not the renderer: its tile in the grid carries on
+                entry.setdefault("video_failed", f"its video stopped: {type(exc).__name__}: {exc}"[:300])
+                try:
+                    entry.pop("writer").close()
+                except Exception:
+                    pass
 
     def start(self, fresh: bool = False) -> None:
         """Take the scene as it stands as the take's beginning: its step count from here, and frame 0 -- the
@@ -482,13 +620,27 @@ class Recorder:
         says something else may have moved it (a dropped routine's cleanup moves things without a step)."""
         self._raw, self._mark, self.steps = int(self.sim.step_count), reset_mark(self.sim), 0
         self.started = time.perf_counter()
+        self._clear_stale()
         probed, self._probed = self._probed, None
         same = not fresh and probed is not None and probed[:2] == (self._raw, self._mark)
         self.capture(probed[2] if same else None)
 
+    def _clear_stale(self) -> None:
+        """Replace the folder of an earlier take of this name's ``--also`` videos, once the probe has passed and this
+        take begins (that take has finished by then): whatever it left, a crashed take's or a stopped video's too."""
+        import shutil
+
+        shutil.rmtree(self.also_dir, ignore_errors=True)
+        if self.also:
+            self.also_dir.mkdir(parents=True, exist_ok=True)
+
     def close(self) -> None:
-        """Close the video writer and the id renderer; safe to call twice."""
-        for thing in (self.writer, self.renderer):
+        """Close the video writers and the renderers (the id renderer, any ``--also``); safe to call twice."""
+        sides = [*getattr(self, "also", {}).values(), *([self.grid] if getattr(self, "grid", None) else [])]
+        extra = [e[k] for e in sides for k in ("writer", "renderer") if k in e]
+        for thing in (self.writer, self.renderer, *extra):
+            if thing is None:
+                continue
             try:
                 thing.close()
             except Exception:
@@ -508,8 +660,9 @@ class Recorder:
         """Film the scene as it stands, or as ``look`` (:meth:`_look`'s) already filmed it."""
         sim = self.sim
         self._advance()
-        rgb, seg, q = look if look is not None else self._look()
-        self.writer.append(rgb)
+        look = look if look is not None else self._look()
+        _rgb, seg, q, _extra = look
+        self._write(look)
         self.segs.append(seg[::SEG_SCALE, ::SEG_SCALE].astype(np.uint8 if len(self.names) < 255 else np.int32))
         try:
             body_q = np.asarray(sim.state.body_q.numpy(), dtype=np.float64)
@@ -542,6 +695,17 @@ class Recorder:
             if self.frames and self.steps != self.last_capture:
                 self.capture()  # the state the script left, which is the "after"
         finally:
+            # the --also videos and the grid first, each on its own: one that cannot be written is said, not left
+            # looking written
+            for entry in [*self.also.values(), *([self.grid] if self.grid is not None else [])]:
+                writer = entry.pop("writer", None)
+                try:
+                    if writer is not None:
+                        writer.close()
+                except Exception as exc:
+                    entry.setdefault(
+                        "video_failed", f"its video could not be written: {type(exc).__name__}: {exc}"[:300]
+                    )
             # closed whatever happened above: the writer is an ffmpeg process
             self.close()
         meta = {
@@ -558,6 +722,31 @@ class Recorder:
             "wall_seconds": round(time.perf_counter() - self.started, 1),
             "frames": self.frames,
         }
+        if self.also and self.grid is not None:
+            # a renderer that stopped closed its video where it stopped: offered, shorter, said in also_failed; a
+            # video whose encoder failed may be unreadable and is not
+            meta["also"] = {
+                b: str(e["video"])
+                for b, e in self.also.items()
+                if "video_failed" not in e and Path(e["video"]).is_file()
+            }
+            if "video_failed" not in self.grid:
+                meta["renderers"] = str(self.grid["video"])
+            failed = {
+                b: e.get("failed") or e["video_failed"]
+                for b, e in [*self.also.items(), ("grid", self.grid)]
+                if {"failed", "video_failed"} & set(e)
+            }
+            if failed:
+                meta["also_failed"] = failed
+            missed = {b: e["missed"] for b, e in self.also.items() if e.get("missed") and "failed" not in e}
+            if missed:
+                meta["also_missed"] = missed  # frames drawn black, the renderer carrying on
+            unplated = {b: e["raw"] for b, e in self.also.items() if "raw" in e}
+            if unplated:
+                meta["also_unplated"] = unplated  # a composite that failed: those frames as the renderer drew them
+        if self.also_skipped:
+            meta["also_skipped"] = self.also_skipped
         (self.run_dir / f"{self.name}.json").write_text(json.dumps(meta, default=_plain))
         if self.segs:
             np.savez_compressed(self.run_dir / f"{self.name}_seg.npz", seg=np.stack(self.segs))
@@ -567,8 +756,48 @@ class Recorder:
             "frames": len(self.frames),
             "seconds": self.frames[-1]["t"] if self.frames else 0.0,
             "wall_seconds": meta["wall_seconds"],
+            **({k: meta[k] for k in ALSO_KEYS if k in meta}),
         }
 
+
+def grid_frame(frames: list[np.ndarray], labels: list[str]) -> np.ndarray:
+    """The frames two to a row, each labelled with its renderer; with more than two, at half size each, so the grid
+    is about one frame's pixels and costs a take about one more frame's encoding."""
+    from PIL import Image
+
+    from robosimstudio.record.recorder import draw_label
+
+    h, w = frames[0].shape[:2]
+    if len(frames) > 2:
+        h, w = h // 4 * 2, w // 4 * 2  # half, kept even for the encoder
+    cols = 1 if len(frames) == 1 else 2
+    rows = (len(frames) + cols - 1) // cols
+    sheet = Image.new("RGB", (w * cols, h * rows), (16, 20, 24))
+    for i, (frame, label) in enumerate(zip(frames, labels, strict=True)):
+        tile = Image.fromarray(np.asarray(frame)[..., :3])
+        if tile.size != (w, h):
+            tile = tile.resize((w, h), Image.BILINEAR)
+        draw_label(tile, label, size=max(14, h // 22), right=False)
+        sheet.paste(tile, ((i % cols) * w, (i // cols) * h))
+    return np.asarray(sheet)
+
+
+ALSO_MISSES = 3
+"""Frames running an ``--also`` renderer may fail before it is stopped for the rest of the take."""
+
+
+def _sized(rgb: np.ndarray, size: tuple[int, int]) -> np.ndarray:
+    """``rgb`` at ``size`` (rows, columns): an ``--also`` renderer that draws another size is scaled to the take's,
+    so its video, its black frames and the grid all agree."""
+    if rgb.shape[:2] == tuple(size):
+        return rgb
+    from PIL import Image
+
+    return np.asarray(Image.fromarray(rgb).resize((int(size[1]), int(size[0])), Image.BILINEAR))
+
+
+ALSO_KEYS = ("also", "renderers", "also_failed", "also_missed", "also_unplated", "also_skipped")
+"""What a take's ``TAKE.json`` says of its ``--also`` renderers, handed on in its summary too."""
 
 PARTS_KEPT = 16
 """Bodies a take keeps per jointed thing; a chain of more is sampled along its length."""

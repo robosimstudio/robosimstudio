@@ -428,6 +428,13 @@ def build_parser() -> argparse.ArgumentParser:
     play.add_argument("--record", default="", metavar="NAME", help="film it: <run-dir>/NAME.mp4, .json, _seg.npz")
     play.add_argument("--every", type=int, default=4, help="with --record: a frame per this many control steps")
     play.add_argument("--camera", default="", help="with --record: the camera to record through")
+    play.add_argument(
+        "--also",
+        default="",
+        metavar="R,R",
+        help="with --record: draw the same run with these renderers too (gl, tiled, blender, rtx): "
+        "<run-dir>/NAME.renderers/<renderer>.mp4 each, and all.mp4 there side by side",
+    )
     _wait_flags(play, "return when the routine ends, saying how, its output streamed")
     phys = sub.add_parser(
         "physics",
@@ -531,7 +538,9 @@ def build_request(args: argparse.Namespace, parser: argparse.ArgumentParser) -> 
     elif args.cmd == "log":
         req["last"] = args.last
     elif args.cmd == "play":
-        req.update(name=args.name, record=args.record, every=args.every, camera=args.camera)
+        if args.also and not args.record:
+            parser.error("play --also draws a take with other renderers: give it --record TAKE")
+        req.update(name=args.name, record=args.record, every=args.every, camera=args.camera, also=args.also)
     elif args.cmd == "show":
         if not args.path and not args.clear:
             parser.error("show needs a picture, or --clear")

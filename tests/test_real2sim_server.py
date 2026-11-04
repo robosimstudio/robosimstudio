@@ -922,7 +922,7 @@ def _script_server(root: Path | None = None) -> LiveServer:
 
 
 class FakeRecorder:
-    def __init__(self, server, name, *, camera="", every=4) -> None:
+    def __init__(self, server, name, *, camera="", every=4, also=()) -> None:
         if camera == "phnoe":
             raise KeyError("no camera named phnoe")
         self.name = name

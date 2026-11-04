@@ -76,9 +76,35 @@ class TestComposite(unittest.TestCase):
         own = np.where(seg < 0, 0.5, 0.0).astype(np.float32)
         depth = np.full((9, 9), 3.0, np.float32)  # the render's own room, three metres off
         depth[4, 2:7] = 0.502  # the rope's tube
-        out = plate.nearer(seg, depth, static_depth, own, grow=1)
+        out = plate.nearer(seg, depth, static_depth, bounds=plate.collider_bounds(seg, own, grow=1), grow=1)
         moving = (out == plate.LABEL_MOVING) | (out < 0)
         self.assertEqual(np.argwhere(moving)[:, 0].tolist(), [4] * 5, "the room behind the spheres is the plate's")
+
+    def test_a_moving_thing_keeps_its_recesses_and_what_stands_proud_of_it(self) -> None:
+        # a lockbox face (1 m), a key standing 5 cm proud of it, a seam 3 cm deep across it, nothing static behind
+        seg = np.full((12, 12), -2, np.int32)
+        own = np.full((12, 12), 1.0, np.float32)
+        own[4:8, 5:7] = 0.95  # the key's collider
+        depth = own.copy()
+        depth[10, :] = 1.03  # the seam: the render looks into it, past the colliders' face
+        out = plate.nearer(
+            seg, depth, np.zeros((12, 12), np.float32), bounds=plate.collider_bounds(seg, own, grow=4), grow=4
+        )
+        self.assertTrue(
+            ((out == plate.LABEL_MOVING) | (out < 0)).all(), "the face round the key and the seam are drawn"
+        )
+
+    def test_a_bulging_collider_over_another_moving_thing_shows_that_thing(self) -> None:
+        # a gripper (0.7 m) in front of the box face (1 m); its collider is a pixel wider than its drawn mesh
+        seg = np.full((9, 9), -2, np.int32)
+        own = np.full((9, 9), 1.0, np.float32)
+        own[2:7, 2:7] = 0.7
+        depth = own.copy()
+        depth[2, 2:7] = 1.0  # the drawn gripper stops a pixel short: the render shows the box there
+        out = plate.nearer(
+            seg, depth, np.zeros((9, 9), np.float32), bounds=plate.collider_bounds(seg, own, grow=2), grow=2
+        )
+        self.assertTrue(((out == plate.LABEL_MOVING) | (out < 0)).all(), "the box behind the bulge is the render's")
 
     def test_a_plate_takes_any_size_asked(self) -> None:
         from PIL import Image

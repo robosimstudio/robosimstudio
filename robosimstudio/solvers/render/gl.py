@@ -94,6 +94,15 @@ _EGL_CUDA_DEVICE_NV = 0x323A
 _EGL_EXTENSIONS = 0x3055
 
 
+def _wound_out(verts: np.ndarray, normals: np.ndarray, faces: np.ndarray) -> np.ndarray:
+    """A closed mesh's faces wound the way its vertex normals point: MuJoCo culls a face by its winding, so a tube
+    wound inward (the shared tube builder's order) showed only the inside of its far wall -- a hairline on the
+    bench, at the bench's depth, which a plate composite then trimmed away as the bench."""
+    a, b, c = (verts[faces[:, k]] for k in range(3))
+    along = np.einsum("ij,ij->i", np.cross(b - a, c - a), normals[faces].sum(axis=1))
+    return faces[:, ::-1].copy() if np.count_nonzero(along < 0) > len(faces) // 2 else faces
+
+
 def _area(verts: np.ndarray, faces: np.ndarray) -> float:
     """A triangle mesh's surface area [m^2]."""
     if not len(faces):
@@ -409,6 +418,8 @@ class RendererGL(RendererBase):
             if part.tube_radius <= 0.0:
                 faces = np.concatenate([faces, faces[:, ::-1] + len(verts)])
                 verts, normals = np.concatenate([verts, verts]), np.concatenate([normals, -normals])
+            else:
+                faces = _wound_out(verts, normals, faces)
             asset = spec.add_mesh(
                 name=f"deformable{index}",
                 uservert=verts.ravel().tolist(),

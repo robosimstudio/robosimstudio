@@ -194,6 +194,12 @@ class TestTheCommandLine(unittest.TestCase):
         self.assertNotIn("record", req, "no recording unless asked")
         req, _ = ctl.build_request(parser.parse_args(["play", "tidy", "--record", "t1"]), parser)
         self.assertEqual((req["name"], req["record"], req["every"]), ("tidy", "t1", 4))
+        req, _ = ctl.build_request(
+            parser.parse_args(["play", "tidy", "--record", "t1", "--also", "gl,blender"]), parser
+        )
+        self.assertEqual(req["also"], "gl,blender")
+        with self.assertRaises(SystemExit):
+            ctl.build_request(parser.parse_args(["play", "tidy", "--also", "gl"]), parser)  # nothing filmed to draw
 
     def test_log_and_show(self) -> None:
         parser = ctl.build_parser()
