@@ -227,6 +227,13 @@ scene states a tool-centre path and a pad-face gap, the arm's IK turns it into
 joint targets at the control rate, and every per-frame diagnostic is computed
 from the same state arrays the claw's were.
 
+**The bench carries the arm.** The mount is 132 mm above the work surface and
+180 mm behind `bench_075`'s near edge, which is where every route was planned;
+`arm_gripper` therefore registers `bench_075_airbot`, the same top extended
+under the mount, with a pedestal flush with the arm's base. Lowering the arm
+onto the table instead changes the IK's wrist roll and the pads close along the
+loop rather than across it.
+
 **Two islands, joined one way.** The arm is an `articulated` robot and resolves
 to MuJoCo; the toy stays on VBD. They meet through `coupler("one_way",
 contact_forces=True, slide_feedback=True)`. Per substep the coupler steps the
@@ -247,7 +254,8 @@ scene's `CollisionSpec` into the coupler's own pipeline. Each scene keeps
 pipeline reports it: without it, friction becomes VBD's per-pass drift and the
 pinch slides the loop out however high `mu` is. The toy's own self-contact
 matcher is separate -- `particle_enable_self_contact`, the margin and the
-rest-shape exclusion stay on the VBD backend spec.
+rest-shape exclusion stay on the VBD backend spec, and each scene reads the
+pair counts back per frame from whichever buffer the solver populated.
 
 **Reading the solver through the coupler.** With two islands,
 `sim.pipeline.program.solver` is the coupler, not VBD, and every VBD attribute
