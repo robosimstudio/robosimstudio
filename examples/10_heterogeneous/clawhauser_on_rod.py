@@ -341,11 +341,9 @@ def build_scene(
             **common,
         )
     )
-    # The arm is an articulated robot and resolves to MuJoCo, so it is its own
-    # island; the toy keeps VBD. `one_way` with `slide_feedback` is what carries
-    # the grip: the finger stops where the loop pushes back with its actuator's
-    # force, so the 20 N ceiling is the grip. Sticky matching is the scene's, and
-    # the coupler forwards it into its own collision pipeline.
+    # The arm resolves to MuJoCo and is its own island; the toy keeps VBD.
+    # `one_way` with `slide_feedback` stops each finger on the loop's push, so the
+    # cap is the grip. Sticky matching is the scene's and the coupler forwards it.
     split = claw != "claw"
     physics = rss.ArrangementSpec(
         control_hz=CONTROL_HZ,
@@ -395,11 +393,8 @@ def build_scene(
         grip = scene.add(
             ParallelGripperSpec(
                 name="rod_loop_gripper",
-                # The loop's widest point, which is the hole's own centre height: the
-                # pads' faces come to rest on that width, and the squeeze is the aim
-                # past it that the jaw drive clamps at 20 N. The pose is in the
-                # work-surface frame, like the statics above and every other entity's
-                # -- an absolute height here would be lifted by the frame twice.
+                # The loop's widest point, in the work-surface frame: the faces rest
+                # on that width, and the squeeze is the aim past it the drive clamps.
                 center=(SOURCE_X + float(hole[0]), -GRIP_TO_BODY, grip_z),
                 half_gap=ring["side_reach"] + PAD_HALF_THICKNESS + 0.012,
                 closed_half_gap=ring["side_reach"] + PAD_HALF_THICKNESS - squeeze,
@@ -412,10 +407,8 @@ def build_scene(
             )
         )
     if split:
-        # Three-quarter from the right of the rod, further back than the claw's
-        # framing: the arm's reach and the rod's far end both have to stay in
-        # frame, and the thread onto the rod reads from its side rather than
-        # down its axis.
+        # Three-quarter from the right, further back than the claw's: the arm's
+        # reach and the rod's far end both stay in frame.
         eye, look_at, fov_y = (1.12, -0.85, 1.30), (0.42, 0.03, 0.92), 50.0
     else:
         # Pulled back from the toy-and-rod framing so both ends of the scene stay
@@ -424,8 +417,7 @@ def build_scene(
     camera = scene.add(rss.CameraSpec(name="overview", width=960, height=540, eye=eye, look_at=look_at, fov_y=fov_y))
     sim = scene.build(device="cuda:0", warmup=False, use_cuda_graph=False)
     entity = obj.entity
-    # The toy's own solver: the coupling wrapper when the arm is in the scene, and
-    # every VBD attribute read below has to come from it, not from the wrapper.
+    # Every VBD attribute comes from the solver itself, never the coupling wrapper.
     vbd_solver = arm_gripper.vbd_solver(sim.pipeline.program.solver)
     if not type(vbd_solver).__name__.startswith("SolverVBD"):
         raise RuntimeError(f"expected a VBD solver, got {type(vbd_solver).__name__}")
@@ -466,8 +458,8 @@ def waypoints(grip, capacity: int, dt: float, geometry: dict) -> np.ndarray:
     lift = geometry["lift_m"]
     slide = geometry["slide_m"]
     seat = (TABLE_Z + geometry["seat_z_m"] - SEAT_FLOOR) - (TABLE_Z + geometry["loop_z_m"])
-    # The planned descent is a ramp at SEAT_RATE, bounded below by the seat's own
-    # floor: a smoothstep would reach the rod at twice that rate.
+    # A ramp at SEAT_RATE, floored at the seat: a smoothstep would reach the rod at
+    # twice that rate.
     floor = min(0.0, seat - lift)
     poses = np.zeros((capacity, 2, 7), dtype=np.float32)
     poses[:, :, 6] = 1.0
@@ -525,15 +517,13 @@ def after_seat(positions: np.ndarray, dt: float, closed_half_gap: float) -> np.n
 
 
 def arm_route(sim, geometry: dict, capacity: int, dt: float):
-    """The same path the claw is given, as tool-centre poses and a pad-face gap.
+    """The claw's path as tool-centre poses and a pad-face gap.
 
-    The gap is stated between the pad *faces* here, where the claw states it
-    between the pads' centres, so ``squeeze`` is the same 16 mm past the loop's
-    widest point in both.
+    The gap is stated between the faces here, where the claw states it between
+    the pads' centres, so ``squeeze`` is the same travel past the loop in both.
     """
     control = arm_gripper.ArmControl(sim)
-    # The scene states the grasp in the work-surface frame, and as the claw's pads'
-    # midpoint; the IK solves in world, and the arm is given its tool centre.
+    # Work-surface frame and a claw-pad midpoint in; world tool centre out.
     centre = arm_gripper.tcp_for_pads(
         np.asarray(rss.get_cell(CELL).surface_frame[:3], dtype=np.float64)
         + np.asarray(geometry["grip_centre_m"], dtype=np.float64)
@@ -543,8 +533,8 @@ def arm_route(sim, geometry: dict, capacity: int, dt: float):
     lift = geometry["lift_m"]
     slide = geometry["slide_m"]
     seat = (TABLE_Z + geometry["seat_z_m"] - SEAT_FLOOR) - (TABLE_Z + geometry["loop_z_m"])
-    # The planned descent is a ramp at SEAT_RATE, bounded below by the seat's own
-    # floor: a smoothstep would reach the rod at twice that rate.
+    # A ramp at SEAT_RATE, floored at the seat: a smoothstep would reach the rod at
+    # twice that rate.
     floor = min(0.0, seat - lift)
 
     def tcp_at(time: float) -> np.ndarray:
@@ -763,9 +753,8 @@ def run(
                 row["peak_force_n"] = grip.entity.peak_force.numpy().tolist()
                 row["peak_torque_nm"] = grip.entity.peak_torque.numpy().tolist()
             elif shape_forces is not None:
-                # What each pad would feel, not what the arm was told. The vector
-                # carries friction, so the grip is its part along the closing axis,
-                # where the cap binds, and the total is the pad's load.
+                # What each pad would feel: the readback carries friction, so the
+                # grip is its closing-axis component and the total is the pad's load.
                 load, squeeze = arm_gripper.pad_forces(sim, shape_forces(), finger_sides)
                 row["peak_force_n"] = squeeze
                 row["pad_force_n"] = load
@@ -903,10 +892,8 @@ def judge(out: Path, diagnostics, quality, geometry, sim, entity, steps, *, vide
     }
     peak_force = max(result["peak_force_n"] or [0.0])
     peak_torque = max(result["peak_torque_nm"] or [0.0])
-    # The claw's peak is the wrench its own drive applied, so its cap is exact to
-    # a float32 ulp. The arm's is the squeeze its pads read back through the
-    # coupling: the actuator is clamped at the same number, and the readback can
-    # sit a percent over it for a substep.
+    # The claw's peak is its drive's wrench and exact; the arm's is a readback
+    # through the coupling, which can sit a percent over the clamp for a substep.
     tolerance = 1.0e-6 if geometry["gripper"] == "claw" else arm_gripper.GRIP_TOLERANCE
     result["success"] = bool(
         steps >= round(DURATION * CONTROL_HZ)

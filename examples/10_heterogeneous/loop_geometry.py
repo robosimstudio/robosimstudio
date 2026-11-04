@@ -1,13 +1,9 @@
 # SPDX-License-Identifier: Apache-2.0
-"""The loop's own geometry, measured from the mesh, and the path's easing curve.
+"""The loop's geometry, measured from the source mesh, and the path's easing curve.
 
-Both scenes grip this object by its loop, and both need the same three numbers
-about it -- where the hole's centre is, how wide the loop is where the pads close
-on it, and how far its base is below that -- so they are measured here once
-instead of twice, and the scenes state only what they do with them.
-
-Nothing here reads the parts' materials or builds anything: this is measurement
-of the source mesh, in the mesh's own frame.
+Both scenes grip this object by its loop and need the same numbers about it:
+the hole's centre, the loop's width where the pads close, and its depth below
+that. Measurements are in the mesh's own frame; nothing here builds anything.
 """
 
 from __future__ import annotations
@@ -26,13 +22,10 @@ def smooth(time: float, start: float, end: float) -> float:
 def ring_geometry(vertices: np.ndarray, tets: np.ndarray, labels: np.ndarray) -> dict:
     """The loop's hole, its width in the closing direction, and the toy's extents.
 
-    The hole is not a circle, so its centre is found the way one measures a
-    hole: walk the loop's vertices in angular sectors around a tentative centre
-    and keep each sector's nearest point -- the inner surface where the hole is
-    widest inward -- then recentre on those points until they stop moving. What
-    remains is an inner radius per sector; the smallest is what the rod has to
-    clear and what the toy seats on. The same plane gives the loop's outer reach
-    in x about that centre, which is where the pads close.
+    The hole is not a circle: the centre is the fixed point of "nearest vertex
+    per angular sector", which gives an inner radius per sector. The smallest is
+    what the rod has to clear and what the toy seats on. The same plane gives the
+    loop's outer reach in x about that centre, where the pads close.
     """
     loop = np.unique(tets[labels == 2])
     plane = vertices[loop][:, :2]
@@ -68,22 +61,12 @@ def ring_geometry(vertices: np.ndarray, tets: np.ndarray, labels: np.ndarray) ->
 def _outer_profile(offset: np.ndarray, y_origin: float, step: float = 0.002) -> tuple:
     """The loop's outward reach in x against height, slice by slice.
 
-    The pads close along x, so what they meet is the loop's outer surface in x,
-    and how wide that is depends on the height they meet it at. The profile is
-    what says where a flat pad grips well: at the widest band the surface is
-    vertical and the grip is a friction pinch on a convex cord, which creeps out;
-    a few millimetres above it the surface leans back, so a downward slip brings
-    wider material into the faces and the loop's own weight wedges it in.
+    The pads close along x, so this is the surface they meet. At the widest band
+    it is vertical and the grip creeps out; above it the surface leans back, so a
+    downward slip wedges wider material into the faces.
 
-    Args:
-        offset: The loop's vertices in the loop's own plane, about the hole centre.
-        y_origin: The hole centre's y in the mesh's frame, to state slices in.
-        step: Slice height [m].
-
-    Returns:
-        ``(widest_y, slice_y, reach)``, all in the mesh's frame: the widest band's
-        local y, and the slice centres and their reaches, for a scene that wants a
-        reach at some other height.
+    Returns ``(widest_y, slice_y, reach)`` in the mesh's frame, for a scene that
+    wants a reach at some other height.
     """
     low = float(offset[:, 1].min())
     count = int(np.ceil((float(offset[:, 1].max()) - low) / step)) + 1

@@ -17,18 +17,11 @@ of it is inside, what the press deformed, whether the rim holds it after the jaw
 open, and what the jaws spent to get it there.
 
 The default mover is the AIRBOT Play arm with its own parallel hand
-(`arm_gripper`): it reaches the ring, its fingers close on the cord under a 20 N
-clamp, and it follows the same tool-centre path. `--claw claw` runs the scripted
-parallel claw this scene was built on -- a level carrier, two prismatic jaws and
-a carrier push -- which stays as the reference the arm is measured against.
-
-The claw's budgets are separate by construction: two 20 N jaws and a 200 N carrier
-push. The arm has one hand and one arm, so on it the press is the same pads that
-hold the toy, and ``peak_force_n`` is the force they would feel while pressing
-rather than only while closing. Its ceiling is the arm's own actuators -- six
-joints at 24 and 16 N.m, which at this reach is about 60 N -- not a stated
-number, so ``push_force_cap_n`` is that ceiling and the run reports what the
-press actually reached.
+(`arm_gripper`), on the same tool-centre path; `--claw claw` runs the scripted
+claw this scene was built on, as the reference. The claw has two 20 N jaws and a
+200 N carrier; the arm has one hand, so its press is the pads that hold the toy
+and its ceiling is its own actuators (about 60 N at this reach), not a stated
+number.
 
 Geometry is measured from the mesh and reported: the loop's hole centre is where
 the pads close, its outer reach in the closing direction is the width the squeeze
@@ -292,9 +285,8 @@ def build_scene(
     tail_tets = np.where(labels == 0)[0]
     tail_vertices = vertices[np.unique(tets[tail_tets])]
     tail_centre = vertices[tets[tail_tets]].mean(axis=1).mean(axis=0)
-    # The claw's carrier and the arm's pads press with different things, so the
-    # press ceiling is stated by the mover: the claw's own clamp, or the arm's
-    # actuators.
+    # Each mover presses with a different thing: the claw's own clamp, or the
+    # arm's actuators.
     push_cap = float(push_cap) if claw == "claw" else arm_gripper.PUSH_LIMIT_N
     geometry = {
         "gripper": "claw" if claw == "claw" else "arm",
@@ -441,10 +433,8 @@ def build_scene(
     if claw == "claw":
         grip = scene.add(
             ParallelGripperSpec(
-                # The loop's sides. The parallel jaws hold the pads' attitude, so the
-                # loop cannot roll them off; the flat face and its friction are the
-                # grip. After the stall the body is pressed by the carrier, whose
-                # push budget is separate from the jaws' closing clamp.
+                # The loop's sides: the jaws hold the pads' attitude, so the flat
+                # face and its friction are the grip. The carrier presses separately.
                 name="bottle_loop_gripper",
                 center=(SOURCE_X + float(hole[0]), 0.0, grip_z),
                 half_gap=ring["side_reach"] + PAD_HALF_THICKNESS + 0.012,
@@ -466,15 +456,13 @@ def build_scene(
         # midpoint between the toy's rest and the bore.
         eye, look_at, fov_y = (0.782, -0.684, 1.197), (0.60, -0.06, 0.93), 45.0
     else:
-        # Three-quarter from the arm's side, wider: the reach, the bore and the
-        # press all have to be in frame together.
+        # Three-quarter from the arm's side, wider: reach, bore and press in frame.
         eye, look_at, fov_y = (0.20, -1.05, 1.32), (0.55, 0.0, 0.92), 50.0
     camera = rss.CameraSpec(name="overview", width=960, height=540, eye=eye, look_at=look_at, fov_y=fov_y)
     scene.add(camera)
     sim = scene.build(device="cuda:0", warmup=False, use_cuda_graph=False)
     entity = obj.entity
-    # The toy's own solver: the coupling wrapper when the arm is in the scene, and
-    # every VBD attribute read below has to come from it, not from the wrapper.
+    # Every VBD attribute comes from the solver itself, never the coupling wrapper.
     solver = arm_gripper.vbd_solver(sim.pipeline.program.solver)
     if not type(solver).__name__.startswith("SolverVBD"):
         raise RuntimeError(f"expected a VBD solver, got {type(solver).__name__}")
@@ -520,12 +508,7 @@ def build_scene(
 
 
 def arm_centre(geometry: dict) -> np.ndarray:
-    """The arm's grasp point in world coordinates.
-
-    The scene states the grasp in the work-surface frame, like every other
-    placement; the IK solves in world, so this is where the frame's origin is
-    added -- once, and the path built on the result.
-    """
+    """The arm's grasp point in world coordinates, the scene's frame origin added."""
     origin = np.asarray(rss.get_cell(CELL).surface_frame[:3], dtype=np.float64)
     return origin + np.asarray(geometry["grip_centre_m"], dtype=np.float64)
 
@@ -533,12 +516,9 @@ def arm_centre(geometry: dict) -> np.ndarray:
 def waypoints(centre, opened: float, closed: float, capacity: int, dt: float, geometry: dict) -> np.ndarray:
     """The path to the hang: close, lift, and hold.
 
-    ``opened`` and ``closed`` are the mover's own gap at each end: the claw states
-    it between the pads' centres, the arm between their faces (``plan_poses``
-    takes the difference). Where the toy hangs is not authored -- the pinch holds
-    the ring at its rim, so the body hangs off the pads' axis by however the
-    compliant hoop folds, and the carry is built from the toy measured at the end
-    of the hang.
+    ``opened`` and ``closed`` are the mover's own gap at each end. Where the toy
+    hangs is not authored: a rim pinch leaves the body off the pads' axis by
+    however the hoop folds, so the carry is built from the toy measured after it.
     """
     centre = np.asarray(centre, dtype=np.float64)
     lift = geometry["lift_m"]
@@ -667,9 +647,8 @@ def press_path(positions: np.ndarray, dt: float, start_half_gap: float = RELEASE
     centre = 0.5 * (positions[0] + positions[1])
     press_s = PRESS_DEPTH / PRESS_RATE
     hold_end = press_s + PRESS_HOLD
-    # Open before rising: under the press the pads are loaded into the plush, and
-    # 20 N of jaw cannot slide out from under that normal on its own. Rising while
-    # opening dragged the toy back up with the pads, by 26 mm.
+    # Open before rising: loaded into the plush, the jaws cannot slide out from
+    # under that normal, and rising while opening dragged the toy up by 26 mm.
     open_end = hold_end + JAM_OPEN
     rise_end = open_end + JAM_WITHDRAW
     count = int(np.ceil(rise_end / dt)) + 2
@@ -737,18 +716,14 @@ def run(
     print(json.dumps({"self_contact": self_contact}), flush=True)
     quality = MeshQuality(sim, entity)
     dt = 1.0 / (CONTROL_HZ * SUBSTEPS)
-    # The two movers state their gap in the same place -- half the separation
-    # between the two finger origins -- and the arm's pad face is 2 mm inside its
-    # finger's origin where the claw's is 3 mm. So each gets its own closed and
-    # open end, both derived from the loop's measured reach, and the travel past
-    # it is the same 12 mm.
+    # Both movers state the gap between finger origins, but the arm's pad face is
+    # 2 mm inside its origin where the claw's is 3 mm, so each end is offset.
     reach = float(geometry["grip_reach_m"])
     if grip is None:
         closed_gap = reach - squeeze + arm_gripper.PAD_INNER_OFFSET
         open_gap = arm_gripper.OPEN_HALF_GAP - arm_gripper.PAD_INNER_OFFSET
-        # Substeps, like the claw's own capacity: the path is built at the substep
-        # rate and the arm resamples it. Eight seconds covers close, lift and hang
-        # with a second to spare; `carry_path` replans at the end of the hang.
+        # At the substep rate, as the claw's own capacity is: 8 s covers close, lift
+        # and hang; `carry_path` replans at the end of the hang.
         capacity = round(8.0 * CONTROL_HZ) * SUBSTEPS
     else:
         closed_gap = float(grip.spec.closed_half_gap)
@@ -1084,14 +1059,11 @@ def run(
                 row["peak_push_force_n"] = grip.entity.peak_push_force.numpy().tolist()
                 row["peak_push_torque_nm"] = grip.entity.peak_push_torque.numpy().tolist()
             else:
-                # The arm has one hand for both jobs: what a pad would feel is the
-                # grip while closing and the press while pressing, and there is no
-                # carrier wrench to report -- its torque ceiling is the arm's own
-                # actuators, which the model already carries.
+                # One hand for both jobs: a pad's force is the grip while closing
+                # and the press while pressing. There is no carrier wrench.
                 row["pressing"] = press_frame is not None
                 if shape_forces is not None:
-                    # The squeeze is the grip, where the 20 N clamp binds; the pad's
-                    # total load is what carries the press, friction included.
+                    # The squeeze is the grip; the pad's total load carries the press.
                     load, squeeze = arm_gripper.pad_forces(sim, shape_forces(), finger_sides)
                 else:
                     load, squeeze = [0.0, 0.0], [0.0, 0.0]

@@ -178,11 +178,9 @@ def build_scene(
             **common,
         )
     )
-    # The arm is an articulated robot and resolves to MuJoCo, so it is its own
-    # island; the toy keeps VBD. `one_way` with `slide_feedback` is what carries
-    # the grip: the finger stops where the loop pushes back with its actuator's
-    # force, so the 20 N ceiling is the grip. Sticky matching is the scene's, and
-    # the coupler forwards it into its own collision pipeline.
+    # The arm resolves to MuJoCo and is its own island; the toy keeps VBD.
+    # `one_way` with `slide_feedback` stops each finger on the loop's push, so the
+    # cap is the grip. Sticky matching is the scene's and the coupler forwards it.
     split = claw != "claw"
     physics = rss.ArrangementSpec(
         control_hz=CONTROL_HZ,
@@ -226,8 +224,7 @@ def build_scene(
                 name="pick_drop_gripper",
                 center=grip,
                 half_gap=ring["side_reach"] + PAD_HALF_THICKNESS + 0.012,
-                # The close travels past the loop's measured width by `squeeze`; how
-                # hard it presses is the drive's own cap, not this travel.
+                # The travel past the measured width; the drive's cap sets the force.
                 closed_half_gap=ring["side_reach"] + PAD_HALF_THICKNESS - squeeze,
                 force_limit=force_limit,
                 pad_half_thickness=PAD_HALF_THICKNESS,
@@ -238,13 +235,11 @@ def build_scene(
             )
         )
     if split:
-        # Three-quarter from the arm's side: the reach, the close and the lift all
-        # have to be in frame, and the claw's close-up cuts the arm's shoulder off.
+        # Three-quarter from the arm's side: reach, close and lift all in frame.
         eye, look_at, fov_y = (0.05, -0.95, 1.25), (0.33, 0.0, 0.90), 50.0
     else:
         # Side on and level with the loop: the pads close across the frame and the
-        # lift is vertical, so the grasp reads as a pinch on the object's side
-        # rather than as a plan view of the bench.
+        # lift is vertical, so the grasp reads as a side pinch.
         eye, look_at, fov_y = (0.02, -0.29, 1.05), (0.473, -0.01, 0.785), 45.0
     camera_spec = rss.CameraSpec(
         name="overview",
@@ -320,17 +315,13 @@ def waypoints(grip, capacity: int, dt: float, lift: float) -> np.ndarray:
 
 
 def arm_route(sim, geometry: dict, capacity: int, dt: float):
-    """The same path the claw is given, as tool-centre poses and a pad-face gap.
+    """The claw's path as tool-centre poses and a pad-face gap.
 
-    Same numbers, different mover: the tool-centre point follows the path the
-    claw's carrier was given, and the pads open and close on the same schedule.
-    The gap is stated between the pad *faces* here, where the claw states it
-    between the pads' centres, so ``squeeze`` means the same 12 mm past the loop's
-    surface in both.
+    The gap is stated between the faces here, where the claw states it between
+    the pads' centres, so ``squeeze`` is the same travel past the loop in both.
     """
     control = arm_gripper.ArmControl(sim)
-    # The scene states the grasp in the work-surface frame, and as the claw's pads'
-    # midpoint; the IK solves in world, and the arm is given its tool centre.
+    # Work-surface frame and a claw-pad midpoint in; world tool centre out.
     centre = arm_gripper.tcp_for_pads(
         np.asarray(rss.get_cell(CELL).surface_frame[:3], dtype=np.float64)
         + np.asarray(geometry["grip_centre_m"], dtype=np.float64)
@@ -453,8 +444,7 @@ def run(
     entity = obj.entity
     particles = entity.particles
     tets = entity.source_tets
-    # The toy's own solver: the coupling wrapper when the arm is in the scene, and
-    # every VBD attribute below has to be read from it, not from the wrapper.
+    # Every VBD attribute comes from the solver itself, never the coupling wrapper.
     solver = arm_gripper.vbd_solver(sim.pipeline.program.solver)
     contacts = sim.pipeline.contacts
     # Self-contact pairs are written by whichever detector the solver built. This
@@ -579,16 +569,13 @@ def run(
                 "penetration_m": depth,
             }
             if shape_forces is not None:
-                # What each pad would feel: the coupling reports the contact's
-                # force on the shape without feeding it back to the arm. The
-                # vector carries friction, so the grip is its part along the
-                # closing axis and the total is the pad's load.
+                # What each pad would feel: the readback carries friction, so the
+                # grip is its closing-axis component and the total is the pad's load.
                 load, squeeze = arm_gripper.pad_forces(sim, shape_forces(), finger_sides)
                 row["pad_force_n"] = load
                 row["squeeze_n"] = squeeze
-                # What the fingers did, beside what they were told: a hand that
-                # does not open reads as a grasp that never released, and the two
-                # are only separable with the measured aperture in the row.
+                # The measured aperture beside the command: a hand that does not
+                # open reads as a grasp that never released.
                 row["aperture_m"] = arm.aperture()
                 row["gripper_command"] = float(arm.hand.command)
             diagnostics.append(row)
@@ -611,8 +598,8 @@ def run(
     )
     result = judge(geometry, diagnostics, quality, entity, steps)
     if arm is not None:
-        # The grip is the squeeze, the same number the claw's drive reports; the
-        # pad's load, friction included, is reported beside it.
+        # The grip is the squeeze, as the claw's drive reports it; the pad's load
+        # beside it.
         result["peak_force_n"] = max(max(row["squeeze_n"]) for row in diagnostics if "squeeze_n" in row)
         result["peak_pad_force_n"] = max(max(row["pad_force_n"]) for row in diagnostics if "pad_force_n" in row)
         result["arm_path_error_m"] = route.worst_position_error_m
