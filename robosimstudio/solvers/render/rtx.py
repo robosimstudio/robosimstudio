@@ -640,15 +640,10 @@ def _viewer_class():
 
 
 def _vertex_normals(points: np.ndarray, tris: np.ndarray) -> np.ndarray:
-    """Area-weighted smooth normals, so a sheet does not render faceted."""
-    p = np.asarray(points, dtype=np.float32)
-    a, b, c = p[tris[:, 0]], p[tris[:, 1]], p[tris[:, 2]]
-    fn = np.cross(b - a, c - a)
-    n = np.zeros_like(p)
-    for k in range(3):
-        np.add.at(n, tris[:, k], fn)
-    length = np.linalg.norm(n, axis=1, keepdims=True)
-    return n / np.maximum(length, 1.0e-12)
+    """Area-weighted smooth normals, so a sheet does not render faceted: the shared ones, as ``float32``."""
+    from robosimstudio.core.render.deformables import vertex_normals
+
+    return vertex_normals(points, tris).astype(np.float32)
 
 
 # ----------------------------------------------------------------- colour
@@ -981,6 +976,15 @@ palette decoded and the tone map off (see :data:`PALETTE_IS_DISPLAY`) the bench
 top read 90 against tiled's 72; at three quarters it reads within a few counts.
 Before either fix it read 192."""
 
+LAB_PANEL_SIZE = (1.4, 0.9)
+"""The ``lab`` panel's width and height [m]; Blender draws the same panel."""
+LAB_PANEL_HEIGHT = 1.7
+"""How far over the work surface the ``lab`` panel hangs [m]."""
+LAB_PANEL_COLOR = (1.0, 0.97, 0.92)
+"""The ``lab`` panel's colour, a little warm."""
+LAB_DOME_COLOR = (0.94, 0.95, 0.97)
+"""The ``lab`` dome's colour, near neutral."""
+
 LAB_DOME_PER_AMBIENT = 675.0 * _LIGHT_SCALE
 """Dome-light intensity per unit of mean :attr:`RenderSpec.ambient`.
 
@@ -1048,7 +1052,7 @@ def _add_lab_lights(
     dome_xf = UsdGeom.Xform.Define(stage, "/root/_LabDome")
     dome_xf.ClearXformOpOrder()
     dome = UsdLux.DomeLight.Define(stage, "/root/_LabDome/light")
-    dome.GetColorAttr().Set(Gf.Vec3f(0.94, 0.95, 0.97))
+    dome.GetColorAttr().Set(Gf.Vec3f(*LAB_DOME_COLOR))
     if environment_map:
         dome.GetTextureFileAttr().Set(_environment_map_path(environment_map))
         dome.GetTextureFormatAttr().Set(UsdLux.Tokens.latlong)
@@ -1063,11 +1067,11 @@ def _add_lab_lights(
     cx, cy = (float(v) for v in center[:2])
     panel_xf = UsdGeom.Xform.Define(stage, "/root/_LabPanel")
     panel_xf.ClearXformOpOrder()
-    panel_xf.AddTranslateOp().Set(Gf.Vec3d(cx, cy, float(surface_z) + 1.7))
+    panel_xf.AddTranslateOp().Set(Gf.Vec3d(cx, cy, float(surface_z) + LAB_PANEL_HEIGHT))
     panel = UsdLux.RectLight.Define(stage, "/root/_LabPanel/light")
-    panel.GetWidthAttr().Set(1.4)
-    panel.GetHeightAttr().Set(0.9)
-    panel.GetColorAttr().Set(Gf.Vec3f(1.0, 0.97, 0.92))
+    panel.GetWidthAttr().Set(LAB_PANEL_SIZE[0])
+    panel.GetHeightAttr().Set(LAB_PANEL_SIZE[1])
+    panel.GetColorAttr().Set(Gf.Vec3f(*LAB_PANEL_COLOR))
     panel.GetIntensityAttr().Set(float(LAB_PANEL_PER_KEY * key))
 
 
@@ -1255,6 +1259,8 @@ class RendererRTX(RendererBase):
 
     name = "rtx"
     supported_channels = ("rgb", "depth")
+    warms_up = True
+    first_note = "the first path-traced picture in a process compiles the renderer's shaders, which can take minutes -- later ones take seconds"
     devices = ("cuda",)  # OVRTX path traces on RT cores; there is no CPU path
 
     wants: tuple[str, ...] = (

@@ -19,10 +19,14 @@ touched. A camera rides its own mocap body, posed from
 given to MuJoCo as focal and principal pixels, so a calibrated camera keeps its
 principal point.
 
-**What it does not draw:** particles. A scene with cloth, a rope or a soft body
-is refused by name, pointing at ``tiled``, which draws them natively; a frame
-that silently left the towel out would be worse than no frame. The room and
-the path tracer's materials are ``rtx``'s, as they are for ``tiled``.
+**Deformables are drawn from the scene's handles**
+(:func:`~robosimstudio.core.render.deformables.deformable_drawables`): a
+sheet, a bag or a soft body's surface as a mesh whose vertices are rewritten
+from ``state.particle_q`` every frame and drawn from both sides, a rope's
+centerline as a tube, a heap's grains as spheres -- what the handles name and
+nothing else, as the path tracer draws a scene (a renderer built by hand with
+no handle table draws every triangle and every other particle, as ``tiled``). The room and the path tracer's materials are ``rtx``'s, as they are
+for ``tiled``.
 
 Each process holds one EGL display, opened on one GPU the first time a context
 is made: ``egl_device`` if given, else ``MUJOCO_EGL_DEVICE_ID``, else the GPU
@@ -32,12 +36,15 @@ draws on that card. A process whose ``CUDA_VISIBLE_DEVICES`` hides every one
 of the machine's NVIDIA GPUs is refused rather than drawn on the first of
 them, which may be someone else's.
 A machine with no GPU rasterises in software with ``MUJOCO_GL=osmesa``, set
-before the process starts.
+before the process starts, or through Mesa's EGL where that is installed. A
+Mac has no EGL: there the context is Apple's CGL, headless, as MuJoCo's own
+renderer opens it (``MUJOCO_GL=glfw`` opens a hidden window instead).
 """
 
 from __future__ import annotations
 
 import os
+import sys
 from collections.abc import Mapping, Sequence
 from typing import Any
 
@@ -47,6 +54,7 @@ import numpy as np
 from robosimstudio.core.cameras import CameraSpec
 from robosimstudio.core.render.base import FrameSet, RendererBase
 from robosimstudio.core.render.spec import put
+from robosimstudio.solvers.render.tiled import SEG_PARTICLES, SEG_SOFT_MESH
 
 __all__ = ["RendererGL", "egl_device_for"]
 
@@ -56,11 +64,52 @@ _VISION_TO_GL = np.diag([1.0, -1.0, -1.0])
 _DRAW_DISTANCE = 1000.0
 """How far colour is drawn [m]: the tiled tracer's ``max_distance``, so the two agree on a horizon."""
 
+MAX_SPHERES = 50_000
+"""The most grains drawn as spheres a camera: each is one MuJoCo geom set from Python, about 5 us, so a heap of
+more draws every k-th grain, each k^(1/3) times larger, and says so once."""
+
+SMALL_BATCH = 1000
+"""A particle body this small is never thinned: thinning is for heaps, and a few loose particles would show it."""
+
+
+def sphere_strides(sizes: Sequence[int], budget: int = MAX_SPHERES) -> list[int]:
+    """Per batch of grains, draw every k-th: 1 for all when they fit the budget; else the small batches whole
+    and the large ones one stride, enough to bring them under what the small ones leave -- or, when the small
+    ones take more than half of it (a heap would otherwise shrink to a few huge spheres), every batch one stride. Each batch's ``ceil(n / k)`` then sums to the budget plus at
+    most one a batch, which is what the scene is sized for."""
+    total = sum(sizes)
+    if total <= budget:
+        return [1] * len(sizes)
+    small = sum(n for n in sizes if n < SMALL_BATCH)
+    if small > budget // 2:  # small bodies filling the budget by themselves: every batch one stride, alike
+        return [-(-total // budget)] * len(sizes)
+    stride = -(-(total - small) // (budget - small))
+    return [1 if n < SMALL_BATCH else stride for n in sizes]
+
+
 _KEY_DIFFUSE = 0.6
 """A light's diffuse level per unit of intensity: the key's at ``key_intensity`` 1."""
 
 _EGL_CUDA_DEVICE_NV = 0x323A
 _EGL_EXTENSIONS = 0x3055
+
+
+def _wound_out(verts: np.ndarray, normals: np.ndarray, faces: np.ndarray) -> np.ndarray:
+    """A closed mesh's faces wound the way its vertex normals point: MuJoCo culls a face by its winding, so a tube
+    wound inward (the shared tube builder's order) showed only the inside of its far wall -- a hairline on the
+    bench, at the bench's depth, which a plate composite then trimmed away as the bench."""
+    a, b, c = (verts[faces[:, k]] for k in range(3))
+    along = np.einsum("ij,ij->i", np.cross(b - a, c - a), normals[faces].sum(axis=1))
+    return faces[:, ::-1].copy() if np.count_nonzero(along < 0) > len(faces) // 2 else faces
+
+
+def _area(verts: np.ndarray, faces: np.ndarray) -> float:
+    """A triangle mesh's surface area [m^2]."""
+    if not len(faces):
+        return 0.0
+    v = np.asarray(verts, dtype=np.float64)
+    f = np.asarray(faces, dtype=np.int64)
+    return float(0.5 * np.linalg.norm(np.cross(v[f[:, 1]] - v[f[:, 0]], v[f[:, 2]] - v[f[:, 0]]), axis=1).sum())
 
 
 def _quat_wxyz(rotation: np.ndarray) -> np.ndarray:
@@ -71,20 +120,28 @@ def _quat_wxyz(rotation: np.ndarray) -> np.ndarray:
     return quat
 
 
+PLATFORMS = {"darwin": ("cgl", "glfw")}
+"""The OpenGL platforms this opens a context on, by ``sys.platform``: CGL (headless) and GLFW on a Mac, which has
+no EGL; EGL and OSMesa everywhere else -- where a ``glfw`` named for MuJoCo's viewer is not taken, since a GLFW
+window needs a display a headless server does not have."""
+
+
 def _platform() -> str:
-    """``egl`` or ``osmesa``, decided once for the process.
+    """The OpenGL platform, decided once for the process: one of :data:`PLATFORMS`' for this OS.
 
     PyOpenGL binds one platform the first time it is imported, and importing
     ``mujoco.egl`` sets ``PYOPENGL_PLATFORM=egl`` before it can fail -- after
     which ``mujoco.osmesa`` refuses to import. So there is no falling back from
     one to the other inside a process: the platform is what
-    ``PYOPENGL_PLATFORM`` or ``MUJOCO_GL`` already names, and EGL otherwise.
+    ``PYOPENGL_PLATFORM`` or ``MUJOCO_GL`` already names, else CGL on a Mac
+    (which has no EGL) and EGL elsewhere -- MuJoCo's own defaults.
     """
+    here = PLATFORMS.get(sys.platform, ("egl", "osmesa"))
     for variable in ("PYOPENGL_PLATFORM", "MUJOCO_GL"):
         named = os.environ.get(variable, "").strip().lower()
-        if named in ("egl", "osmesa"):
+        if named in here:
             return named
-    return "egl"
+    return here[0]
 
 
 def _egl_devices() -> list[tuple[bool, int | None]]:
@@ -166,13 +223,17 @@ def _context(width: int, height: int, egl_device: int | None, cuda_ordinal: int)
             if egl_device is not None:
                 os.environ["MUJOCO_EGL_DEVICE_ID"] = str(int(egl_device))
             from mujoco.egl import GLContext
+        elif platform == "cgl":
+            from mujoco.cgl import GLContext
+        elif platform == "glfw":
+            from mujoco.glfw import GLContext
         else:
             from mujoco.osmesa import GLContext
         context = GLContext(width, height)
         context.make_current()
         return context
     except Exception as exc:
-        other = "osmesa" if platform == "egl" else "egl"
+        other = {"egl": "osmesa", "osmesa": "egl", "cgl": "glfw", "glfw": "cgl"}[platform]
         raise RuntimeError(
             f"the gl renderer could not open an OpenGL context on {platform} ({type(exc).__name__}: {exc}); "
             f"MUJOCO_GL={other}, set before the process starts, tries {other} instead"
@@ -208,7 +269,7 @@ class RendererGL(RendererBase):
     """Every camera through MuJoCo's rasteriser, one at a time, off the model's visible shapes.
 
     Args:
-        model: The finalized model. One world; particles are refused.
+        model: The finalized model. One world.
         cameras: The cameras to render. They may differ in resolution.
         channels: Restrict every camera to these channels.
         shape_labels: ``shape index -> label id`` for ``seg``. Without it
@@ -223,12 +284,16 @@ class RendererGL(RendererBase):
         egl_device: The EGL device to render on, over ``MUJOCO_EGL_DEVICE_ID``
             and the model's GPU. The process's first context fixes the device
             for every later one.
+        deformables: ``name -> DeformableHandle``, normally the scene handles'
+            table; without it every triangle of the model is one mesh and every
+            other particle a sphere.
+        deformable_colors: ``name -> RGB`` for those.
     """
 
     name = "gl"
     supported_channels = ("rgb", "depth", "seg")
     devices = ("cpu", "cuda")
-    wants: tuple[str, ...] = ("shape_labels",)
+    wants: tuple[str, ...] = ("shape_labels", "deformables", "deformable_colors")
 
     @classmethod
     def look_kwargs(cls, look: Any) -> dict[str, Any]:
@@ -254,17 +319,15 @@ class RendererGL(RendererBase):
         background: Sequence[float] | None = None,
         msaa: int = 4,
         egl_device: int | None = None,
+        deformables: Mapping[str, Any] | None = None,
+        deformable_colors: Mapping[str, Sequence[float]] | None = None,
     ) -> None:
         super().__init__(cameras, channels=channels)
         import mujoco
 
+        from robosimstudio.core.render.deformables import deformable_drawables
         from robosimstudio.core.render.visual import model_visual_parts
 
-        if int(model.particle_count):
-            raise ValueError(
-                f"the gl renderer draws rigid shapes only, and this scene has {model.particle_count} particles "
-                "(cloth, rope or soft bodies) it would leave out; render it with 'tiled'"
-            )
         if int(getattr(model, "world_count", 1) or 1) > 1:
             raise ValueError("the gl renderer draws one world; a fleet renders through 'tiled'")
         self.model = model
@@ -307,7 +370,12 @@ class RendererGL(RendererBase):
             if len(getattr(mesh, "faces", ())) == 0:
                 continue
             if part.body >= 0 and part.body not in bodies:
-                bodies[part.body] = spec.worldbody.add_body(name=f"body{part.body}", mocap=True)
+                body = spec.worldbody.add_body(name=f"body{part.body}", mocap=True)
+                # a stated inertia, so MuJoCo infers none from the meshes: a flat one (a photo on a slab) has
+                # A + B = C to the rounding, and MuJoCo refuses A + B < C for a body that only carries pictures
+                body.explicitinertial = True
+                body.mass, body.inertia = 1.0, [1.0, 1.0, 1.0]
+                bodies[part.body] = body
             parent = bodies[part.body] if part.body >= 0 else spec.worldbody
             rgba, image, uv = _rgba(mesh)
             asset = spec.add_mesh(
@@ -333,6 +401,38 @@ class RendererGL(RendererBase):
                 contype=0, conaffinity=0, rgba=rgba, material=material,
                 pos=part.local[:3, 3].tolist(), quat=_quat_wxyz(part.local[:3, :3]).tolist(),
             )  # fmt: skip
+        # An open sheet twice over, the second copy wound and lit the other way, so a cloth seen from behind
+        # is drawn (a rope's tube is closed and drawn once); its vertices are rewritten every frame (_deform),
+        # its topology never changes.
+        self._drawables = deformable_drawables(model, deformables, deformable_colors)
+        particle_q = model.particle_q.numpy() if self._drawables.meshes else None
+        for index, part in enumerate(self._drawables.meshes):
+            verts, normals = (np.nan_to_num(a) for a in part.vertices(particle_q))  # a collapsed tube has no frame
+            faces = np.asarray(part.triangles, dtype=np.int32)
+            if _area(verts, faces) < 1.0e-10:
+                # collapsed as built (particles on one point): MuJoCo refuses a mesh with no area, and these
+                # vertices are rewritten before every frame, so the compile is given a spread copy
+                verts = verts + 1.0e-3 * np.stack(
+                    [np.arange(len(verts)) % 7, np.arange(len(verts)) % 5, np.arange(len(verts)) % 3], 1
+                )
+            if part.tube_radius <= 0.0:
+                faces = np.concatenate([faces, faces[:, ::-1] + len(verts)])
+                verts, normals = np.concatenate([verts, verts]), np.concatenate([normals, -normals])
+            else:
+                faces = _wound_out(verts, normals, faces)
+            asset = spec.add_mesh(
+                name=f"deformable{index}",
+                uservert=verts.ravel().tolist(),
+                userface=faces.ravel().tolist(),
+                usernormal=normals.ravel().tolist(),
+            )
+            asset.userfacenormal = faces.ravel().tolist()
+            asset.inertia = mujoco.mjtMeshInertia.mjMESH_INERTIA_SHELL
+            spec.worldbody.add_geom(
+                name=f"deformable{index}", type=mujoco.mjtGeom.mjGEOM_MESH, meshname=f"deformable{index}",
+                contype=0, conaffinity=0, rgba=[*part.color, 1.0],
+            )  # fmt: skip
+        self._points = sum(len(p.particles) for p in self._drawables.points)
         for cam in self.cameras:
             body = spec.worldbody.add_body(name=f"camera_{cam.name}", mocap=True)
             k = cam.intrinsics
@@ -353,15 +453,28 @@ class RendererGL(RendererBase):
         self._camera_mocap = [int(self.mj_model.body(f"camera_{c.name}").mocapid[0]) for c in self.cameras]
         self._camera_id = [int(self.mj_model.camera(c.name).id) for c in self.cameras]
 
-        # A geom's segmentation id back to the label its shape carries; 0 for a miss.
-        lut = np.zeros(self.mj_model.ngeom + 1, dtype=np.int32)
+        # A geom's segmentation id back to the label its shape carries; 0 for a miss. A deformable's mesh is the
+        # tiled tracer's soft mesh (a rope's tube its particles), and the last row is every particle drawn as a sphere.
+        lut = np.zeros(self.mj_model.ngeom + 2, dtype=np.int32)
         labels = {int(s): int(v) for s, v in (shape_labels or {}).items()}
         for geom in range(self.mj_model.ngeom):
             name = self.mj_model.geom(geom).name
             if name.startswith("shape"):
                 shape = int(name[len("shape") :])
                 lut[geom + 1] = labels.get(shape, 0) if shape_labels is not None else shape + 1
+            elif name.startswith("deformable"):
+                part = self._drawables.meshes[int(name[len("deformable") :])]
+                lut[geom + 1] = SEG_PARTICLES if part.tube_radius > 0.0 else SEG_SOFT_MESH
+        lut[-1] = SEG_PARTICLES
         self._seg_lut = lut
+        self._deforming = [
+            (
+                int(self.mj_model.mesh(f"deformable{i}").id),
+                int(self.mj_model.geom(f"deformable{i}").id),
+                part,
+            )
+            for i, part in enumerate(self._drawables.meshes)
+        ]
         self._seg_geoms: np.ndarray | None = None
         """A drawn geom's segmentation id back to its model geom plus one; see :meth:`_geoms_by_segid`."""
 
@@ -372,7 +485,32 @@ class RendererGL(RendererBase):
         self._context = _context(width, height, egl_device, int(device.ordinal) if device.is_cuda else 0)
         self._gl = mujoco.MjrContext(self.mj_model, mujoco.mjtFontScale.mjFONTSCALE_150)
         mujoco.mjr_setBuffer(mujoco.mjtFramebuffer.mjFB_OFFSCREEN, self._gl)
-        self._scene = mujoco.MjvScene(self.mj_model, maxgeom=self.mj_model.ngeom + 16)
+        drawn = min(self._points, MAX_SPHERES + len(self._drawables.points))  # a stride's rounding, per batch
+        self._scene = mujoco.MjvScene(self.mj_model, maxgeom=self.mj_model.ngeom + drawn + 64)
+        self._particle_q: np.ndarray | None = None
+        self._point_frame: list[tuple[np.ndarray, np.ndarray, np.ndarray]] = []
+        """This frame's spheres, per batch: centres, sizes and colour (see :meth:`_add_points`)."""
+        self._point_range = (0, 0)
+        """Where in the drawn scene :meth:`_add_points` put its spheres, for the segmentation lookup."""
+        self._told_full = False
+        self._strides = sphere_strides([len(b.particles) for b in self._drawables.points])
+        # each batch's grains as drawn: every k-th of a heap past the budget, each 3rd-root-of-k larger, so it keeps
+        # its volume; the sizes and colours fixed, the positions gathered each frame
+        self._point_batches = []
+        for batch, stride in zip(self._drawables.points, self._strides, strict=True):
+            sizes = np.zeros((len(batch.particles[::stride]), 3))
+            sizes[:, 0] = batch.radii[::stride] * stride ** (1.0 / 3.0)
+            self._point_batches.append((batch.particles[::stride], sizes, np.array([*batch.color, 1.0], np.float32)))
+        if any(k > 1 for k in self._strides):
+            thinned = [
+                f"{b.name or 'particles'} every {k}th"
+                for b, k in zip(self._drawables.points, self._strides, strict=True)
+                if k > 1
+            ]
+            print(
+                f"[gl] {self._points} grains, past {MAX_SPHERES} spheres a camera: drawing {', '.join(thinned)}, larger",
+                flush=True,
+            )
         self._option = mujoco.MjvOption()
         self._camera = mujoco.MjvCamera()
         self._camera.type = mujoco.mjtCamera.mjCAMERA_FIXED
@@ -393,12 +531,59 @@ class RendererGL(RendererBase):
         # Cameras and lights are placed here, not by mj_kinematics.
         mujoco.mj_camlight(self.mj_model, d)
 
-    def _draw(self, cam: CameraSpec, camera_id: int, segment: bool) -> Any:
+    def _deform(self, particle_q: np.ndarray) -> None:
+        """Every deformable mesh's vertices and normals where ``particle_q`` puts them, uploaded to the GL context.
+
+        A mesh's vertices are in its geom's frame, which MuJoCo moved to the mesh's own centre when it compiled
+        it; the geom hangs off the world and never moves, so the world vertices are taken into its frame.
+        """
+        mujoco, m, d = self._mujoco, self.mj_model, self.mj_data
+        for mesh, geom, part in self._deforming:
+            verts, normals = (np.nan_to_num(a) for a in part.vertices(particle_q))
+            rotation, origin = d.geom_xmat[geom].reshape(3, 3), d.geom_xpos[geom]
+            local = (verts - origin) @ rotation
+            turned = normals @ rotation
+            if part.tube_radius <= 0.0:  # a sheet's back copy
+                local, turned = np.concatenate([local, local]), np.concatenate([turned, -turned])
+            n = len(local)
+            start, nstart = int(m.mesh_vertadr[mesh]), int(m.mesh_normaladr[mesh])
+            m.mesh_vert[start : start + n] = local
+            m.mesh_normal[nstart : nstart + n] = turned
+            mujoco.mjr_uploadMesh(m, self._gl, mesh)
+
+    def _add_points(self) -> None:
+        """Every particle drawn as a sphere, appended to the scene after MuJoCo's own geoms.
+
+        One ``mjv_initGeom`` a particle, from the positions :meth:`render` gathered once for the frame: about
+        5 us each, so :data:`MAX_SPHERES` of them cost a quarter of a second a camera.
+        """
+        mujoco, scene = self._mujoco, self._scene
+        self._point_range = (int(scene.ngeom), int(scene.ngeom))
+        init, sphere, eye = mujoco.mjv_initGeom, mujoco.mjtGeom.mjGEOM_SPHERE, np.eye(3).ravel()
+        for centres, sizes, rgba in self._point_frame:
+            room = min(len(centres), int(scene.maxgeom) - int(scene.ngeom))
+            if room < len(centres) and not self._told_full:
+                self._told_full = True
+                print(
+                    f"[gl] the scene holds {scene.maxgeom} geoms: {len(centres) - room} grains are left out", flush=True
+                )
+            for k in range(room):
+                n = scene.ngeom
+                geom = scene.geoms[n]
+                init(geom, sphere, sizes[k], centres[k], eye, rgba)
+                geom.segid = n
+                scene.ngeom = n + 1
+        self._point_range = (self._point_range[0], int(scene.ngeom))
+
+    def _draw(self, cam: CameraSpec, camera_id: int, segment: bool, update: bool = True) -> Any:
+        """Draw one camera; ``update=False`` redraws the scene the last call built (rgb, then seg, of one camera)."""
         mujoco = self._mujoco
-        self._camera.fixedcamid = camera_id
-        mujoco.mjv_updateScene(
-            self.mj_model, self.mj_data, self._option, None, self._camera, mujoco.mjtCatBit.mjCAT_ALL, self._scene
-        )
+        if update:
+            self._camera.fixedcamid = camera_id
+            mujoco.mjv_updateScene(
+                self.mj_model, self.mj_data, self._option, None, self._camera, mujoco.mjtCatBit.mjCAT_ALL, self._scene
+            )
+            self._add_points()
         self._scene.flags[mujoco.mjtRndFlag.mjRND_SEGMENT] = segment
         self._scene.flags[mujoco.mjtRndFlag.mjRND_IDCOLOR] = segment
         viewport = mujoco.MjrRect(0, 0, int(cam.width), int(cam.height))
@@ -413,11 +598,14 @@ class RendererGL(RendererBase):
         than per camera per frame, and again only if their count changes.
         """
         scene = self._scene
-        if self._seg_geoms is None or len(self._seg_geoms) != scene.ngeom:
-            geoms = scene.geoms[: scene.ngeom]
+        start, end = self._point_range
+        if self._seg_geoms is None or len(self._seg_geoms) != start:
+            geoms = scene.geoms[:start]
             kinds = np.array([g.objtype for g in geoms], dtype=np.int64)
             objects = np.array([g.objid for g in geoms], dtype=np.int64)
             self._seg_geoms = np.where(kinds == int(self._mujoco.mjtObj.mjOBJ_GEOM), objects + 1, 0)
+        if end > start:  # the spheres _add_points appended after MuJoCo's own geoms: the lookup's last row
+            return np.concatenate([self._seg_geoms, np.full(end - start, len(self._seg_lut) - 1)])
         return self._seg_geoms
 
     def render(self, state: newton.State) -> FrameSet:
@@ -425,6 +613,14 @@ class RendererGL(RendererBase):
         mujoco = self._mujoco
         self._context.make_current()
         self._pose(state.body_q.numpy() if state.body_q is not None else None)
+        self._point_frame = []
+        if self._drawables:
+            self._particle_q = state.particle_q.numpy() if state.particle_q is not None else None
+            if self._particle_q is not None and self._deforming:
+                self._deform(self._particle_q)
+            if self._particle_q is not None:
+                for particles, sizes, rgba in self._point_batches:  # gathered once a frame, drawn once a camera
+                    self._point_frame.append((np.asarray(self._particle_q[particles], dtype=np.float64), sizes, rgba))
         extent = float(self.mj_model.stat.extent)
         near = float(self.mj_model.vis.map.znear) * extent
         far = float(self.mj_model.vis.map.zfar) * extent
@@ -447,7 +643,8 @@ class RendererGL(RendererBase):
                     miss = (depth[::-1] >= 1.0) | (metres > float(cam.far))
                     frame["depth"] = np.where(miss, 0.0, metres).astype(np.float32)
             if "seg" in wanted:
-                viewport = self._draw(cam, camera_id, segment=True)
+                drawn = "rgb" in wanted or "depth" in wanted  # the scene just built for this camera, drawn again
+                viewport = self._draw(cam, camera_id, segment=True, update=not drawn)
                 ids = np.empty((h, w, 3), dtype=np.uint8)
                 mujoco.mjr_readPixels(ids, None, viewport, self._gl)
                 ids = ids[::-1].astype(np.int64)
