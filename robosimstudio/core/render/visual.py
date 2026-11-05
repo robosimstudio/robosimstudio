@@ -194,7 +194,7 @@ def tube_points(centre: np.ndarray, radius: float, sides: int = TUBE_SIDES) -> t
     tangent /= np.maximum(np.linalg.norm(tangent, axis=1, keepdims=True), 1.0e-12)
     helper = np.array([0.0, 0.0, 1.0]) if abs(tangent[0, 2]) < 0.9 else np.array([1.0, 0.0, 0.0])
     u = np.cross(tangent[0], helper)
-    u /= np.linalg.norm(u)
+    u /= max(np.linalg.norm(u), 1.0e-12)  # a centerline collapsed to a point has no frame: a flat ring, not NaN
     frames_u = np.empty((n, 3))
     for i in range(n):
         if i:

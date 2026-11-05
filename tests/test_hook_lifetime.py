@@ -35,7 +35,9 @@ class TestEpisodeHooksDoNotOutliveTheirEpisode(unittest.TestCase):
 
         env = EnvBase.__new__(EnvBase)
         env.post_step_hooks = []
+        env.pre_step_hooks = []
         env.teleop_hooks = []
+        env.last_pre_step_hooks, env.last_post_step_hooks = [], []
         env._episode_hook_floor = None
         env.pipeline = types.SimpleNamespace(hooks=types.SimpleNamespace(post_solve=[]), invalidated=[])
         env.pipeline.invalidate_graph = lambda *, recapture=True: env.pipeline.invalidated.append(recapture)
@@ -67,10 +69,12 @@ class TestEpisodeHooksDoNotOutliveTheirEpisode(unittest.TestCase):
 
         env.pipeline.hooks.post_solve.append(object())  # a dragger, mid-episode
         env.post_step_hooks.append(object())
+        env.pre_step_hooks.append(object())  # a hold a tool left on the robot's targets
         env._retire_episode_hooks()  # the next reset
 
         self.assertEqual(env.pipeline.hooks.post_solve, [scene_hook], "the scene's own hook was dropped")
         self.assertEqual(env.post_step_hooks, [scene_step])
+        self.assertEqual(env.pre_step_hooks, [], "a pre-step hook outlived its episode")
 
     def test_the_floor_is_taken_at_the_first_reset_not_at_construction(self) -> None:
         """Entities install hooks while the scene is built -- the tape's bond
@@ -80,7 +84,7 @@ class TestEpisodeHooksDoNotOutliveTheirEpisode(unittest.TestCase):
         self.assertIsNone(env._episode_hook_floor)
         env.pipeline.hooks.post_solve.extend([object(), object()])
         env._retire_episode_hooks()
-        self.assertEqual(env._episode_hook_floor, (2, 0))
+        self.assertEqual(env._episode_hook_floor, {"post_solve": 2, "post_step": 0, "pre_step": 0})
         self.assertEqual(len(env.pipeline.hooks.post_solve), 2, "the build's own hooks must survive")
 
     def test_it_is_idempotent_across_many_episodes(self) -> None:

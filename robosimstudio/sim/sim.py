@@ -346,6 +346,7 @@ class Sim(EnvBase):
         camera: CameraSpec | str | None = None,
         *,
         channels: Sequence[str] = ("rgb",),
+        plate_pass: dict[str, Any] | None = None,
     ) -> dict[str, np.ndarray]:
         """One frame of the scene as it stands, through the renderer.
 
@@ -364,6 +365,8 @@ class Sim(EnvBase):
                 or, on a scene that declares none, a three-quarter view of the
                 work surface.
             channels: Which of ``"rgb"``, ``"depth"`` to produce.
+            plate_pass: :meth:`plate_pass`'s for this state, for a caller drawing it through other renderers too
+                (:meth:`over_plate`).
 
         Returns:
             ``{"rgb": uint8 [H, W, 3], "depth": float32 [H, W], ...}``.
@@ -373,22 +376,219 @@ class Sim(EnvBase):
             frame = sim.render()
             imageio.imwrite("still.png", frame["rgb"])
         """
-        from robosimstudio.solvers.render import FALLBACK
-
         spec = self._camera_for(camera)
         backend, why = self.platform.renderer_for("")
-        key = (backend, spec, tuple(channels))
+        from robosimstudio.solvers.render import supported_channels
+
+        asked = tuple(channels)
+        if spec.background and "rgb" in asked and "depth" not in asked and "depth" in supported_channels(backend):
+            asked += ("depth",)  # the plate goes wherever the render's own depth is the static scene's
+        cls = _backend_class(backend)
+        retargets = bool(getattr(cls, "retargets", False))
+        # a backend that takes its cameras and channels every frame keeps one renderer across viewpoints
+        # (RendererBase.aim): a camera over a plate asks depth as well, another does not
+        key = (backend,) if retargets else (backend, spec, asked)
         if self._still_renderer is None or self._still_key != key:
-            if self._still_renderer is not None:
-                self._still_renderer.close()
+            old, self._still_renderer, self._still_key = self._still_renderer, None, None
+            if old is not None:
+                old.close()
             self._say_fallback(backend, why)
-            self._still_renderer = self.make_renderer(backend, cameras=[spec], channels=list(channels))
-            self._still_key = key
-            if backend != FALLBACK:
-                self._still_renderer.render(self.state)  # the first frame only builds the stage
+            renderer = self.make_renderer(backend, cameras=[spec], channels=list(asked))
+            if getattr(cls, "warms_up", False):
+                try:
+                    renderer.render(self.state)  # the first frame only builds the stage
+                except Exception:
+                    renderer.close()
+                    raise
+            self._still_renderer, self._still_key = renderer, key
+        elif retargets and (
+            self._still_renderer.cameras != [spec] or self._still_renderer.channels[spec.name] != asked
+        ):
+            self._still_renderer.aim([spec], channels=asked)
         self.sync()
-        frame = self._still_renderer.render(self.state)[spec.name]
+        try:
+            frame = self._still_renderer.render(self.state)[spec.name]
+        except Exception:
+            # a renderer that is done (a Blender lost: RendererBlender.closed) is built afresh next time; one that
+            # only failed this frame is kept, rather than started again for every frame that fails the same way
+            if getattr(self._still_renderer, "closed", False):
+                failed, self._still_renderer, self._still_key = self._still_renderer, None, None
+                try:
+                    failed.close()
+                except Exception:  # its close failing too says nothing the render's own error does not
+                    pass
+            raise
+        if spec.background and "rgb" in frame:
+            frame = dict(
+                frame, rgb=self.over_plate(spec, frame["rgb"], depth=frame.get("depth"), plate_pass=plate_pass)
+            )
         return {c: np.asarray(frame[c]) for c in channels if c in frame}
+
+    def over_plate(
+        self,
+        spec: CameraSpec,
+        rgb: np.ndarray,
+        depth: np.ndarray | None = None,
+        plate_pass: dict[str, Any] | None = None,
+    ) -> np.ndarray:
+        """``rgb`` drawn over the camera's plate wherever something that moves is in view (core/render/plate.py).
+
+        The collider tracer draws the same camera twice more: with the moving
+        things, and with them sent far below the floor (once: nothing static
+        moves). Its segmentation of the first says where they can be, the plate
+        is darkened where the first is darker -- their shadows -- and, given the
+        render's own ``depth``, a pixel is the render's only where that depth is
+        the moving thing's: the collider of a thin rope is wider than the rope
+        drawn, and around it the render shows its own room, not the clip.
+
+        ``plate_pass`` is :meth:`plate_pass`'s, taken once for this state, for a
+        caller compositing several renderers' pictures of one frame (a take's
+        ``--also``) -- one that came back with nothing leaves this frame without
+        its plate, as the others are; without it the pass is taken here.
+
+        A plate that cannot be read (no file at the path, read beside the
+        working directory or the asset roots) leaves the picture as rendered,
+        and says so once.
+        """
+        from robosimstudio.core.render import plate
+
+        passed = plate_pass if plate_pass is not None else self.plate_pass(spec)
+        if not passed:
+            return rgb
+        seg = passed["seg"]
+        if depth is not None:
+            grow = max(2, spec.width // 320)
+            key = ("bounds", grow)  # once a pass and window, for every renderer composited on it
+            if key not in passed:
+                passed[key] = plate.collider_bounds(seg, passed["moving_depth"], grow=grow)
+            seg = plate.nearer(seg, depth, passed["static_depth"], bounds=passed[key], grow=grow)
+        return plate.composite(rgb, seg, passed["backdrop"], passed["shadow"])
+
+    def plate_pass(self, spec: CameraSpec) -> dict[str, Any]:
+        """The collider tracer's pass over the camera's plate for the state as it stands -- the plate, the moving
+        things' segmentation and depth, the static scene's depth, the shadow ratio -- or nothing (``{}``) where the
+        camera has no plate it can use (said once, as :meth:`over_plate` says it)."""
+        from dataclasses import replace
+
+        from robosimstudio.core.render import plate
+
+        if not spec.background:
+            return {}
+        if spec.parent_body >= 0 or spec.parent_frame:
+            self._plate_refused(
+                spec.background, f"camera {spec.name!r} rides on a body, and a plate is one viewpoint's"
+            )
+            return {}
+        path = self._plate_path(spec.background)
+        if path is None:
+            return {}
+        key = replace(spec, background="", channels=("rgb", "seg", "depth"))
+        if key in self.__dict__.setdefault("_plates_failed", set()):
+            return {}
+        cache = self.__dict__.setdefault("_plates", {})
+        entry = cache.pop(key, None)
+        if entry is None:
+            try:
+                entry = self._plate_passes(key)
+            except Exception as exc:  # a contended card, a table for another model: the picture as rendered, said once
+                self._plates_failed.add(key)
+                print(
+                    f"[rss] the plate passes for camera {spec.name!r} failed ({type(exc).__name__}: {exc}); drawing it without its plate"
+                )
+                return {}
+            while len(cache) >= 4:  # a twin's plate cameras, at the sizes its stills and viewport ask for
+                cache.pop(next(iter(cache)))[0].close()
+        if entry[2] != self._static_poses():  # a reset re-placed a weld, or a person dragged a fixture
+            entry[0].close()
+            entry = self._plate_passes(key)
+        cache[key] = entry  # last in is the most recently used
+        renderer, bare, _ = entry
+        try:
+            backdrop = plate.load_plate(path, spec.width, spec.height)
+            full = renderer.render(self.state)[key.name]
+        except Exception as exc:  # a plate being rewritten, a contended card: this frame as rendered, said once
+            self._plate_refused(
+                spec.background, f"camera {spec.name!r}'s plate pass failed ({type(exc).__name__}: {exc})"
+            )
+            return {}
+        seg = full["seg"]
+        return {
+            "backdrop": backdrop,
+            "seg": seg,
+            "shadow": plate.shade(full["rgb"], bare["rgb"], seg, soften=max(2.0, spec.width / 100.0), strength=0.6),
+            "static_depth": bare["depth"],
+            "moving_depth": full["depth"],
+        }
+
+    def _plate_passes(self, key: CameraSpec):
+        """The collider tracer over ``key``, and its one picture of the static scene alone (nothing static moves)."""
+        from dataclasses import replace
+
+        from robosimstudio.core.render import plate
+
+        # A room's light comes from overhead: unless the scene aims its own key, what moves casts its
+        # shadow where it stands, not the house look's long 45-degree shadow across the clip's table.
+        from robosimstudio.core.render.look import STUDIO
+
+        stated = getattr(getattr(self.request, "render", None), "light_direction", None)
+        if stated is not None and np.allclose(stated, STUDIO.light_direction, atol=1e-3):
+            stated = None  # the house rooms' own 45-degree key (STUDIO, LAB, ...): not aimed by this scene
+        look = replace(self.look, shadows=True, light_direction=stated or (0.05, 0.0, -1.0))
+        renderer = self.make_renderer(
+            "tiled",
+            cameras=[key],
+            channels=["rgb", "seg", "depth"],
+            render=look,
+            shape_labels=plate.shape_labels(self.model),
+        )
+        try:
+            away = self.model.state()
+            if self.model.body_count:
+                q = self.state.body_q.numpy().copy()
+                q[~plate.static_bodies(self.model), 2] -= 1000.0
+                away.body_q.assign(q)
+            if self.model.particle_count:
+                p = self.state.particle_q.numpy().copy()
+                p[:, 2] -= 1000.0
+                away.particle_q.assign(p)
+            return renderer, renderer.render(away)[key.name], self._static_poses()
+        except Exception:
+            renderer.close()
+            raise
+
+    def _static_poses(self) -> bytes:
+        """Where the static bodies stand, to the tenth of a millimetre: the static pass is redrawn when it changes."""
+        from robosimstudio.core.render import plate
+
+        if not self.model.body_count:
+            return b""
+        static = plate.static_bodies(self.model)
+        return np.round(self.state.body_q.numpy()[static], 4).tobytes()
+
+    def _plate_refused(self, background: str, why: str) -> None:
+        """Say once why a camera is drawn without its plate."""
+        said = self.__dict__.setdefault("_plates_missing", set())
+        if (background, why) not in said:
+            said.add((background, why))
+            print(f"[rss] {why}: drawing it without its plate")
+
+    def _plate_path(self, background: str):
+        """The plate's file: as given, else found among the asset roots; None, said once, when it is nowhere."""
+        from pathlib import Path
+
+        from robosimstudio.paths import resolve_path
+
+        path = Path(background)
+        if path.is_file():
+            return path
+        try:
+            return resolve_path(background)
+        except (FileNotFoundError, OSError, ValueError):
+            missing = self.__dict__.setdefault("_plates_missing", set())
+            if background not in missing:
+                missing.add(background)
+                print(f"[rss] no plate at {path.resolve()}: drawing camera pictures without it")
+            return None
 
     def record(
         self,
@@ -1074,6 +1274,8 @@ class Sim(EnvBase):
         if self._still_renderer is not None:
             self._still_renderer.close()
             self._still_renderer = None
+        for entry in self.__dict__.pop("_plates", {}).values():
+            entry[0].close()
 
     def __repr__(self) -> str:
         return f"{type(self).__name__}({getattr(self.request, 'full_name', '?')!r}, {len(self.names())} things, t={self.time:.3f}s)"

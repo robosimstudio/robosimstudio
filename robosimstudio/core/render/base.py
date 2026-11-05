@@ -96,13 +96,52 @@ class RendererBase:
         del look
         return {}
 
+    retargets: bool = False
+    """Whether the backend reads its cameras afresh every frame, so :meth:`aim` may replace them on a built
+    renderer -- what lets a caller keep one renderer across viewpoints rather than build one per camera, which
+    for a backend that starts a process and hands it the scene (``blender``) is seconds each time."""
+
     def __init__(self, cameras: Sequence[CameraSpec], *, channels: Sequence[str] | None = None) -> None:
+        self._channel_override = tuple(channels) if channels is not None else None
+        self._take_cameras(cameras)
+
+    first_note: str = ""
+    """What the first picture in a process costs with this backend, when that is worth saying while it is drawn
+    (the path tracer compiles its shaders, Blender starts); a page's ``status`` shows it."""
+
+    first_note_each_scene: bool = False
+    """Whether :attr:`first_note`'s cost comes again with every scene built in the process (a Blender per
+    scene), rather than once a process (shaders compiled once)."""
+
+    warms_up: bool = False
+    """Whether a new renderer's first frame only builds its stage and is drawn again before it is kept."""
+
+    def aim(self, cameras: Sequence[CameraSpec], channels: Sequence[str] | None = None) -> None:
+        """Render these cameras from the next frame on.
+
+        Args:
+            cameras: The cameras.
+            channels: Restrict every camera to these; ``None`` keeps the restriction the renderer was built with.
+
+        Raises:
+            NotImplementedError: If the backend builds its cameras in (:attr:`retargets` is false).
+        """
+        if not self.retargets:
+            raise NotImplementedError(f"renderer {self.name!r} builds its cameras in; build another for these")
+        kept = getattr(self, "_channel_override", None)
+        self._channel_override = tuple(channels) if channels is not None else kept
+        try:
+            self._take_cameras(cameras)
+        except ValueError:
+            self._channel_override = kept
+            raise
+
+    def _take_cameras(self, cameras: Sequence[CameraSpec]) -> None:
         if not cameras:
             raise ValueError("a renderer needs at least one camera")
-        self.cameras = list(cameras)
-        override = tuple(channels) if channels is not None else None
-        self.channels: dict[str, tuple[str, ...]] = {}
-        for cam in self.cameras:
+        override = getattr(self, "_channel_override", None)
+        wanted_by: dict[str, tuple[str, ...]] = {}
+        for cam in cameras:
             wanted = override if override is not None else cam.channels
             missing = set(wanted) - set(self.supported_channels)
             if missing:
@@ -110,7 +149,9 @@ class RendererBase:
                     f"renderer {self.name!r} cannot produce {sorted(missing)} for camera {cam.name!r}; "
                     f"it supports {list(self.supported_channels)}"
                 )
-            self.channels[cam.name] = tuple(wanted)
+            wanted_by[cam.name] = tuple(wanted)
+        self.cameras = list(cameras)
+        self.channels: dict[str, tuple[str, ...]] = wanted_by
 
     def __getitem__(self, name: str) -> CameraSpec:
         for cam in self.cameras:

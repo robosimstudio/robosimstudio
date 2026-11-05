@@ -76,20 +76,19 @@ class CameraSpec:
             is the wrong default and the right last resort: a real rig's
             overhead camera is screwed to one particular link and there is no
             role that means it.
-        background: Path to an image composited behind everything the
-            simulation did not draw, or ``""`` for none. This is what makes a
-            *visual-matching* observation: the robot and the manipulated objects
-            are rendered, and every other pixel comes from a real photograph of
-            the real rig, so a policy trained on real data is evaluated on
-            something close to what it saw.
+        background: Path to a clean plate -- a photograph taken through this
+            camera of everything that does not move -- or ``""`` for none. This
+            is what makes a *visual-matching* picture: what can move (the
+            robot's moving links, the things it handles, every deformable) is
+            rendered, and every other pixel, where the render hit nothing or a
+            shape fixed to the world, comes from the plate, so the background is
+            the real rig's own pixels.
 
             A path rather than an array, because a spec is frozen data that has
-            to stay hashable and be readable without an image decoder. Whoever
-            builds the renderer resolves it against their own asset root, loads
-            it, scales it to this camera's resolution and hands the array to the
-            backend's ``background`` argument -- nothing here opens a file. No
-            shipped backend composites one; the field is kept for a renderer
-            that does.
+            to stay hashable and be readable without an image decoder.
+            :meth:`~robosimstudio.sim.sim.Sim.render` composites it (relative to
+            the working directory, scaled to this camera's resolution); see
+            ``robosimstudio/core/render/plate.py`` for which pixels are which.
         channels: Which outputs to produce -- any of ``"rgb"``, ``"depth"``,
             ``"seg"``. A backend that cannot produce one raises rather than
             silently omitting it.
