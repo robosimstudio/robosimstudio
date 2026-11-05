@@ -80,7 +80,7 @@ def static_bodies(model: Any) -> np.ndarray:
     return static_body
 
 
-def static_shapes(model: Any) -> np.ndarray:
+def static_shapes(model: Any, static_body: np.ndarray | None = None) -> np.ndarray:
     """Per shape, whether nothing in the simulation can move it.
 
     A shape on body ``-1`` is on the world. A body is static when the joint
@@ -89,14 +89,14 @@ def static_shapes(model: Any) -> np.ndarray:
     it something that moves.
     """
     shape_body = np.asarray(model.shape_body.numpy() if hasattr(model.shape_body, "numpy") else model.shape_body)
-    static_body = static_bodies(model)
+    static_body = static_bodies(model) if static_body is None else static_body  # a caller's own read, else afresh
     body_static = np.concatenate([static_body, [True]])  # index -1 is the world
     return body_static[np.where(shape_body < 0, len(static_body), shape_body)]
 
 
-def shape_labels(model: Any) -> dict[int, int]:
+def shape_labels(model: Any, static_body: np.ndarray | None = None) -> dict[int, int]:
     """``shape -> label`` for the tiled tracer: :data:`LABEL_STATIC` or :data:`LABEL_MOVING`."""
-    static = static_shapes(model)
+    static = static_shapes(model, static_body)
     return {int(s): LABEL_STATIC if bool(static[s]) else LABEL_MOVING for s in range(len(static))}
 
 
