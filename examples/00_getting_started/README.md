@@ -88,7 +88,7 @@ A constructor is a function that returns a spec. Pass the spec to
 | `rss.post` | A fixed upright cylinder | `radius`, `half_height`, `at` |
 | `rss.sheet` | Cloth | `size`, `cells`, `at`, `material` |
 | `rss.sponge` | A soft body (FEM) | `size`, `cells`, `at`, `material` |
-| `rss.robot` | A robot | a registered name, `at` |
+| `rss.robot` | A robot | a registered name, `at`, `arms_at` |
 
 Notes:
 
@@ -120,6 +120,10 @@ What `at` places depends on the kind:
 - `sponge`: the centre of the bottom face.
 - `robot`: the base. Leave `at` out and a registered robot stands at its own
   mount, at the edge of the work surface.
+- `arms_at`: one arm's base, for a cell whose arms stand on separate mounts.
+  `rss.robot("yam_bimanual", arms_at={"left": (-0.36, 0.2, 0.06)})` puts the
+  left arm's base body there, in the same frame and spelling as `at`. The pose
+  is absolute, not relative to `at`, and an arm left out stays where `at` puts it.
 
 `cell` chooses the place (`void`, `bench_075`, `bench_0728`);
 `rss.list_cells()` lists every cell, and
