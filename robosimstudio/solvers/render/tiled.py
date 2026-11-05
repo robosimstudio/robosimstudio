@@ -180,6 +180,8 @@ class RendererTiled(RendererBase):
             the convenience arguments above.
     """
 
+    warms_up = False  # its first frame is the picture
+
     name = "tiled"
     supported_channels = ("rgb", "depth", "seg")
     # Warp kernels, so a CPU device too: 55 ms a 480x270 frame there, 210 ms at 960x540.

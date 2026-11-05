@@ -87,7 +87,7 @@ class TestColours(unittest.TestCase):
         import trimesh
         from PIL import Image
 
-        from robosimstudio.solvers.render.gl import _rgba
+        from robosimstudio.core.render.visual import mesh_rgba
 
         def textured(**factor):
             mesh = trimesh.creation.box()
@@ -95,10 +95,10 @@ class TestColours(unittest.TestCase):
             mesh.visual = trimesh.visual.TextureVisuals(uv=np.zeros((len(mesh.vertices), 2)), material=material)
             return mesh
 
-        rgba, image, _ = _rgba(textured())
+        rgba, image, _ = mesh_rgba(textured())
         self.assertIsNotNone(image)
         self.assertEqual(rgba, [1.0, 1.0, 1.0, 1.0])
-        rgba, _, _ = _rgba(textured(baseColorFactor=[255, 0, 0, 255]))
+        rgba, _, _ = mesh_rgba(textured(baseColorFactor=[255, 0, 0, 255]))
         self.assertEqual(rgba, [1.0, 0.0, 0.0, 1.0])
 
 

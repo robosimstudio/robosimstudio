@@ -247,6 +247,8 @@ class RendererBlender(RendererBase):
         surface_z: World z of the work surface [m].
     """
 
+    warms_up = False  # its first frame is the picture
+
     name = "blender"
     supported_channels = ("rgb", "depth")
     retargets = True  # every frame sends its cameras: a new viewpoint costs no new Blender
@@ -534,8 +536,7 @@ def _describe(
 
     from robosimstudio.core.render.deformables import deformable_drawables
     from robosimstudio.core.render.finish import finish_for, texture_path
-    from robosimstudio.core.render.visual import model_visual_parts
-    from robosimstudio.solvers.render.gl import _rgba
+    from robosimstudio.core.render.visual import mesh_rgba, model_visual_parts
 
     finishes = dict(finishes or {})
     colors = getattr(model, "shape_color", None)
@@ -549,7 +550,7 @@ def _describe(
         mesh = part.mesh
         if len(getattr(mesh, "faces", ())) == 0:
             continue
-        rgba, image, uv = _rgba(mesh)
+        rgba, image, uv = mesh_rgba(mesh)
         # a finish is keyed by the colour as the model states it: trimesh's copy is rounded to bytes
         stated = tuple(float(v) for v in shape_colors[part.shape][:3]) if 0 <= part.shape < len(shape_colors) else None
         finish = finishes.get(part.shape) or finish_for(stated or tuple(rgba[:3]))

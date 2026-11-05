@@ -62,6 +62,7 @@ from typing import Any
 
 import numpy as np
 
+from robosimstudio.core.render.base import warms_up
 from robosimstudio.core.render.live import RenderBudget
 from robosimstudio.machine import platform_of
 from robosimstudio.solvers.render import ENV, FALLBACK, PUBLIC
@@ -418,7 +419,7 @@ class PanelRenderView(Panel):
             channels = ["rgb", "depth"] if getattr(spec, "background", "") else ["rgb"]
             renderer = self.env.make_renderer(self.backend, cameras=[spec], channels=channels, **extra)
             self._renderers[key] = renderer
-            if getattr(renderer, "warms_up", False):  # a renderer whose first frame only builds its stage
+            if warms_up(renderer):  # a renderer whose first frame only builds its stage
                 renderer.render(self.env.state)
         except Exception as exc:  # no GPU, a contended card, a GPU the rule misjudged
             self._failed(f"{self.backend} would not build -- {type(exc).__name__}: {exc}")
