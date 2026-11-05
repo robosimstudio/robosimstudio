@@ -265,6 +265,10 @@ class LiveServer:
         from robosimstudio.solvers.render import ENV as RENDERER_ENV
 
         self.renderer_asked = os.environ.get(RENDERER_ENV, "").strip()
+        self.renderer_cache = stills.rtx_cache_warning()
+        """Why the path tracer's pictures would take minutes each (its cache cannot be written), or ``""``."""
+        if self.renderer_cache:
+            print(f"[live] {self.renderer_cache}", file=sys.stderr, flush=True)
         """The renderer the page was started under (``up --renderer``), ``""`` for the machine's pick. A scene that
         sets the variable itself changes what draws -- ``status``'s ``renderer`` says -- but not this."""
         self.script_meta: dict[int, dict] = {}
@@ -1124,6 +1128,7 @@ class LiveServer:
             # worked out on the main thread (renderer()), never here
             "renderer_drawing": getattr(self, "renderer_drawing", ""),
             "renderer_machine": getattr(self, "renderer_machine", ""),
+            "renderer_cache": getattr(self, "renderer_cache", ""),
             "file": str(self.path),
             "run_dir": str(self.run_dir),
             "pending_save": self._pending_save(stamps),
@@ -1587,6 +1592,7 @@ class LiveServer:
         penetration_mm: float = 1.0,
         timeline: str = "",
         note: str = "",
+        clip: str = "",
     ) -> dict:
         if self.script:
             return {
@@ -1607,6 +1613,7 @@ class LiveServer:
                 settle_mm=float(settle_mm),
                 penetration_mm=float(penetration_mm),
                 timeline=line,
+                clip=clip,
             )
         except (Exception, SystemExit) as exc:
             # the rest check may already have stepped the scene: reset it, as a passing check does

@@ -162,7 +162,7 @@ scene.add(rss.robot("yam_bimanual"))  # a scene needs something that moves befor
 | `camera fit --point X,Y,Z=U,V ... --ref STILL [--name N] [--fov DEG] [--free-center]` | The pinhole that puts world points (metres, the frame `CameraSpec` uses) on their pixels in the still: six or more, spread over the picture and in depth. Prints the `rss.CameraSpec(...)` to paste, its field of view, and each point's reprojection error in pixels (a point read off wrong is the one far above the rest); `run/camfit_<name>.png` marks each clicked pixel (yellow) and where the fit puts its point (cyan). `--fov` holds the field of view, `--free-center` solves the principal point too (ten or more points). Needs no page. |
 | `compare [--ref PHOTO] [--camera N] [--key NAME=HOW ...] [--note TEXT]` | The scene beside the photograph: the pair at full size and a look sheet; per keyed thing, its size, offset and overlap; and how far the whole picture's colours are from the photo's, over the frame and behind the keyed things. |
 | `compare --take NAME [--key ...]` | A recorded take beside the clip's timeline: the clip's anchors above, the take's frames at the same point below, and what moved in the take. |
-| `check [--camera N] [--key ...] [--object NAME ...]` | The gate: builds, finite state, camera at the clip's aspect, every named thing present, penetration and drift at rest under their bars. |
+| `check [--camera N] [--clip CLIP] [--key ...] [--object NAME ...]` | The gate: builds, finite state, camera at the clip's aspect, every named thing present, penetration and drift at rest under their bars; with `--clip` (the camera's own clip) a camera on a wrist is held to the hand it shows (the `hand` line, *The gate*). |
 | `log [--last N]` | Every compare, check, take and `snapshot --note` so far: what it left (PASS/FAIL, the picture: a snapshot's pair when it made one) and the `scene.py` it measured. |
 | `play [NAME] [--record TAKE --camera N --every K --also R,R] [--wait [--wait-limit S]]` | Play a routine the scene file binds, as its button on the page does; `--record` films a frame every `K` control steps (4). `--also gl,tiled,blender` draws each filmed frame of the same run with those renderers too, over the camera's plate when it has one: `TAKE.renderers/<renderer>.mp4` each and `TAKE.renderers/all.mp4` side by side (a folder made afresh for each take of that name), so renderers are compared on one run rather than on runs that drift apart. Each draws every filmed frame on the page's loop, so `--also blender` holds the page for a Cycles render a frame; a frame one fails is black in its video, three running stop it (`also_missed`, `also_failed` in `TAKE.json`), and the page's own renderer named there is left out (`also_skipped`). `--wait` returns when it ends and its take is written, printing the page's log as it goes, exits 1 with the traceback if it failed, and gives up after `--wait-limit` seconds (3600). |
 | `physics [NAME] [--only frozen,open,...] [--settle-mm MM] [--note TEXT]` | Replay a routine seven ways (written, frozen, open, built, heavy, drop, plain), each from a reset scene, and say whether its physics is real (*The physics replays*): as written, with the robot frozen, with the fingers held open, with the robot as built, with the handled things twice as heavy, with the fingers opened early in the carry (`drop`), and played with nothing hooked in (`plain`). Writes `run/physics.json` and a log line; takes as many times the routine's length as it plays replays. |
@@ -202,7 +202,7 @@ clean plate composites under all four, and `compare`'s per-thing readings
 
 | Renderer | Draws | Runs where | A 960x540 still |
 | --- | --- | --- | --- |
-| `rtx` (default) | the path tracer: materials, the `lab` room's light, the scenery | an NVIDIA GPU with RT cores | under a second; the first in a process compiles shaders |
+| `rtx` (default) | the path tracer: materials, the `lab` room's light, the scenery | an NVIDIA GPU with RT cores | a few seconds, the first through a camera a few more; the first in a process compiles shaders. Minutes for every new camera mean the renderer cannot write its cache (`ovrtx/bin/cache` in the environment, read-only in a sandbox): `status`'s `renderer_cache` says so -- make that folder writable rather than switching renderer |
 | `blender` | Cycles: the finishes and the `lab` light, as `rtx` does; no scenery | anywhere Blender 5 is installed (`ROBOSIMSTUDIO_BLENDER`, `blender` on the PATH, or Blender.app); Metal on a Mac | about a second on a GPU or a many-core CPU |
 | `gl` | flat colour and a sun, from the shapes as drawn; cloth, ropes and grains from their particles (a liquid as its grains) | anywhere: EGL on a GPU, software GL on a CPU, CGL on a Mac | milliseconds, and about 5 µs more a grain |
 | `tiled` | flat colour, from the colliders | anywhere Warp runs | milliseconds on a GPU, a second or two on a CPU |
@@ -363,6 +363,40 @@ against a photo, `compare` says when it had to stretch the photo to the
 camera's aspect. A line given nothing to look at (`objects` with no `--key`
 or `--object`) is a SKIP. The bars are defaults, and `check` blocks nothing.
 
+`--clip ref/<clip>` adds the `hand` line for a camera that rides the robot
+(`parent_frame`). A wrist camera carries the hand: in its clip the palm, the
+camera's housing and the fingers' usual place stay in the same pixels while
+the world sweeps past, so what changes in under 30% of 60 frames spread over
+the clip is the hand. The line draws the robot through the camera as the scene
+stands (run it from a reset, before the routine moves the arms), reads its
+overlap with that hand, and holds the camera to the robot's own camera on that
+arm, read from the registered robot's file:
+
+```
+FAIL  hand         the robot drawn over the clip's hand (what stays still through the clip): IoU 0.00 (bar 0.1); the clip's hand is centred 51% across, 10% down, the drawn robot 49% across, 87% down; turned 180 degrees it would read 0.15: is the camera mounted turned 180 degrees? (check_hand_cam_right.png: the clip's hand yellow, the drawn robot cyan); it sits 0 mm and 0 deg from the robot's own camera 'right', rolled 0 deg, with a 58 deg field of view against its 58
+```
+
+The overlap tells a camera the right way round from one that is not: it
+also tries the drawn robot turned 180 degrees and mirrored, and names one that
+reads clearly better, since a wrist camera is often mounted turned on its arm.
+The mount holds the rest: the camera within 20 mm of the robot's own, its view
+within 15 degrees of that camera's (a roll about the view is free), and its
+field of view within 25% of the camera's. Past any of those the line fails and
+prints the robot's own camera as `xform=(...)`, `fov_y=...`: start there and
+fit the roll. A twin that fitted the hand alone moved its cameras 60-90 mm off
+the robot's and opened them to 89 and 110 degrees against 58; the hand lined
+up and nothing else in the view did. Open `run/check_hand_<camera>.png` -- the
+clip's first frame, its hand yellow, the drawn robot outlined cyan. Measured on
+one clip at the robot's own mount and the clip's roll: 0.28-0.33 on one wrist,
+0.15 on the other, whose fingers stand at another opening for most of the
+clip; turned the wrong way, 0.00. A camera that rides nothing gets a SKIP, and
+a clip in which nothing stays still is no wrist clip. A robot whose file carries
+no camera on that link (a URDF, or an MJCF without one) has no mount to hold
+the camera to: the line keeps the overlap's verdict and says so, with where the
+camera sits on the link and its field of view -- the hand lining up does not
+settle them, so they come from a calibration that came with the clip or a
+measured mount, and the report says which.
+
 ### The physics replays
 
 `physics` plays the routine again as written and six ways changed, each from
@@ -408,7 +442,13 @@ NOTE  grip     the fingers pressed flower_1 0.7 N (p95 0.7) by hand 2; ...; the 
   the registered hand's (the YAM's 50 N clamp). It
   passes when the routine finishes and the things end where the written run
   left them (within 50 mm and 30°): a grip that only holds at a friction no
-  rubber pad has fails here, even when the routine's own checks miss it.
+  rubber pad has fails here, even when the routine's own checks miss it. A
+  thing that ends held up by other things alone, the same ones in both runs
+  (a mug on a peg, a plate in a rack: nothing static under it and no finger
+  on it, read off the last step's contacts), is held to where it ends, not to
+  how it is turned: it swings to where it swings, and one twin's replays left
+  the same mug on the same peg 1 to 13 mm and up to 92° apart. This holds for
+  every line that reads an end.
   When `built` lowered nothing (the scene was already as built, so it only
   played the routine again) and nothing in the scene keeps a friction built
   does not cap (a deformable, or a thing another solver steps), a different
@@ -456,7 +496,16 @@ NOTE  grip     the fingers pressed flower_1 0.7 N (p95 0.7) by hand 2; ...; the 
   of its name. A copy of its file (in the twin's folder, edited or not), or
   arm or gripper servo gains and force limits of the twin's own (`arm=`,
   `gripper=`), fail: use the registered robot, placed with `at=` and
-  `arms_at=`. A robot built from a file nothing registered is a NOTE: its
+  `arms_at=`. So does a robot built by a class of the twin's own (a subclass
+  of the library's swapped into the build), and so does any difference in the
+  built model's numbers from the registered robot built alone: each joint's
+  range, servo gain and damping, force and speed limits, armature, friction,
+  axis and frames; each shape's size, place on its link, kind, friction,
+  contact stiffness and what it collides with; each link's mass, inertia and
+  centre of mass -- whatever changed them (a hook that edits the builder
+  included). Where the bases stand is not compared. Its look -- `color`,
+  `finish`, `appearance` on the spec, and a shape's visibility -- is the
+  twin's. A robot built from a file nothing registered is a NOTE: its
   limits are the file's own and are not checked.
 - **settle** reads how the scene's own settle, before the first step, moved
   each thing from where it was put, and how deep each sits in something at

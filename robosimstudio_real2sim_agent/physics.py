@@ -777,6 +777,153 @@ def _departures(spec: Any, reg: Any, resident: bool = False) -> dict[str, str]:
     return out
 
 
+MODEL_ARRAYS = (
+    ("joint_limit_lower", "joint range"),
+    ("joint_limit_upper", "joint range"),
+    ("joint_target_ke", "servo gain"),
+    ("joint_target_kd", "servo damping"),
+    ("joint_effort_limit", "force limit"),
+    ("joint_velocity_limit", "speed limit"),
+    ("joint_armature", "armature"),
+    ("joint_friction", "joint friction"),
+    ("joint_damping", "joint damping"),
+)
+"""The per-DOF numbers of the built robot held to a fresh build of the registered one: whatever changed them -- a
+copied file, an ``arm=``, a class of the twin's own in the build, a hook that edits the builder (an ``appearance=``
+is for the look), an edit to the model after it -- shows here."""
+
+PART_ARRAYS = (
+    ("joint_label", "joint_axis", "joint axis"),
+    ("joint_label", "joint_type", "joint kind"),
+    ("joint_label", "joint_X_p", "joint frame"),
+    ("joint_label", "joint_X_c", "joint frame"),
+    ("joint_label", "joint_mimic_coeffs", "finger coupling"),
+    ("shape_label", "shape_material_mu", "friction"),
+    ("shape_label", "shape_material_mu_torsional", "torsional friction"),
+    ("shape_label", "shape_material_mu_rolling", "rolling friction"),
+    ("shape_label", "shape_material_ke", "contact stiffness"),
+    ("shape_label", "shape_material_kd", "contact damping"),
+    ("shape_label", "shape_material_restitution", "restitution"),
+    ("shape_label", "shape_scale", "shape size"),
+    ("shape_label", "shape_transform", "shape place on its link"),
+    ("shape_label", "shape_type", "shape kind"),
+    ("shape_label", "shape_flags", "what a shape collides with"),
+    ("shape_label", "shape_gap", "contact gap"),
+    ("shape_label", "shape_margin", "contact margin"),
+    ("body_label", "body_mass", "mass"),
+    ("body_label", "body_inertia", "inertia"),
+    ("body_label", "body_com", "centre of mass"),
+)
+"""The robot's joints, shapes and links held, label by label, to the registered build's: their frames and axes, each
+shape's size, place, kind, contact and what it collides with, each link's mass and inertia. A base joint's parent frame
+and a shape on the world (a fixed base folded into it) are where ``at=`` and ``arms_at=`` stand the robot, so they are
+not compared, and a shape's visibility is the look's."""
+
+_PLACE_MM, _TURN_DEG = 0.5, 0.5
+"""How far a frame may sit or turn from the registered one's before it is a different frame: float noise, not a fit."""
+
+
+def _own_labels(labels: Any, prefix: str) -> dict[str, int]:
+    """Index by label below the robot's own name, for labels that start with it."""
+    return {str(lab)[len(prefix) :]: i for i, lab in enumerate(labels) if str(lab).startswith(prefix)}
+
+
+def _apart(field: str, a: Any, b: Any) -> str:
+    """How value ``a`` differs from the registered ``b`` of ``field`` in a few words, or ``""`` when they agree."""
+    a, b = np.asarray(a, dtype=float), np.asarray(b, dtype=float)
+    if field.endswith(("_X_p", "_X_c", "_transform")):
+        moved = 1000.0 * float(np.linalg.norm(a[:3] - b[:3]))
+        dot = min(
+            1.0, abs(float(np.dot(a[3:7], b[3:7]))) / max(float(np.linalg.norm(a[3:7]) * np.linalg.norm(b[3:7])), 1e-12)
+        )
+        turned = math.degrees(2.0 * math.acos(dot))
+        if moved <= _PLACE_MM and turned <= _TURN_DEG:
+            return ""
+        return f"{moved:.1f} mm and {turned:.1f} deg off"
+    if field == "shape_flags":
+        visible = int(newton.ShapeFlags.VISIBLE)
+        a, b = np.asarray(int(a) & ~visible), np.asarray(int(b) & ~visible)
+    if np.allclose(a, b, rtol=1e-3, atol=1e-6):
+        return ""
+    if a.size == 1:
+        return f"{float(a):.4g} (registered {float(b):.4g})"
+    return f"{np.array2string(a.ravel(), precision=4)} (registered {np.array2string(b.ravel(), precision=4)})"
+
+
+def compare_models(model: Any, ref: Any, name: str, ref_name: str) -> list[str]:
+    """How ``model``'s robot (labels under ``name/``) differs from ``ref``'s (under ``ref_name/``), in a few words per
+    measure: each DOF's :data:`MODEL_ARRAYS` and each joint's, shape's and link's :data:`PART_ARRAYS`, matched by
+    label. Placement (where the bases stand) is not compared: ``at=`` and ``arms_at=`` are the twin's."""
+    out: list[str] = []
+    by_kind: dict[str, list[str]] = {}
+
+    def note(kind: str, what: str) -> None:
+        by_kind.setdefault(kind, []).append(what)
+
+    mj, rj = _own_labels(model.joint_label, name + "/"), _own_labels(ref.joint_label, ref_name + "/")
+    mq, rq = model.joint_qd_start.numpy(), ref.joint_qd_start.numpy()
+    for field, kind in MODEL_ARRAYS:
+        if getattr(model, field, None) is None or getattr(ref, field, None) is None:
+            continue
+        a, b = getattr(model, field).numpy(), getattr(ref, field).numpy()
+        for lab, j in rj.items():
+            i = mj.get(lab)
+            if i is None:
+                continue
+            for k in range(int(rq[j + 1] - rq[j])):
+                va, vb = float(a[int(mq[i]) + k]), float(b[int(rq[j]) + k])
+                if not math.isclose(va, vb, rel_tol=1e-3, abs_tol=1e-6):
+                    note(kind, f"{lab.rsplit('/', 1)[-1]} {va:.4g} (registered {vb:.4g})")
+    # A base joint's parent frame, and a shape standing on the world (a fixed base folded into it), are where the
+    # twin placed the robot.
+    placed = {
+        "joint_X_p": ref.joint_parent.numpy() < 0 if getattr(ref, "joint_parent", None) is not None else None,
+        "shape_transform": ref.shape_body.numpy() < 0 if getattr(ref, "shape_body", None) is not None else None,
+    }
+    for labels, field, kind in PART_ARRAYS:
+        if getattr(model, field, None) is None or getattr(ref, field, None) is None:
+            continue
+        a, b = getattr(model, field).numpy(), getattr(ref, field).numpy()
+        mine, theirs = (
+            _own_labels(getattr(model, labels), name + "/"),
+            _own_labels(getattr(ref, labels), ref_name + "/"),
+        )
+        for lab, j in theirs.items():
+            i = mine.get(lab)
+            where = placed.get(field)
+            if i is None or (where is not None and bool(where[j])):
+                continue
+            words = _apart(field, a[i], b[j])
+            if words:
+                note(kind, f"{lab.rsplit('/', 1)[-1]} {words}")
+    for kind, found in by_kind.items():
+        diffs = list(dict.fromkeys(found))
+        more = f" and {len(diffs) - 3} more" if len(diffs) > 3 else ""
+        out.append(f"{kind} {', '.join(diffs[:3])}{more}")
+    return out
+
+
+def built_departures(sim: Any, reg: Any) -> tuple[list[str], str]:
+    """:func:`compare_models` of the scene's robot against the registered ``reg`` built alone, on the scene's own
+    physics, and ``""``; or no departures and why they were not read, when that build fails."""
+    import robosimstudio as rss
+
+    spec = sim.scene.embodiment.spec
+    try:
+        scene = rss.Scene(cell="void", name="registered_robot", physics=sim.request.physics)
+        scene.add(rss.robot(reg))
+        ref = scene.build(control_mode="joint_position")
+    except Exception as exc:
+        return [], f"its built numbers were not compared: the registered {reg.name} would not build alone ({exc})"
+    try:
+        return compare_models(sim.model, ref.model, spec.name, reg.name), ""
+    finally:
+        try:
+            ref.close()
+        except Exception:
+            pass
+
+
 def robot_departures(sim: Any) -> dict[str, Any]:
     """How the robot the scene was built with differs from the library's robot it is (:func:`shipped_robot`): its
     file, its arm servo, each arm's hand and gripper servo, its other physics (each a few words, empty when the
@@ -790,7 +937,18 @@ def robot_departures(sim: Any) -> dict[str, Any]:
     if reg is None:
         return {"name": spec.name, "registered": False, "file": str(getattr(spec.asset, "path", ""))}
     departed = _departures(spec, reg, resident=bool(getattr(emb, "scene_resident", False)))
-    return {"name": spec.name, "registered": True, "as": reg.name, "file": copied, **departed}
+    out = {"name": spec.name, "registered": True, "as": reg.name, "file": copied, **departed}
+    builder = type(emb)
+    library = [c for c in builder.__mro__[1:] if c.__module__.split(".")[0].startswith("robosimstudio")]
+    if library and not builder.__module__.split(".")[0].startswith("robosimstudio"):
+        out["builder"] = f"it is built by {builder.__module__}.{builder.__name__}, a class of the twin's own"
+    if getattr(sim, "model", None) is not None and getattr(sim, "request", None) is not None:
+        model, note = built_departures(sim, reg)
+        if model:
+            out["model"] = "its built model differs: " + "; ".join(model)
+        if note:
+            out["model_note"] = note
+    return out
 
 
 def model_facts(sim: Any) -> dict[str, Any]:
@@ -1128,6 +1286,9 @@ class Replay:
         self.hidden_mask = np.zeros(n, dtype=bool)
         self.hidden_mask[list(self.hidden)] = True
         self.hidden_touch: dict[int, set[str]] = {}
+        self.last_pairs: tuple[np.ndarray, np.ndarray, np.ndarray] | None = None
+        """The last step's contacts read off MuJoCo's list: each thing's index, what it touched (a thing's index, -1
+        for anything else) and whether that is the robot. What a thing ends resting on (``end_on``)."""
         self.parts = [(f"{name}#{k}", b) for name in self.names for k, b in enumerate(self.th[name]["bodies"][1:], 1)]
         self.arms = list(self.fing)
         self.finger_of = np.full(n, -1, dtype=np.int64)
@@ -1339,9 +1500,11 @@ class Replay:
                 depth = np.maximum(-np.asarray(probe.depths, dtype=np.float64), 0.0)
                 mapped = (a >= 0) & (b >= 0)  # a geom with no Newton shape reads -1, which numpy would wrap
                 a, b, force, depth = a[mapped], b[mapped], force[mapped], depth[mapped]
+                pairs: list[tuple[np.ndarray, np.ndarray, np.ndarray]] = []
                 for x, y in ((a, b), (b, a)):
                     ox = self.owner[x]
                     real = (ox >= 0) & (self.owner[y] != ox)  # a thing's own shapes touching are not a contact
+                    pairs.append((ox[real], self.owner[y][real], self.robot[y][real]))
                     np.add.at(near, ox[real], 1)
                     on_robot = real & self.robot[y]
                     np.add.at(robot, ox[on_robot], force[on_robot])
@@ -1351,6 +1514,7 @@ class Replay:
                     np.add.at(hand, (ox[on_finger], self.finger_of[y][on_finger]), force[on_finger])
                     for i, sh in zip(ox[real & self.hidden_mask[y]], y[real & self.hidden_mask[y]], strict=True):
                         self.hidden_touch.setdefault(int(i), set()).add(self.hidden[int(sh)])
+                self.last_pairs = tuple(np.concatenate([p[i] for p in pairs]) for i in range(3))
                 if self.steps % 10 == 0:
                     self._mixed_friction(probe)
         in_window = self.mode != "drop" or (
@@ -1489,6 +1653,14 @@ class Replay:
             }
             if name in self.names:
                 i = self.names.index(name)
+                if self.last_pairs is not None:
+                    o, other, on_robot = self.last_pairs
+                    sel = o == i
+                    t["end_on"] = {
+                        "things": sorted({self.names[int(j)] for j in other[sel] if j >= 0}),
+                        "static": bool(((other[sel] < 0) & ~on_robot[sel]).any()),
+                        "robot": bool(on_robot[sel].any()),
+                    }
                 hand = np.array([r["hand"][i] for r in rows])
                 t["hand_force_p50_p95_N"] = [
                     [round(float(np.percentile(c[c > 0.5], q)), 1) for q in (50, 95)] if (c > 0.5).any() else [0.0, 0.0]
@@ -2075,6 +2247,8 @@ def _misses(
             out.append(_Miss(k, "lost", {}, {}, words, {}))
             continue
         amount = _end_offset(a, b, (round_axes or {}).get(k))
+        if _hangs(a, b):  # its swing about what holds it up is its own: where it ends is the reading
+            amount["turn"] = 0.0
         tol = {"position": mm, "shape": mm / 2, "turn": deg}
         far = {d: amount[d] / tol[d] for d in tol}
         first = next((d for d in ("position", "shape", "turn") if far[d] > 1.0), None)
@@ -2090,6 +2264,17 @@ def _misses(
                 )
             )
     return out
+
+
+def _hangs(a: dict, b: dict) -> bool:
+    """Whether a thing ends held up by other things alone, the same ones, in both runs: hung on a peg or stood in a
+    rack, with nothing static under it and no finger on it (``end_on``, read off the last step's contacts). Its turn
+    about what holds it is free -- a mug on a peg swings to where it swings: on one twin the same mug on the same peg
+    ended 1 to 13 mm apart and 68 to 92 degrees apart across replays -- so such an end is read by where it is."""
+    ea, eb = a.get("end_on"), b.get("end_on")
+    if not ea or not eb or not ea.get("things") or ea.get("things") != eb.get("things"):
+        return False
+    return not (ea.get("static") or eb.get("static") or ea.get("robot") or eb.get("robot"))
 
 
 def _miss_words(k: str, measure: str, amount: float) -> str:
@@ -2225,7 +2410,7 @@ def _robot_line(model: dict, line: Any) -> None:
             "the library does not ship: its servo gains and limits are the file's own and are not checked",
         )
         return
-    gone = [spec[k] for k in ("file", "arm", "hand", "gripper", "other") if spec.get(k)]
+    gone = [spec[k] for k in ("file", "arm", "hand", "gripper", "other", "builder", "model") if spec.get(k)]
     known = spec.get("as") or spec["name"]
     if gone:
         line(
@@ -2236,7 +2421,8 @@ def _robot_line(model: dict, line: Any) -> None:
             + ": use the registered robot, placed with at= (and arms_at= for each arm)",
         )
     else:
-        line(True, "robot", f"the registered {known}, its own file, hands and servos")
+        note = f"; {spec['model_note']}" if spec.get("model_note") else ""
+        line(True, "robot", f"the registered {known}, its own file, hands and servos{note}")
 
 
 def _model_lines(

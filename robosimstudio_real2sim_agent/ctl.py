@@ -303,6 +303,11 @@ def build_parser() -> argparse.ArgumentParser:
         help="how far a thing may drift left alone (default 2)",
     )
     chk.add_argument(
+        "--clip",
+        default="",
+        help="the camera's own clip: a camera on a wrist is held to the hand it shows (the hand line)",
+    )
+    chk.add_argument(
         "--penetration-mm",
         type=float,
         default=1.0,
@@ -534,6 +539,7 @@ def build_request(args: argparse.Namespace, parser: argparse.ArgumentParser) -> 
             penetration_mm=args.penetration_mm,
             timeline=_absolute(args.timeline),
             note=args.note,
+            clip=_absolute(args.clip),
         )
     elif args.cmd == "log":
         req["last"] = args.last
