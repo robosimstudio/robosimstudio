@@ -235,6 +235,7 @@ class TestThePlacement(unittest.TestCase):
         prefix: bool = False,
         reverse: bool = False,
         mount: tuple = (0.1, 0.0, 0.5, 0.0, 0.0, 0.0, 1.0),
+        fixture: bool = False,
     ):
         import newton
 
@@ -258,6 +259,11 @@ class TestThePlacement(unittest.TestCase):
         )
         spec = EmbodimentSpec(name="two", asset=AssetSpec(path=str(path)), arms=arms, collapse_fixed_joints=collapse)
         builder = newton.ModelBuilder()
+        if fixture:
+            # scenery built before the robot: a pegboard welded to the world by a fixed joint
+            board = builder.add_link(xform=(0.5, 0.0, 0.2, 0.0, 0.0, 0.0, 1.0), mass=1.0, label="pegboard")
+            builder.add_shape_box(board, hx=0.1, hy=0.1, hz=0.01)
+            builder.add_articulation([builder.add_joint_fixed(-1, board, label="pegboard_weld")])
         entity = EntityEmbodiment(spec, pose=mount, arm_mounts=mounts)
         entity.build_into(builder, None)
         self._entities = [entity]
@@ -299,6 +305,15 @@ class TestThePlacement(unittest.TestCase):
         ]
         self.assertEqual(1, len(puck))
         np.testing.assert_allclose(np.asarray(builder.shape_transform[puck[0]], dtype=np.float64), WANT, atol=1e-6)
+
+    def test_the_collapse_leaves_a_fixture_built_before_it(self) -> None:
+        """Placing the arms folds only the robot's own fixed joints: a fixture welded to the world earlier keeps its
+        body and its index, as every other import's collapse does (``collapse_own_fixed_joints``)."""
+        builder = self._build(APART, collapse=True, mounts={"a": WANT}, fixture=True)
+        labels = [label.split("/")[-1] for label in builder.body_label]
+        self.assertEqual("pegboard", labels[0], "the fixture welded before the robot was folded into the world")
+        np.testing.assert_allclose(self._body(builder, "pegboard"), (0.5, 0.0, 0.2, 0.0, 0.0, 0.0, 1.0), atol=1e-6)
+        self.assertNotIn("a_base", labels)
 
     def test_a_position_keeps_the_heading(self) -> None:
         """On a robot turned a quarter by its mount, a position moves the base and does not turn it."""

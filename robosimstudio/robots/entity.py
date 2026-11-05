@@ -28,7 +28,7 @@ import newton
 import numpy as np
 import warp as wp
 
-from robosimstudio.core.builder import rekey_custom_attributes, restate_body_attribute, set_body_attribute
+from robosimstudio.core.builder import restate_body_attribute, set_body_attribute
 from robosimstudio.core.suction import Suction
 from robosimstudio.paths import resolve_asset
 from robosimstudio.robots.registry import resolve_gripper
@@ -460,7 +460,11 @@ class EntityEmbodiment(Entity):
         if placing:
             self._place_arms(builder, joint_start)
             if self.spec.collapse_fixed_joints:
-                rekey_custom_attributes(builder, builder.collapse_fixed_joints(verbose=False))
+                # This robot's own fixed joints only, as every import's collapse: the whole builder's would fold a
+                # fixture welded to the world before it and renumber every body after.
+                from robosimstudio.scene.build.imports import collapse_own_fixed_joints
+
+                collapse_own_fixed_joints(builder, joint_start)
 
         self._attach_hands(builder)
 
