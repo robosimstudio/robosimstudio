@@ -112,6 +112,7 @@ from __future__ import annotations
 import contextlib
 import itertools
 import os
+import threading
 from collections.abc import Callable, Mapping, Sequence
 from typing import Any
 
@@ -283,6 +284,11 @@ def _renderer_on_gpu(ordinal: int | None):
 _STAGES = itertools.count(1)
 """Numbers the OVStage of every viewer this process opens; see :func:`_stage_of_its_own`."""
 
+_SWAPPING = threading.Lock()
+"""Held while a viewer's ``_init_ovrtx`` runs with ``ovrtx.Renderer`` and ``ovstage.Stage`` swapped: two renderers
+built at once on two threads (a still and a take's ``--also``) would each save the other's stand-in as the
+original and could leave one installed for good."""
+
 
 @contextlib.contextmanager
 def _stage_of_its_own():
@@ -439,7 +445,7 @@ def _viewer_class():
             if self._decorate is not None:
                 self._decorate(self)
             ordinal = self.device.ordinal if getattr(self.device, "is_cuda", False) else None
-            with _renderer_on_gpu(ordinal), _stage_of_its_own():
+            with _SWAPPING, _renderer_on_gpu(ordinal), _stage_of_its_own():
                 super()._init_ovrtx()
 
         # -- deformables ------------------------------------------------------
