@@ -150,6 +150,29 @@ def side_by_side(sim_rgb: np.ndarray, reference_path: str) -> np.ndarray:
     return np.concatenate([sim_rgb, np.asarray(ref)], axis=1)
 
 
+def rtx_cache_warning() -> str:
+    """Why every new camera's first path-traced picture would take minutes, or ``""``: the path tracer keeps its
+    shader and derived-data cache in its own package folder (``ovrtx/bin/cache``), and where that folder cannot be
+    written -- a sandbox that mounts the environment read-only -- it builds every stage from nothing (232 s against
+    5.7 s for one 960x540 still of one twin, measured in such a sandbox and outside it)."""
+    import importlib.util
+    import os
+
+    try:
+        found = importlib.util.find_spec("ovrtx")
+    except (ImportError, ValueError):
+        return ""
+    if found is None or not found.origin:
+        return ""
+    cache = Path(found.origin).parent / "bin" / "cache"
+    if cache.is_dir() and not os.access(cache, os.W_OK):
+        return (
+            f"{cache} cannot be written, so the path tracer keeps no cache and every new camera's first picture "
+            "takes minutes: make that folder writable (in a container, mount a writable copy over it)"
+        )
+    return ""
+
+
 def save_png(rgb: np.ndarray, path: Path | str) -> Path:
     from PIL import Image
 

@@ -24,7 +24,18 @@ import subprocess
 from pathlib import Path
 from typing import Any
 
-__all__ = ["TIMELINE", "contact_sheet", "cut", "extract", "parse_times", "probe", "read_timeline", "write_timeline"]
+__all__ = [
+    "TIMELINE",
+    "contact_sheet",
+    "cut",
+    "extract",
+    "parse_times",
+    "plate",
+    "probe",
+    "read_timeline",
+    "sample",
+    "write_timeline",
+]
 
 TIMELINE = "timeline.json"
 
@@ -231,4 +242,129 @@ def cut(
         "contact": f"{sheet} ({tiles} tiles, every {spacing} s)",
         "timeline": str(timeline),
         "report": "\n".join(f"{a['t']:6.2f} s  {a['file']}  {a['label']}" for a in anchors),
+    }
+
+
+def sample(clip: str | Path, *, count: int = 60, width: int = 0, height: int = 0) -> Any:
+    """``count`` frames spread evenly over the whole clip, as ``uint8 [n, h, w, 3]``, scaled to ``width`` x
+    ``height`` when given (a camera's size). Raises ``FileNotFoundError`` for a clip that is not there and
+    ``ValueError`` for one that gives fewer than three frames."""
+    import numpy as np
+
+    clip_path = Path(clip)
+    if not clip_path.is_file():
+        raise FileNotFoundError(f"no clip at {clip}")
+    meta = probe(clip_path)
+    w, h = int(width or meta["width"]), int(height or meta["height"])
+    rate = max(3, int(count)) / max(meta["duration"], 1e-3)
+    argv = [_ffmpeg(), "-v", "error", "-i", str(clip_path), "-vf", f"fps={rate:.6f},scale={w}:{h}"]
+    argv += ["-f", "rawvideo", "-pix_fmt", "rgb24", "-"]
+    raw = subprocess.run(argv, check=True, stdin=subprocess.DEVNULL, capture_output=True).stdout
+    n = len(raw) // (w * h * 3)
+    if n < 3:
+        raise ValueError(f"only {n} frames came out of {clip}")
+    return np.frombuffer(raw[: n * w * h * 3], dtype=np.uint8).reshape(n, h, w, 3)
+
+
+def _paint_in(image: Any, hole: Any) -> Any:
+    """``image`` with the ``hole`` pixels filled from around it: the nearest pixel outside, smoothed inside."""
+    import numpy as np
+    from scipy.ndimage import distance_transform_edt, gaussian_filter
+
+    if not hole.any():
+        return image
+    _, (iy, ix) = distance_transform_edt(hole, return_indices=True)
+    filled = image[iy, ix].astype(np.float32)
+    width = float(distance_transform_edt(hole).max())
+    soft = np.stack([gaussian_filter(filled[..., c], sigma=max(1.0, width / 3.0)) for c in range(3)], axis=-1)
+    out = image.astype(np.float32)
+    out[hole] = soft[hole]
+    return np.clip(out, 0, 255).astype(np.uint8)
+
+
+def plate(
+    clip: str | Path,
+    *,
+    windows: str = "",
+    count: int = 60,
+    out_dir: str | Path = "ref",
+    name: str = "",
+    paint: str | Path = "",
+) -> dict:
+    """A clean plate of a fixed camera's clip: the median of ``count`` frames between ``start`` and ``end``.
+
+    Whatever moves through a pixel for less than half the frames is gone from
+    the median, so a robot arm sweeping past leaves the wall behind it. What
+    stays put all along stays in the plate, and so does a thing that sat in one
+    place for most of the window -- pick the window so that what the robot
+    handles is elsewhere for most of it, or paint it out. Beside the plate,
+    ``*_spread.png`` is the share of frames each pixel differs from the plate
+    in (white: half of them, a coin toss), which is where to look for a ghost.
+
+    ``windows`` is ``"0:5,36:52"``: the seconds the frames are drawn from, spread
+    evenly over them (default: the whole clip). ``paint`` is a mask the size of
+    the clip, white where the plate is to be painted in from around it: a robot
+    base that never left, a thing that sat still all along.
+    """
+    from PIL import Image
+
+    clip_path = Path(clip)
+    if not clip_path.is_file():
+        return {"ok": False, "error": f"no clip at {clip}"}
+    meta = probe(clip_path)
+    w, h = meta["width"], meta["height"]
+    last = meta["duration"] - 1.0 / (meta["fps"] or 30.0)
+    spans = []
+    for item in [x for x in str(windows or "").split(",") if x.strip()] or [f"0:{last}"]:
+        a, sep, b = item.partition(":")
+        t0, t1 = max(0.0, float(a or 0)), min(last, float(b) if sep and b.strip() else last)
+        if t1 <= t0:
+            return {"ok": False, "error": f"the window {item} is empty (the clip lasts {meta['duration']:g} s)"}
+        spans.append((t0, t1))
+    count = max(3, int(count))
+    total = sum(t1 - t0 for t0, t1 in spans)
+    chunks: list[bytes] = []
+    for t0, t1 in spans:
+        rate = max(1, round(count * (t1 - t0) / total)) / (t1 - t0)
+        argv = [_ffmpeg(), "-v", "error", "-ss", f"{t0:.3f}", "-t", f"{t1 - t0:.3f}", "-i", str(clip_path)]
+        argv += ["-vf", f"fps={rate:.6f}", "-f", "rawvideo", "-pix_fmt", "rgb24", "-"]
+        chunks.append(subprocess.run(argv, check=True, stdin=subprocess.DEVNULL, capture_output=True).stdout)
+    raw = b"".join(chunks)
+    n = len(raw) // (w * h * 3)
+    if n < 3:
+        return {"ok": False, "error": f"only {n} frames came out of {windows or 'the clip'}"}
+    import numpy as np
+
+    frames = np.frombuffer(raw[: n * w * h * 3], dtype=np.uint8).reshape(n, h, w, 3)
+    med = np.median(frames, axis=0).astype(np.uint8)
+    # per pixel, the share of frames that differ from the plate: 0.5 is a coin toss, where a ghost can be
+    away = np.zeros((h, w), dtype=np.float32)
+    for frame in frames:
+        away += np.abs(frame.astype(np.int16) - med.astype(np.int16)).max(axis=2) > 12
+    away /= n
+    moved = float((away > 0.25).mean())
+    out_dir = Path(out_dir)
+    out_dir.mkdir(parents=True, exist_ok=True)
+    stem = (name[:-4] if name.lower().endswith(".png") else name) if name else f"plate_{clip_path.stem}"
+    path = out_dir / f"{stem}.png"
+    path.parent.mkdir(parents=True, exist_ok=True)
+    painted = ""
+    if paint:
+        with Image.open(paint) as opened:
+            mask = np.asarray(opened.convert("L").resize((w, h), Image.NEAREST)) > 127
+        med = _paint_in(med, mask)
+        painted = f"{mask.mean() * 100:.1f}% of the plate painted in from {Path(paint).name}"
+    Image.fromarray(med).save(path)
+    vis = np.clip(away * 510.0, 0, 255).astype(np.uint8)
+    spread_path = out_dir / f"{stem}_spread.png"
+    Image.fromarray(vis).save(spread_path)
+    return {
+        "ok": True,
+        "plate": str(path),
+        "spread": str(spread_path),
+        "size": f"{w}x{h}",
+        "frames": n,
+        "windows": ", ".join(f"{a:g} to {b:g} s" for a, b in spans),
+        "varied": f"{moved * 100:.1f}% of pixels differ from the plate in over a quarter of the frames (white in the spread)",
+        "painted": painted,
     }

@@ -27,16 +27,21 @@ from pathlib import Path
 __all__ = [
     "DEFAULT_RUN_DIR",
     "READY_PREFIX",
+    "ROUTINE_PLAYING",
     "SOCKET_NAME",
     "ControlSocket",
     "NoReply",
     "NoServer",
+    "SocketRefused",
     "encode",
     "parse_ready",
     "ready_line",
     "request",
     "socket_path",
 ]
+
+ROUTINE_PLAYING = "a routine is playing (`status` lists it under `playing`); let it end, or `reset` to stop it"
+"""What ``run``, ``check`` and ``physics`` answer while a routine plays (``physics`` says it before a reset stops it)."""
 
 DEFAULT_RUN_DIR = "run"
 """Where a page keeps its socket, its log and its snapshots: under the directory it was started from."""
@@ -56,14 +61,38 @@ class NoReply(TimeoutError):
 SUN_PATH_MAX = 100
 """Bytes a Unix socket path may have on Linux (108, less the terminator and a margin)."""
 
+SOCKET_DIRS = ("/tmp",)
+"""Where a run directory too deep for its own socket gets one when the temp directory is too deep as well: the
+first whose path fits. Chosen by length alone, never by what can be written there -- a client only connects, and
+must resolve the path the server bound whatever it may write. ``/tmp`` is shared, and the socket's name there is a
+hash anyone who knows the run directory can work out: a page that must not be reached that way is started with
+``--sock`` naming a socket in a directory of its own."""
+
+
+class SocketRefused(OSError):
+    """The server could not take its control socket: the directory refused it, or another page holds it."""
+
+    def __init__(self, path: Path | str, cause: BaseException) -> None:
+        self.path, self.cause = Path(path), cause
+        reason = str(cause) or type(cause).__name__
+        super().__init__(
+            f"cannot take the control socket {path} ({reason}): give --sock a path of at most {SUN_PATH_MAX} bytes "
+            "in a directory this process can write"
+        )
+
 
 def socket_path(run_dir: str | os.PathLike | None, sock: str | os.PathLike | None = None) -> Path:
     """Where the socket is: an explicit ``sock`` wins, else ``<run_dir>/ctl.sock``.
 
     A run directory deep enough that the socket's path would not fit a
     ``sockaddr_un`` -- a worktree under a session's scratch directory did it --
-    is given a short path in the temp directory instead, named by a hash of
-    the run directory so the server and every client resolve the same one.
+    is given a short path in the temp directory instead -- private where
+    ``TMPDIR`` is -- or, when that is too deep as well, in :data:`SOCKET_DIRS`.
+    It is named by a hash of the run directory and chosen by length alone, so
+    the server and every client in one environment resolve the same one.
+
+    Raises:
+        OSError: When no such directory leaves the path short enough; ``--sock`` names one.
     """
     if sock:
         return Path(sock)
@@ -74,8 +103,16 @@ def socket_path(run_dir: str | os.PathLike | None, sock: str | os.PathLike | Non
     import hashlib
     import tempfile
 
-    digest = hashlib.sha1(os.fsencode(full)).hexdigest()[:12]
-    return Path(tempfile.gettempdir()) / f"rss-live-{digest}.sock"
+    name = f"rss-live-{hashlib.sha1(os.fsencode(full)).hexdigest()[:12]}.sock"
+    roots = (tempfile.gettempdir(), *SOCKET_DIRS)
+    for root in roots:
+        short = Path(root) / name
+        if len(os.fsencode(short)) <= SUN_PATH_MAX:
+            return short
+    raise OSError(
+        f"no directory short enough for the control socket of {full.parent} (tried {', '.join(roots)}): "
+        f"give --sock a path of at most {SUN_PATH_MAX} bytes"
+    )
 
 
 def ready_line(url: str, sock: Path | str, scene: Path | str, share: str | None = None) -> str:
