@@ -4,9 +4,9 @@
 Two cables hang from a clamp, one twisting ten times more easily than it bends and one ten times less: drag each hand onto its cable's tip, press **Close**, turn each gizmo's ring a third of a turn about the cable and press **Open**, and the stiff one springs the turn back out while the soft one keeps it.
 
 ``twist_ke`` splits Newton's rod joint from its bend. The pads alone hold each
-tip, turned about the vertical. Turned 120 degrees, the soft cable takes 0.33
-turns and the stiff 0.16, slipping in the jaws; opened, the stiff reads 0.000 in
-30 steps, the soft 0.107 in 60 (``tests/test_cable_robot``, GPU 2).
+tip, turned about the vertical. Turned 120 degrees, the soft cable takes 0.32
+turns and the stiff 0.32 too, held by the hand's 50 N clamp; opened, the stiff
+reads 0.001 in 30 steps, the soft 0.106 in 60 (``tests/test_cable_robot``, GPU 7).
 """
 
 import numpy as np
@@ -18,9 +18,9 @@ from robosimstudio_materials.rod.measures import twist_turns
 
 def main():
     length, radius, segments, bend_ke = 0.4, 0.006, 24, 0.04  # [m], and the shipped cable's bend [N*m/rad]
-    top, x, y = 0.55, 0.05, 0.12  # the clamps over the bench [m]: the tips hang 150 mm clear of it, one per hand
-    right_q = (0.9814, 1.9063, 0.908, 0.998, 1.505, 0.0)  # [rad]: level, 30 degrees out, 60 mm back from the tip
-    left_q = (-0.9814, 1.9063, 0.908, 0.998, -1.505, 0.0)  # its mirror; both by ``sim.arm(...).solve_q_full``
+    top, x, y = 0.55, 0.05, 0.18  # the clamps [m]: tips 150 mm over the bench, 360 mm apart, so the arms clear
+    right_q = (0.8756, 1.7574, 0.7021, 1.0552, 1.3992, 0.0)  # [rad]: level, 30 degrees out, 60 mm back from the tip
+    left_q = (-0.8756, 1.7574, 0.7021, 1.0552, -1.3992, 0.0)  # its mirror; both by ``sim.arm(...).solve_q_full``
     vbd = rss.backend("vbd", rigid_body_contact_buffer_size=256, rigid_contact_history=True)
     physics = rss.replace(rss.GENERIC.with_backend("*", vbd), collision=rss.CollisionSpec(contact_matching="sticky"))
     yam = get_embodiment("yam_bimanual")

@@ -44,9 +44,11 @@ reads as a grasp at all)::
     finger command   3.0 mm    2.0 mm    1.0 mm    0.0 mm
     grip force       1.0 N    13.2 N    28.5 N    44.5 N
 
-First touch at ~3.0 mm on a 4 mm part, then about 20 N per millimetre, and the
-part does not move while the jaws close (0.01 mm). None of that was true of the
-hull, whose faces are not parallel and whose "grip" was mostly a net push.
+First touch at ~3.0 mm on a 4 mm part, then about 20 N per millimetre (the
+polish suite's own finger servo, not the asset's), and the part does not move
+while the jaws close (0.01 mm). None of that was true of the hull, whose faces
+are not parallel and whose "grip" was mostly a net push. This hand's own servo
+is the real driver's clamp, 50 N a blade on anything it closes on (:data:`CLAMP`).
 
 The names are templated. Both YAM arms carry this hand and its joints are
 ``right_joint7`` / ``left_joint7``, so ``{arm}`` is substituted per arm by
@@ -57,11 +59,12 @@ from __future__ import annotations
 
 import numpy as np
 
-from robosimstudio.specs import GripperSpec
+from robosimstudio.specs import ActuationSpec, GripperSpec
 
 from ..registry import register_gripper
 
 __all__ = [
+    "CLAMP",
     "GRASP_SITE_ROT",
     "GRIP_CLOSE_MEASURED",
     "GRIP_LOCAL_EXT",
@@ -102,6 +105,17 @@ GRIP_LOCAL_EXT = np.array([0.0, 0.0, -1.0])
 GRIP_CLOSE_MEASURED = np.array([0.0053, -1.0, 0.0]) / np.linalg.norm(np.array([0.0053, -1.0, 0.0]))
 """Gripper-local blade-closing axis, fitted from the pad centres."""
 
+CLAMP = ActuationSpec(target_ke=150000.0, target_kd=150.0, effort_limit=50.0, joint_damping=230.0)
+"""The real linear_4310's servo: 50 N a blade on a blocked part, i2rt's ``limit_gripper_force``.
+
+Each blade has its own actuator, so each carries the per-jaw cap, 50 N, in the asset; the
+composed file's ``joint7 == joint8`` equality ties them as the one motor does. Here, a servo stiff
+enough to reach that cap a third of a millimetre past contact, and 230 N*s/m on each blade as the closing
+speed, 0.22 m/s at the cap: the DM4310's 30 rad/s bound, as on ``yam_linear_arena``'s ``CLAMP``,
+which has the sources. The asset's own gains are the reference sims' kp 600, which squeezed
+0.9 N a blade on a 1 mm box and 9.5 N on 30 mm. On the hand, so a stated finger servo replaces it.
+"""
+
 LINEAR_4310 = register_gripper(
     GripperSpec(
         name="linear_4310",
@@ -140,5 +154,6 @@ LINEAR_4310 = register_gripper(
         # swept number is the safe direction, and stating both is what stops the
         # next reader "correcting" it to 10 mm.
         tip_reach=0.035,
+        actuation=CLAMP,
     )
 )

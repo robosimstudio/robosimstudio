@@ -29,6 +29,7 @@ the video up to that point.
 
 from __future__ import annotations
 
+import functools
 import json
 import time
 from pathlib import Path
@@ -540,7 +541,7 @@ def _overlay_stage(frames: dict[str, Any], stage: str) -> dict[str, Any]:
     label = str(stage).strip()
     if not label:
         return frames
-    from PIL import Image, ImageDraw, ImageFont
+    from PIL import Image
 
     labelled: dict[str, Any] = {}
     for name, channels in frames.items():
@@ -548,22 +549,35 @@ def _overlay_stage(frames: dict[str, Any], stage: str) -> dict[str, Any]:
         rgb = channels.get("rgb")
         if rgb is not None:
             image = Image.fromarray(np.asarray(rgb, dtype=np.uint8)).convert("RGB")
-            draw = ImageDraw.Draw(image)
-            try:
-                font = ImageFont.load_default(size=max(14, image.height // 28))
-            except TypeError:
-                font = ImageFont.load_default()
-            box = draw.multiline_textbbox((0, 0), label, font=font, spacing=3)
-            width, height = box[2] - box[0], box[3] - box[1]
-            padding = max(5, image.height // 100)
-            x = max(padding, image.width - width - 2 * padding)
-            y = padding
-            draw.rounded_rectangle(
-                (x - padding, y - padding, x + width + padding, y + height + padding),
-                radius=padding,
-                fill=(0, 0, 0),
-            )
-            draw.multiline_text((x, y), label, fill=(255, 255, 255), font=font, spacing=3)
+            draw_label(image, label, size=max(14, image.height // 28))
             copied["rgb"] = np.asarray(image)
         labelled[name] = copied
     return labelled
+
+
+@functools.lru_cache(maxsize=8)
+def label_font(size: int) -> Any:
+    """Pillow's default font at ``size`` pixels, or its one bitmap size on an older Pillow."""
+    from PIL import ImageFont
+
+    try:
+        return ImageFont.load_default(size=size)
+    except TypeError:  # an older Pillow: its one bitmap size
+        return ImageFont.load_default()
+
+
+def draw_label(image: Any, label: str, *, size: int, right: bool = True) -> None:
+    """``label`` in white on a black rounded box at the top right (or left) of the PIL ``image``, drawn in place."""
+    from PIL import ImageDraw
+
+    draw = ImageDraw.Draw(image)
+    font = label_font(size)
+    box = draw.multiline_textbbox((0, 0), label, font=font, spacing=3)
+    width, height = box[2] - box[0], box[3] - box[1]
+    padding = max(5, image.height // 100)
+    x = max(padding, image.width - width - 2 * padding) if right else 2 * padding
+    y = padding
+    draw.rounded_rectangle(
+        (x - padding, y - padding, x + width + padding, y + height + padding), radius=padding, fill=(0, 0, 0)
+    )
+    draw.multiline_text((x, y), label, fill=(255, 255, 255), font=font, spacing=3)

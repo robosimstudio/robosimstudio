@@ -30,6 +30,7 @@ __all__ = [
     "compute_angle_between",
     "lame_from_young_poisson",
     "look_at_matrix",
+    "mat_to_axis_angle",
     "mat_to_quat",
     "quat_from_axis_angle",
     "quat_inverse",
@@ -179,6 +180,48 @@ def quat_to_axis_angle(q_xyzw: Sequence[float]) -> np.ndarray:
         # the rotation vector is 2 * the vector part, to float precision.
         return 2.0 * np.array([x, y, z])
     return np.array([x, y, z]) * (2.0 * float(np.arccos(np.clip(w, -1.0, 1.0))) / sin_half)
+
+
+def mat_to_axis_angle(rotation: np.ndarray) -> np.ndarray:
+    """Rotation vector of a rotation matrix, or of a stack of them: ``[..., 3, 3]`` to ``[..., 3]``.
+
+    The log map, as :func:`quat_to_axis_angle` is for a quaternion, angle in
+    ``[0, pi]``. The skew part of ``R`` is ``2 sin(angle)`` times the axis and its
+    trace ``1 + 2 cos(angle)``, so the angle is ``atan2`` of the two -- exact to
+    the matrix's own noise at every angle, where an arccos of the trace alone
+    loses half its digits near a half turn and dividing by ``sin`` multiplies the
+    noise by about ``pi / sin``: a float32 read of a turn 1e-3 short of a half
+    turn came back 0.1 rad off, and a half turn itself read as nothing.
+
+    The axis is the skew part's direction in the near half (``cos >= 0``). In
+    the far half it is read off the symmetric part, ``(R + R^T) / 2 = cos I +
+    (1 - cos) a a^T``, which is well conditioned there (``1 - cos >= 1``)
+    however small the skew part gets, with its sign taken from the skew part;
+    at an exact half turn either sign is the same rotation.
+    """
+    m = np.asarray(rotation, dtype=np.float64)
+    shape = m.shape[:-2]
+    m = m.reshape(-1, 3, 3)
+    skew = np.stack([m[:, 2, 1] - m[:, 1, 2], m[:, 0, 2] - m[:, 2, 0], m[:, 1, 0] - m[:, 0, 1]], axis=1)
+    sin = 0.5 * np.linalg.norm(skew, axis=1)
+    cos = 0.5 * (np.trace(m, axis1=1, axis2=2) - 1.0)
+    angle = np.arctan2(sin, cos)
+    # Near half: the skew part over 2 sin, which at a small angle is the skew part over two.
+    scale = np.where(sin > 1.0e-12, angle / np.where(sin > 1.0e-12, 2.0 * sin, 1.0), 0.5)
+    out = skew * scale[:, None]
+    far = cos < 0.0
+    if far.any():
+        mf = m[far]
+        symmetric = 0.5 * (mf + np.transpose(mf, (0, 2, 1)))
+        outer = (symmetric - cos[far, None, None] * np.eye(3)) / (1.0 - cos[far])[:, None, None]
+        # The column of a a^T through the axis's largest component, over its square root, is the axis.
+        pick = np.argmax(np.diagonal(outer, axis1=1, axis2=2), axis=1)
+        rows = np.arange(len(outer))
+        axis = outer[rows, :, pick] / np.sqrt(np.maximum(outer[rows, pick, pick], 1.0e-300))[:, None]
+        axis /= np.linalg.norm(axis, axis=1, keepdims=True)
+        axis *= np.where(np.einsum("wi,wi->w", axis, skew[far]) < 0.0, -1.0, 1.0)[:, None]
+        out[far] = axis * angle[far, None]
+    return out.reshape(*shape, 3)
 
 
 def quat_yaw(q_xyzw: Sequence[float]) -> float:

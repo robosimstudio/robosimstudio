@@ -421,13 +421,18 @@ class TestAPageThatStepsUnevenlyIsNotFeltAsContact(unittest.TestCase):
 
     def test_against_the_pose_it_was_chasing_nothing_is_energized(self) -> None:
         self.assertEqual(self.energized["applied"], 0)
-        self.assertLess(self.worst["applied"], 1.0, "measured 0.84, on the jaw")
+        self.assertLess(self.worst["applied"], 1.0, "measured 0.36, on the jaw")
 
-    def test_against_the_hand_s_pose_at_that_instant_the_jaw_motor_is(self) -> None:
+    def test_against_the_hand_s_pose_at_that_instant_the_jaw_reads_further_off(self) -> None:
         """Not a requirement -- a record of what the other form does, so that
-        if it ever stops being true the default can be argued again."""
-        self.assertGreater(self.energized["live"], 0, "measured: 36 of the 1300 ticks, the jaw motor each time")
-        self.assertGreater(self.worst["live"], 1.0, "measured 1.24, on the jaw")
+        if it ever stops being true the default can be argued again.
+
+        While the hand's second finger rode a soft equality, the live form
+        energized the jaw motor: 36 of the 1300 ticks, at worst 1.24 of the
+        deadband. With the equality stiff the jaw keeps up, and the live form
+        peaks at 0.998 of it, nothing energized -- still almost three times the
+        0.358 the form the loop uses reads on the same pass."""
+        self.assertGreater(self.worst["live"], 2.0 * self.worst["applied"], "measured 0.998 against 0.358, on the jaw")
 
 
 GRIP_SHUT, GRIP_HELD, GRIP_OPEN = 3.5, 4.5, 7.0

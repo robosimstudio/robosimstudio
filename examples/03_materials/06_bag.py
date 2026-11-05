@@ -10,8 +10,8 @@ over the lip's top, 45 mm up, the hand lifted nothing and the bag read shut (``f
 1 and 3). The bag is one SuperDex shell that collides with itself: its layers rest 3.9 mm apart,
 a contact radius, and stayed 3.5 mm apart while the hand opened it. Set ``self_contact`` to
 False and the top layer lies in the bottom one instead: -0.24 mm at rest, -0.29 mm held open.
-The grip is stiffer than the YAM's own servo, 8 N a finger: at its own gains the pads squeezed
-the lip with 0.02-0.05 N, it slipped, and the mouth opened 64-67 mm. The **Bag** folder reads
+The grip is the page's own servo, 8 N a finger: on the YAM's old kp 200 spring the pads squeezed
+the lip with 0.02-0.05 N, it slipped, and the mouth opened 64-67 mm (its hand is a 50 N clamp now). The **Bag** folder reads
 ``mouth_opening``, the widest span across the rim and the area it encloses, and ``layer_gap``.
 Through the page, 11 ms per control step at rest and 41 ms while the pads hold the cloth (RTX
 PRO 6000, GPU 1). Needs the ``[superdex]`` extra (Python 3.12).

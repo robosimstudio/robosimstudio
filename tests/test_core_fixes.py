@@ -105,7 +105,8 @@ class TestEveryDoorRunsThePostStepHooks(unittest.TestCase):
         sim = Sim.__new__(Sim)
         sim.pipeline = types.SimpleNamespace(step=lambda: None)
         sim.step_count = 0
-        sim.post_step_hooks = []
+        sim.pre_step_hooks, sim.last_pre_step_hooks = [], []
+        sim.post_step_hooks, sim.last_post_step_hooks = [], []
         sim._warned_nonfinite = True  # nothing to read the finite flags from
         return sim
 

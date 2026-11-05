@@ -6,7 +6,7 @@ The same box and label as a task document, with a goal on the share of the label
 The label is a ``Tape.from_spec`` record and the box a ``Body.from_spec`` one, placed by the
 document under the names the label's ``on`` and the goal use, and the physics is
 ``rss.TAPE_60HZ`` under a task-language name. The staging states the finger servo of
-``03_materials/08_tape``: stiffer than the YAM's own, damped, and capped at 12 N a finger. The cap
+``03_materials/08_tape``: gentler than the YAM's own 50 N clamp, damped, and capped at 12 N a finger. The cap
 is what Close's first push meets: 1500 times the 47.5 mm to go is about 71 N, held to 12 N as on the
 material page; the pads then stall on the tab 3.8 mm short of shut and hold it with about 5.8 N
 through the peel (``g2_close.py``, ``g2_grip.py``). The hands start at the YAM's home, pointing

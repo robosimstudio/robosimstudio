@@ -89,7 +89,7 @@ import numpy as np
 from robosimstudio.core.bus import BusClosed, BusTimeout, SimBus
 from robosimstudio_studio.session import StudioConfig
 
-from . import checks, frames, stills
+from . import checks, frames, physics, stills
 from .page import LiveSession
 from .scenefile import (
     Loaded,
@@ -101,7 +101,7 @@ from .scenefile import (
     run_scene_file,
     stamp,
 )
-from .wire import ControlSocket, ready_line
+from .wire import ROUTINE_PLAYING, ControlSocket, SocketRefused, ready_line
 
 __all__ = ["REFRESH_SECONDS", "SCAN_SECONDS", "STABLE_SECONDS", "LiveServer"]
 
@@ -117,8 +117,6 @@ BOARD_LIMIT = 8
 """Pictures kept on the board; the oldest goes when another comes. The run directory keeps every one."""
 RECENT = 32
 """Routines ended and takes written that ``status`` keeps, by serial and by name, for a client waiting on one."""
-ROUTINE_PLAYING = "a routine is playing (`status` lists it under `playing`); let it end, or `reset` to stop it"
-"""What ``run`` and ``check`` answer while a routine plays."""
 IDLE_LIMIT = 300
 """Passes in a row a routine that drives the scene itself may yield without stepping it before it is stopped."""
 SPEED_WINDOW = 5.0
@@ -130,19 +128,34 @@ BUSY = {
     "check": "running the gate (it steps the scene, then resets it)",
     "eval": "running eval code",
     "play": "starting a routine",
+    "physics": "starting a physics replay",
     "ref": "cutting stills out of the clip",
     "catalog": "listing the registries",
 }
 """What the main thread is doing, by command, for a ``status`` asked meanwhile."""
-READS_THE_SCENE = ("snapshot", "compare", "check", "eval", "play", "run", "reset")
+READS_THE_SCENE = ("snapshot", "compare", "check", "eval", "play", "physics", "run", "reset")
 """The commands that act on the scene in the page: their reply says when it is not the file's (a save that did
 not build, a bare scene standing in, a save not built yet), and they are refused while no scene is in."""
 MISSING_STAMPS = object()
 """The stamps not given: the status takes them itself."""
-FIRST_RENDER = (
-    "; the first path-traced picture in a process compiles the renderer's shaders, "
-    "which can take minutes -- later ones take seconds"
-)
+
+
+def first_render_note(renderer: str, first_in_process: bool, first_in_scene: bool) -> str:
+    """What the first picture costs with this renderer, for ``status`` while it is drawn
+    (``RendererBase.first_note``): once a process, or once a scene for a renderer whose cost comes again with
+    each (``first_note_each_scene``); ``""`` when nothing is worth saying, or the name cannot be resolved."""
+    if not renderer or not first_in_scene:
+        return ""
+    try:
+        from robosimstudio.solvers.render import backend_class
+
+        cls = backend_class(renderer)
+    except Exception:  # a dotted path that does not import: the render itself will say so
+        return ""
+    note = str(getattr(cls, "first_note", "") or "")
+    if not note or not (first_in_process or getattr(cls, "first_note_each_scene", False)):
+        return ""
+    return f"; {note}"
 
 
 class LiveServer:
@@ -202,6 +215,12 @@ class LiveServer:
         build read them; the log ties each reading to it."""
         self.resets = 0
         """Resets taken since the page came up: ``ctl run N`` reads a change in it as its run ended."""
+        self.physics: dict[str, dict] = {}
+        """The physics replays' summaries by mode (:mod:`.physics`), for the scene :attr:`physics_scene` names."""
+        self.physics_model: dict = {}
+        """What the model held when the written replay started (:func:`.physics.model_facts`)."""
+        self.physics_scene = ""
+        """The :attr:`scene_id` the replays in :attr:`physics` were played on: a save since makes them stale."""
         self.script: list = []
         """Generators an ``eval`` returned, advanced one ``next()`` per loop pass."""
         self.head_stepped = False
@@ -229,6 +248,19 @@ class LiveServer:
         """The one ``status`` queued for the main thread, which every caller meanwhile waits on."""
         self.rendered = False
         """Whether a still has been rendered in this process; the first one compiles the path tracer."""
+        self.rendered_scene = -1
+        """The scene generation the last picture was drawn of: a Blender is started once a scene."""
+        self.renderer_drawing = self.renderer_machine = ""
+        """What draws the pictures, and what the machine would pick: worked out by :meth:`renderer`."""
+        from robosimstudio.solvers.render import ENV as RENDERER_ENV
+
+        self.renderer_asked = os.environ.get(RENDERER_ENV, "").strip()
+        """The renderer the page was started under (``up --renderer``), ``""`` for the machine's pick. A scene that
+        sets the variable itself changes what draws -- ``status``'s ``renderer`` says -- but not this."""
+        self.renderer_cache = stills.rtx_cache_warning()
+        """Why the path tracer's pictures would take minutes each (its cache cannot be written), or ``""``."""
+        if self.renderer_cache:
+            print(f"[live] {self.renderer_cache}", file=sys.stderr, flush=True)
         self.script_meta: dict[int, dict] = {}
         """Per playing script (by ``id``): its serial, its name, and where it started."""
         self.scripts_started = 0
@@ -394,6 +426,7 @@ class LiveServer:
         # the file's names first: adopt() rebuilds the page, and its buttons are the routines the file binds
         self.ns, self.scene, self.sim = loaded.ns, loaded.scene, loaded.sim
         self.generation += 1
+        self.renderer()  # for the status the socket thread answers
         self.session.adopt(loaded.sim, label="live")
         self.session.begin_run()
         self.last_error = self.build_error = ""
@@ -542,6 +575,7 @@ class LiveServer:
         record: str = "",
         every: int = 4,
         camera: str = "",
+        also: Any = (),
     ) -> int:
         """Queue a generator to play one step per loop pass, filming it when asked.
 
@@ -564,7 +598,7 @@ class LiveServer:
             dropping = self.recorder is not None or bool(self.script)
             recorder = None
             try:
-                recorder = checks.Recorder(self, record, camera=camera, every=every)
+                recorder = checks.Recorder(self, record, camera=camera, every=every, also=also)
                 recorder.probe()
             except Exception:
                 if recorder is not None:
@@ -826,7 +860,13 @@ class LiveServer:
             moved = checks.motion_line(motion)
             checks.log_append(
                 self.run_dir,
-                {"cmd": "record", "scene": self.scene_id, "note": moved, **summary},
+                {
+                    "cmd": "record",
+                    "scene": self.scene_id,
+                    "note": moved,
+                    "renderer": getattr(self, "renderer_drawing", ""),
+                    **summary,
+                },
             )
             print(
                 f"[live] take {summary['take']!r} written ({why}): {summary['frames']} frames, {summary['seconds']:.1f} s",
@@ -901,8 +941,12 @@ class LiveServer:
             signal.signal(sig, lambda *_: setattr(self.session, "quit_requested", True))
         try:
             # Inside the try, so a socket that cannot be had -- another live
-            # server on it -- closes the page and exits before the ready line.
-            self.socket.start()
+            # server on it, a directory that will not take it -- closes the page
+            # and exits before the ready line, saying so in one line.
+            try:
+                self.socket.start()
+            except OSError as exc:
+                raise SocketRefused(self.sock_path, exc) from exc
             if self.config.share:
                 # Newton's viewer asked for the tunnel at construction; asking again
                 # returns the same URL once it is up, without blocking.
@@ -976,6 +1020,7 @@ class LiveServer:
         # viser takes the next port up when the one asked for is busy
         self.url = f"http://localhost:{self.session.server.get_port()}"
         self.generation += 1
+        self.renderer()  # for the status the socket thread answers
         self.last_error = self.build_error = error
         self.loaded_at = time.time()
         self.load_seconds = loaded.seconds
@@ -1069,6 +1114,11 @@ class LiveServer:
             "url": self.url,
             "share_url": self.share_url,
             "pid": os.getpid(),
+            "renderer_asked": getattr(self, "renderer_asked", ""),
+            # worked out on the main thread (renderer()), never here
+            "renderer_drawing": getattr(self, "renderer_drawing", ""),
+            "renderer_machine": getattr(self, "renderer_machine", ""),
+            "renderer_cache": getattr(self, "renderer_cache", ""),
             "file": str(self.path),
             "run_dir": str(self.run_dir),
             "pending_save": self._pending_save(stamps),
@@ -1077,6 +1127,7 @@ class LiveServer:
             "generation": self.generation,
             "resets": self.resets,
             "playing": len(self.script),
+            "run_under_way": self.run_budget > 0,
             "last_script": self.last_script,
             "last_run": self.last_run,
             "runs_ended": {str(k): v for k, v in self.runs_ended.copy().items()},
@@ -1086,6 +1137,27 @@ class LiveServer:
             "takes_written": list(self.takes_written),
             "last_error": self.last_error,
         }
+
+    def renderer(self) -> tuple[str, str]:
+        """The renderer the page's pictures are drawn with, and why: ``ROBOSIMSTUDIO_RENDERER`` (``up --renderer``),
+        or what the machine can run. ``("", why)`` when the name set cannot be built here. Kept as
+        :attr:`renderer_drawing` for the status the socket thread answers, which never works it out itself."""
+        platform = getattr(getattr(self, "sim", None), "platform", None)
+        if platform is None:
+            found = ("", "no scene")
+        else:
+            try:
+                found = platform.renderer_for("")
+            except Exception as exc:  # a bad name, or a dotted path whose module will not import
+                found = ("", f"{type(exc).__name__}: {exc}")
+            try:
+                from robosimstudio.solvers.render import machine_renderer
+
+                self.renderer_machine = machine_renderer(platform.device)[0]
+            except Exception:
+                self.renderer_machine = ""
+        self.renderer_drawing = found[0]
+        return found
 
     def light_status(self, stamps: Any = MISSING_STAMPS) -> dict:
         """The status a waiting client polls: the busy one, with where the scene is in time; nothing read off it."""
@@ -1135,8 +1207,11 @@ class LiveServer:
             or (name == "compare" and not request.get("take"))
             or (name in ("play", "eval") and bool(request.get("record")))
         )
-        if what and renders and not self.rendered:
-            what += FIRST_RENDER
+        if renders:
+            self.renderer()  # once a request: the note, the reply and the log line name the same renderer
+        if what and renders:
+            scene_first = getattr(self, "rendered_scene", -1) != getattr(self, "generation", 0)
+            what += first_render_note(getattr(self, "renderer_drawing", ""), not self.rendered, scene_first)
         try:
             with self._busy(what) if what else nullcontext():
                 reply = handler(**{k: v for k, v in request.items() if k != "cmd"})
@@ -1144,6 +1219,8 @@ class LiveServer:
             reply = {"ok": False, "error": traceback.format_exc()[-3000:]}
         if renders and reply.get("ok"):
             self.rendered = True
+            self.rendered_scene = getattr(self, "generation", 0)
+            reply.setdefault("renderer", getattr(self, "renderer_drawing", ""))
         if name in READS_THE_SCENE and self._pending_save():
             reply["pending"] = "a save is not built yet: this is the scene before it -- `./ctl status --wait` first"
         if self.build_error and name in READS_THE_SCENE:
@@ -1183,6 +1260,7 @@ class LiveServer:
             "cell": scene.cell,
             "names": names,
             "cameras": [c.name for c in sim.cameras],
+            "renderer": "{} ({})".format(*self.renderer()),
             "finite": bool(sim.state_is_finite()),
             "routines": self.routine_names(),
             "board": list(self.board),
@@ -1333,6 +1411,7 @@ class LiveServer:
                     "scene": self.scene_id,
                     "note": note,
                     "png": reply.get("beside") or str(path),  # the pair, when there is one: what was judged
+                    "renderer": getattr(self, "renderer_drawing", "") if not browser else "browser",
                 },
             )
         return reply
@@ -1479,6 +1558,7 @@ class LiveServer:
                 "note": note,
                 "ref": Path(ref).name,
                 "look": pictures["look"],
+                "renderer": getattr(self, "renderer_drawing", ""),
             },
         )
         return {
@@ -1502,6 +1582,7 @@ class LiveServer:
         penetration_mm: float = 1.0,
         timeline: str = "",
         note: str = "",
+        clip: str = "",
     ) -> dict:
         if self.script:
             return {
@@ -1522,6 +1603,7 @@ class LiveServer:
                 settle_mm=float(settle_mm),
                 penetration_mm=float(penetration_mm),
                 timeline=line,
+                clip=clip,
             )
         except (Exception, SystemExit) as exc:
             # the rest check may already have stepped the scene: reset it, as a passing check does
@@ -1552,8 +1634,8 @@ class LiveServer:
             "drift_mm": result["drift_mm"],
         }
 
-    def cmd_play(self, name: str = "", record: str = "", every: int = 4, camera: str = "") -> dict:
-        """Play a routine the scene file binds, the way its button does."""
+    def _routine_named(self, name: str) -> tuple[str, Any] | dict:
+        """The routine the scene file binds under ``name`` (the first, if empty) and its callable, or a refusal."""
         found = self.routines()
         names = list(found)
         if not names:
@@ -1564,7 +1646,10 @@ class LiveServer:
         name = name or names[0]
         if name not in names:
             return {"ok": False, "error": f"no routine called {name!r}; the scene file binds {', '.join(names)}"}
-        fn = found[name]
+        return name, found[name]
+
+    def _start_routine(self, name: str, fn) -> tuple[Any, bool] | dict:
+        """The generator a routine returns, as its button calls it, and whether it drives the page; or a refusal."""
         try:
             # a routine that asks for the page's session gets it, to drive the arm panels (reach, grip)
             # or anything else on the page; one that steps the scene itself has the panels held off for it
@@ -1577,12 +1662,121 @@ class LiveServer:
                 "ok": False,
                 "error": f"routine {name!r} returned {type(gen).__name__}, not a generator: it yields as it goes (REFERENCE, Acting)",
             }
-        serial = self.start_script(gen, name=name, drives_page=wants_session, record=record, every=every, camera=camera)
+        return gen, wants_session
+
+    def cmd_play(self, name: str = "", record: str = "", every: int = 4, camera: str = "", also: str = "") -> dict:
+        """Play a routine the scene file binds, the way its button does."""
+        if also and not record:
+            return {"ok": False, "error": "--also draws a take with other renderers: give it --record TAKE"}
+        named = self._routine_named(name)
+        if isinstance(named, dict):
+            return named
+        name, fn = named
+        started = self._start_routine(name, fn)
+        if isinstance(started, dict):
+            return started
+        gen, wants_session = started
+        serial = self.start_script(
+            gen, name=name, drives_page=wants_session, record=record, every=every, camera=camera, also=also
+        )
         reply = {"ok": True, "playing": name, "serial": serial}
         if record:
             reply["recording"] = str(self.run_dir / f"{record}.mp4")
             reply["take"] = record
         return reply
+
+    def cmd_physics(
+        self,
+        op: str = "replay",
+        mode: str = "written",
+        name: str = "",
+        settle_mm: float | None = None,
+        note: str = "",
+        plain_cut: bool = False,
+    ) -> dict:
+        """One physics replay of a routine (``op="replay"``), or the verdict on the ones played (``op="report"``).
+
+        ``./ctl physics`` resets the scene before each replay and plays them in
+        :data:`.physics.MODES` order: ``written`` first, because it starts the
+        set over (what the model holds is read then) and every later replay runs
+        as long as it did. The report writes ``physics.json`` and logs a line.
+        """
+        if op == "report":
+            if not self.physics or self.physics_scene != self.scene_id:
+                return {
+                    "ok": False,
+                    "error": "no physics replays of this scene: `./ctl physics` plays them (a save since starts them over)",
+                }
+            plain = self.physics.get("plain")
+            if plain_cut and plain and plain.get("outcome") == physics.STOPPED:  # the ctl cut it on its wall clock
+                plain["outcome"] = physics.PLAIN_SLOW  # plain marks one past its steps itself (PLAIN_LONG)
+            unread = [mode for mode, run in self.physics.items() if physics.cut_short(run)]
+            if unread:
+                return {
+                    "ok": False,
+                    "error": f"the {', '.join(unread)} replay did not run to a reading: {physics.cut_short(self.physics[unread[0]])}",
+                }
+            bar = physics.SETTLE_MM if settle_mm is None else float(settle_mm)
+            result = physics.verdict(self.physics_model, self.physics, bar)
+            out = self.run_dir / "physics.json"
+            out.write_text(
+                json.dumps(
+                    {**result, "model": self.physics_model, "runs": self.physics}, default=checks._plain, indent=1
+                )
+            )
+            n = checks.log_append(
+                self.run_dir, {"cmd": "physics", "scene": self.scene_id, "passed": result["passed"], "note": note}
+            )
+            return {"ok": True, "passed": result["passed"], "report": result["report"], "json": str(out), "logged": n}
+        if op != "replay":
+            return {"ok": False, "error": f"physics does `replay` or `report`, not {op!r}"}
+        if self.script:
+            return {"ok": False, "error": ROUTINE_PLAYING}
+        if mode not in physics.MODES:
+            return {"ok": False, "error": f"no physics replay {mode!r}; the replays are {', '.join(physics.MODES)}"}
+        named = self._routine_named(name)
+        if isinstance(named, dict):
+            return named
+        name, fn = named
+        if mode == "written":
+            try:
+                facts = physics.model_facts(self.sim)
+            except Exception:
+                return {"ok": False, "error": traceback.format_exc()[-3000:]}
+        elif "written" not in self.physics or self.physics_scene != self.scene_id:
+            return {
+                "ok": False,
+                "error": "replay `written` first: the others run as long as it did and are read against it",
+            }
+        elif physics.cut_short(self.physics["written"]):
+            return {
+                "ok": False,
+                "error": f"the written replay did not run to a reading ({physics.cut_short(self.physics['written'])}): nothing to "
+                "read the others against",
+            }
+        if mode == "drop" and not self.physics["written"].get("carried"):  # nothing lifted: nothing to release
+            self.physics["drop"] = {"outcome": "finished", "steps": 0, "things": {}, "skipped": True}
+            return {"ok": True, "skipped": "nothing was lifted off its support"}
+        started = self._start_routine(name, fn)
+        if isinstance(started, dict):
+            return started  # the replays before stay as they were
+        routine, wants_session = started
+        if mode == "written":  # the set starts over only once its first replay is under way
+            self.physics, self.physics_scene, self.physics_model = {}, self.scene_id, facts
+        steps = int(self.physics.get("written", {}).get("steps") or 0)
+        gen = physics.replay(
+            self.sim,
+            routine,
+            mode,
+            self.physics,
+            steps=steps,
+            steps_itself=not wants_session,
+            drive_rows=self.physics_model.get("drive_rows"),
+            robot_equalities=self.physics_model.get("robot_equalities"),
+            drop_at=int(self.physics.get("written", {}).get("apex_step") or 0) if mode == "drop" else 0,
+        )
+        serial = self.start_script(gen, name=f"physics {mode}", drives_page=wants_session)
+        return {"ok": True, "playing": f"physics {mode}", "serial": serial}
 
     def cmd_show(self, path: str = "", label: str = "", clear: bool = False) -> dict:
         """Put a picture on the page for the person watching: what the agent is looking at, as it looks at it."""

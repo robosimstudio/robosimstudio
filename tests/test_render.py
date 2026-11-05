@@ -53,6 +53,17 @@ class TestRendererChannels(unittest.TestCase):
         self.assertEqual(supported_channels("tiled"), ("rgb", "depth", "seg"))
         self.assertIs(backend_class("tiled").supported_channels, backend_class("tiled").supported_channels)
 
+    def test_a_backend_that_does_not_say_is_warmed_up_and_each_shipped_one_says(self):
+        """Only the path tracer's first frame is its stage being built; a renderer named by dotted path that does
+        not say is warmed up, as every backend but the collider tracer was before backends said."""
+        from robosimstudio.core.render.base import warms_up
+
+        self.assertTrue(warms_up(self._Backend))
+        self.assertTrue(warms_up(backend_class("rtx")))
+        for name in ("tiled", "gl", "blender"):
+            with self.subTest(backend=name):
+                self.assertFalse(warms_up(backend_class(name)))
+
     def test_an_unknown_backend_raises(self):
         """A misspelled backend name fails by name, not by AttributeError."""
         with self.assertRaises(ValueError):

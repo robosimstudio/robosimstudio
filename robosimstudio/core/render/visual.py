@@ -194,7 +194,7 @@ def tube_points(centre: np.ndarray, radius: float, sides: int = TUBE_SIDES) -> t
     tangent /= np.maximum(np.linalg.norm(tangent, axis=1, keepdims=True), 1.0e-12)
     helper = np.array([0.0, 0.0, 1.0]) if abs(tangent[0, 2]) < 0.9 else np.array([1.0, 0.0, 0.0])
     u = np.cross(tangent[0], helper)
-    u /= np.linalg.norm(u)
+    u /= max(np.linalg.norm(u), 1.0e-12)  # a centerline collapsed to a point has no frame: a flat ring, not NaN
     frames_u = np.empty((n, 3))
     for i in range(n):
         if i:
@@ -482,3 +482,29 @@ def flatten_scene(mesh: Any) -> list[tuple[Any, np.ndarray]]:
                 out.append((geom, np.asarray(xform, dtype=np.float64)))
         return out
     return [(mesh, np.eye(4))]
+
+
+def mesh_rgba(mesh: Any) -> tuple[list[float], Any, Any]:
+    """A part's flat colour, and its base-colour texture and UVs when it has both: what the rasteriser and Blender
+    draw a mesh in.
+
+    MuJoCo multiplies a texture by its geom's colour, so a textured part's
+    colour is its stated base-colour factor or white -- not trimesh's
+    ``main_color``, which is a 40 % grey when no factor is stated.
+    """
+    visual = getattr(mesh, "visual", None)
+    material = getattr(visual, "material", None)
+    image = getattr(material, "baseColorTexture", None)
+    uv = getattr(visual, "uv", None)
+    if image is not None and uv is not None and len(uv) == len(mesh.vertices):
+        factor = getattr(material, "baseColorFactor", None)
+        rgba = [1.0, 1.0, 1.0, 1.0] if factor is None else _unit(factor)
+        return rgba, image, np.asarray(uv, dtype=np.float64)
+    color = getattr(material, "main_color", None)
+    return ([0.6, 0.6, 0.6, 1.0] if color is None else _unit(color)), None, None
+
+
+def _unit(color: Any) -> list[float]:
+    """An RGBA colour in ``[0, 1]``, from trimesh's bytes."""
+    rgba = [float(c) / 255.0 for c in np.asarray(color).reshape(-1)[:4]]
+    return rgba + [1.0] * (4 - len(rgba))

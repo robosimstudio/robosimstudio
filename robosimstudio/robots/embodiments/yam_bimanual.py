@@ -101,11 +101,19 @@ YAM_BIMANUAL = register_embodiment(
         collapse_fixed_joints=True,
         gravcomp_restate=True,
         enable_self_collisions=False,
+        # The two arms collide with each other, as two real arms on one bench
+        # do; each arm stays filtered against itself, so a hand shut on nothing
+        # still closes to zero instead of stalling on its own pads.
+        cross_arm_collisions=True,
         arms=(_arm("left"), _arm("right")),
-        # The MJCF declares its own <position> gains per actuator class
-        # (dm4340 kp=80, dm4310 kp=30, fingers kp=200), so nothing is retuned
-        # here -- only checked. Overriding them would change the arm's
-        # authority away from the hardware it models.
+        # The MJCF declares its own <position> gains per actuator class, so the
+        # arm is not retuned here -- only checked. The hand's servo is the hand
+        # spec's (yam_linear_arena.CLAMP, the real driver's 50 N a jaw), which
+        # the importer's arena spring gives way to. The arm's gains are the
+        # arena's, not the hardware's: i2rt's yam_v1.yml runs kp 80/80/80/10/10/10
+        # and kd 5/5/5/1.5/1.5/1.5, where the arena has kp 80 kv 6 on joints 1-3
+        # and kp 30 kv 2 on the wrist -- kept, because six shipped tasks fail on
+        # the hardware's softer wrist (measured in assets/PROVENANCE.md).
         arm_actuation=None,
         gripper_actuation=None,
         ik_iterations=8,

@@ -26,14 +26,14 @@
         <geom type="mesh" contype="0" conaffinity="0" density="0" group="2" material="black" />
       </default>
       <default class="collision">
-        <geom group="3" type="capsule" friction="2.0 0.1 0.01" condim="6" solimp="0.998 0.998 0.001" solref="0.004 1" />
+        <geom group="3" type="capsule" friction="1.0 0.1 0.01" condim="6" solimp="0.998 0.998 0.001" solref="0.004 1" />
         <default class="sphere_collision">
-          <geom size="0.0006 0 0" type="sphere" rgba="1 0 0 1" friction="4.0 0.1 0.01" condim="6" solimp="0.998 0.998 0.001" solref="0.004 1" />
+          <geom size="0.0006 0 0" type="sphere" rgba="1 0 0 1" friction="1.0 0.1 0.01" condim="6" solimp="0.998 0.998 0.001" solref="0.004 1" />
         </default>
       </default>
       <default class="finger">
         <joint type="slide" armature="0.1" frictionloss="0.1" />
-        <position ctrlrange="0.0 0.0495" kp="200" kv="14" inheritrange="0" />
+        <position ctrlrange="0.0 0.0495" kp="200" kv="14" forcerange="-100 100" inheritrange="0" />
       </default>
     </default>
     <default class="cp2">
@@ -289,8 +289,8 @@
 
   
   <equality>
-    <joint joint1="left_left_finger" joint2="left_right_finger" polycoef="0 -1 0 0 0" />
-    <joint joint1="right_left_finger" joint2="right_right_finger" polycoef="0 -1 0 0 0" />
+    <joint joint1="left_left_finger" joint2="left_right_finger" polycoef="0 -1 0 0 0" solref="0.004 1" solimp="0.95 0.99 0.001" />
+    <joint joint1="right_left_finger" joint2="right_right_finger" polycoef="0 -1 0 0 0" solref="0.004 1" solimp="0.95 0.99 0.001" />
   </equality>
 
   

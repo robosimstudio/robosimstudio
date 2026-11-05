@@ -4,11 +4,14 @@
 ``core/render`` keeps what a renderer *is* -- the ``RendererBase`` contract,
 the frame set, the scene flattening, the palette -- and these are the
 implementations of it: ``rtx``, the OVRTX path tracer every picture is made
-with, and ``tiled``, Newton's tiled ray tracer, which draws the colliders alone
-and serves where ``rtx`` cannot: no ``ovrtx`` installed, or a GPU without RT
-cores (:func:`choose_renderer` has the rule). Core reaches them by dotted path
-through ``RENDERERS`` and imports neither, so a checkout without the ``[rtx]``
-extra still imports core and finds out only when it asks for a frame.
+with by default, and ``tiled``, Newton's tiled ray tracer, which draws the
+colliders alone and serves where ``rtx`` cannot: no ``ovrtx`` installed, or a
+GPU without RT cores (:func:`choose_renderer` has the rule). Two more are
+named, never picked: ``gl``, MuJoCo's rasteriser, and ``blender``, Cycles in a
+Blender this process starts -- the photoreal picture on a machine ``rtx``
+cannot run on, a Mac above all. Core reaches them by dotted path through
+``RENDERERS`` and imports none, so a checkout without the ``[rtx]`` extra still
+imports core and finds out only when it asks for a frame.
 """
 
 from __future__ import annotations
@@ -39,6 +42,7 @@ __all__ = [
     "default_renderer",
     "list_renderers",
     "look_kwargs",
+    "machine_renderer",
     "register_renderer",
     "rt_cores",
     "rtx_available",
@@ -49,17 +53,22 @@ RENDERERS: dict[str, str] = {
     "rtx": "robosimstudio.solvers.render.rtx.RendererRTX",
     "tiled": "robosimstudio.solvers.render.tiled.RendererTiled",
     "gl": "robosimstudio.solvers.render.gl.RendererGL",
+    "blender": "robosimstudio.solvers.render.blender.RendererBlender",
 }
 """Alias -> dotted path.
 
 **The renderer is ``rtx``**, the OVRTX path tracer: the one that draws the room,
-the materials and the lights, and the only one a page, a snapshot or a video
-is made with. ``tiled`` -- Newton's tiled ray tracer, colliders only -- stays
-registered as the fallback :func:`choose_renderer` picks where ``rtx`` cannot
-run, and as the thing a test renders through; it is not offered by
-:func:`list_renderers`, though :data:`ENV` and a name in code may ask for it.
-``gl`` -- MuJoCo's rasteriser over the visible shapes -- is a name a fast
-dataset run asks for, for a scene stepped on a CPU; never picked, never offered.
+the materials and the lights, and the one a page, a snapshot or a video is made
+with unless :data:`ENV` names another. ``tiled`` -- Newton's tiled ray tracer,
+colliders only -- stays registered as the fallback :func:`choose_renderer`
+picks where ``rtx`` cannot run, and as the thing a test renders through; it is
+not offered by :func:`list_renderers`, though :data:`ENV` and a name in code may
+ask for it. ``gl`` -- MuJoCo's rasteriser over the visible shapes and the
+deformables -- is a name a fast dataset run asks for, for a scene stepped on a
+CPU, and ``blender`` -- Cycles, the shapes' finishes and the ``lab`` light as
+``rtx`` draws them -- the photoreal one where ``rtx`` cannot run; both are
+never picked, never offered, and both draw a live page (``./ctl up
+--renderer``).
 
 Held as **strings**, which is what keeps the table free: a base install pays
 for nothing until something actually asks for a renderer.
@@ -91,8 +100,9 @@ PUBLIC = "rtx"
 FALLBACK = "tiled"
 """What stands in for it where ``rtx`` cannot run. Never offered by name."""
 
-UNLISTED = (FALLBACK, "gl")
-"""Registered and nameable, never offered: the fallback, and the rasteriser a dataset run names."""
+UNLISTED = (FALLBACK, "gl", "blender")
+"""Registered and nameable, never offered: the fallback, the rasteriser a dataset run names, and Blender,
+which needs a Blender installed beside this package."""
 
 
 def list_renderers() -> tuple[str, ...]:
@@ -234,6 +244,12 @@ def choose_renderer(requested: str = "", device: Any = None) -> tuple[str, str]:
                 f"--extra-index-url https://pypi.nvidia.com; or leave it unset to pick by the machine"
             )
         return name, f"{ENV}={name}" if source == ENV else "asked for"
+    return machine_renderer(device)
+
+
+def machine_renderer(device: Any = None) -> tuple[str, str]:
+    """What :func:`choose_renderer` picks with nothing named: ``rtx`` where ``device`` has RT cores and ovrtx is
+    installed, else ``tiled``; and why."""
     capable, gpu = rt_cores(device)
     if not capable:
         return FALLBACK, gpu

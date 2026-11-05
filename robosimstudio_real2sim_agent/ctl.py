@@ -55,7 +55,7 @@ from collections.abc import Callable
 from pathlib import Path
 from typing import Any
 
-from .wire import DEFAULT_RUN_DIR, NoReply, NoServer, parse_ready, request, socket_path
+from .wire import DEFAULT_RUN_DIR, ROUTINE_PLAYING, NoReply, NoServer, parse_ready, request, socket_path
 
 __all__ = [
     "CATALOGS",
@@ -75,6 +75,7 @@ TIMEOUTS = {
     "snapshot": 600.0,
     "eval": 900.0,
     "play": 900.0,
+    "physics": 900.0,
     "catalog": 120.0,
     "compare": 600.0,
     "check": 600.0,
@@ -87,9 +88,10 @@ TIMEOUTS = {
 """Seconds to wait for a reply, per command; :data:`DEFAULT_TIMEOUT` for the rest.
 
 ``play`` and ``eval`` wait longest: with ``--record`` both render the take's
-first frame before they answer, which in a fresh process compiles the path
-tracer's shaders. ``snapshot`` waits as long as ``compare``: the
-first path-traced picture in a process compiles the renderer, for minutes.
+first frame before they answer, which under ``rtx`` in a fresh process compiles
+the path tracer's shaders (and under ``blender`` starts Blender, for seconds).
+``snapshot`` waits as long as ``compare``: the first path-traced picture in a
+process compiles the renderer, for minutes.
 The commands that stop or hold what plays wait as long as ``reload``: they go
 in between two of a routine's steps, and one step can outlast 30 s, which
 ``status --wait`` does not wait out (a routine playing is not a busy page)."""
@@ -103,6 +105,11 @@ POLL_SECONDS = 0.5
 START_HINT = "./ctl up    (in examples/live, or in a twin's folder)"
 SERVE_FLAGS = ("hold", "no_watch", "share", "dark", "hide_scenery", "camera_view")
 """``up``'s switches that are the server's, spelled as argparse attributes."""
+RENDERERS = ("rtx", "blender", "gl", "tiled", "auto")
+"""What ``up --renderer`` takes besides a dotted path: the library's registered renderers and ``auto``, spelled
+here so ``ctl`` starts without importing the library."""
+RENDERER_ENV = "ROBOSIMSTUDIO_RENDERER"
+"""The variable the server's renderer is named by (``robosimstudio.solvers.render.ENV``)."""
 CATALOGS = ("robots", "grippers", "cells", "assets")
 """What ``catalog`` can list; ``assets`` runs the registries' discovery, which takes seconds."""
 VERBOSE = (
@@ -166,6 +173,12 @@ def build_parser() -> argparse.ArgumentParser:
         "--scene", default="", help="the file to execute and watch (default: scene.py beside the run directory)"
     )
     up.add_argument("--share", action="store_true", help="ask viser for a public URL as well")
+    up.add_argument(
+        "--renderer",
+        default="",
+        help="what draws every picture: rtx, blender, gl or tiled (default: rtx where the GPU has RT cores and "
+        "ovrtx is installed, else tiled)",
+    )
     # Kept, not documented: the page has one shape, and these are the knobs a
     # person who has read the server's source may turn.
     up.add_argument("--hold", action="store_true", help=argparse.SUPPRESS)
@@ -290,6 +303,11 @@ def build_parser() -> argparse.ArgumentParser:
         help="how far a thing may drift left alone (default 2)",
     )
     chk.add_argument(
+        "--clip",
+        default="",
+        help="the camera's own clip: a camera on a wrist is held to the hand it shows (the hand line)",
+    )
+    chk.add_argument(
         "--penetration-mm",
         type=float,
         default=1.0,
@@ -352,7 +370,7 @@ def build_parser() -> argparse.ArgumentParser:
         parents=[common],
         help="a reference picture in the sidebar, or stills out of a clip",
     )
-    ref.add_argument("op", choices=("show", "hide", "frames"))
+    ref.add_argument("op", choices=("show", "hide", "frames", "plate"))
     ref.add_argument(
         "path",
         nargs="?",
@@ -381,6 +399,33 @@ def build_parser() -> argparse.ArgumentParser:
         default=0,
         help="frames: scale the stills to this width (default: the clip's)",
     )
+    ref.add_argument("--window", default="", help="plate: seconds to draw frames from, 0:5,36:52 (default: all)")
+    ref.add_argument("--paint", default="", help="plate: a mask, white where the plate is painted in from around it")
+    ref.add_argument("--count", type=int, default=60, help="plate: frames the median is taken over (default 60)")
+    ref.add_argument("--name", default="", help="plate: the file's name without .png (default plate_<clip>)")
+    cam = sub.add_parser(
+        "camera",
+        parents=[common],
+        help="solve a camera from points whose world place and pixel are both known (needs no page)",
+    )
+    cam.add_argument("op", choices=("fit",))
+    cam.add_argument(
+        "--point",
+        action="append",
+        default=[],
+        metavar="X,Y,Z=U,V",
+        help="a world point [m, the frame CameraSpec uses] and its pixel in the still; six or more, repeatable",
+    )
+    cam.add_argument(
+        "--ref", default="", help="the still the pixels were read off: its size, and an overlay drawn on it"
+    )
+    cam.add_argument("--size", default="", help="WxH of the picture, when there is no --ref")
+    cam.add_argument("--name", default="camera", help="the camera's name in the printed CameraSpec")
+    cam.add_argument(
+        "--fov", type=float, default=0.0, help="hold the vertical field of view [deg] instead of solving it"
+    )
+    cam.add_argument("--free-center", action="store_true", help="solve the principal point too (ten or more points)")
+    cam.add_argument("--out", default="", help="the overlay's path (default <run-dir>/camfit_<name>.png)")
     play = sub.add_parser(
         "play", parents=[common], help="play a routine the scene file binds, as its button on the page does"
     )
@@ -388,7 +433,42 @@ def build_parser() -> argparse.ArgumentParser:
     play.add_argument("--record", default="", metavar="NAME", help="film it: <run-dir>/NAME.mp4, .json, _seg.npz")
     play.add_argument("--every", type=int, default=4, help="with --record: a frame per this many control steps")
     play.add_argument("--camera", default="", help="with --record: the camera to record through")
+    play.add_argument(
+        "--also",
+        default="",
+        metavar="R,R",
+        help="with --record: draw the same run with these renderers too (gl, tiled, blender, rtx): "
+        "<run-dir>/NAME.renderers/<renderer>.mp4 each, and all.mp4 there side by side",
+    )
     _wait_flags(play, "return when the routine ends, saying how, its output streamed")
+    phys = sub.add_parser(
+        "physics",
+        parents=[common],
+        help="replay a routine with the robot frozen, the fingers open, the robot as built and the things heavier",
+    )
+    phys.add_argument("name", nargs="?", default="", help="which, when `routines` binds several (default: the first)")
+    phys.add_argument(
+        "--only",
+        type=lambda text: [m.strip() for m in text.split(",") if m.strip()],
+        default=[],
+        metavar="A,B",
+        help="these replays after `written`, comma-separated (default: frozen,open,built,heavy,drop,plain)",
+    )
+    phys.add_argument(
+        "--settle-mm",
+        type=float,
+        default=None,
+        help="how far a thing may move with the robot frozen (default 2): a free rigid thing past it is a note up to "
+        "2.5 times it and a FAIL beyond; one that started more than 1 mm inside something fails settle past it",
+    )
+    phys.add_argument("--note", default="", help="a line for the log: why this reading")
+    phys.add_argument(
+        "--wait-limit",
+        type=float,
+        default=WAIT_LIMIT,
+        metavar="S",
+        help=f"give up on a replay after S seconds (default {WAIT_LIMIT:.0f})",
+    )
     show = sub.add_parser(
         "show", parents=[common], help="put a picture on the page for the person watching, under a label"
     )
@@ -459,11 +539,14 @@ def build_request(args: argparse.Namespace, parser: argparse.ArgumentParser) -> 
             penetration_mm=args.penetration_mm,
             timeline=_absolute(args.timeline),
             note=args.note,
+            clip=_absolute(args.clip),
         )
     elif args.cmd == "log":
         req["last"] = args.last
     elif args.cmd == "play":
-        req.update(name=args.name, record=args.record, every=args.every, camera=args.camera)
+        if args.also and not args.record:
+            parser.error("play --also draws a take with other renderers: give it --record TAKE")
+        req.update(name=args.name, record=args.record, every=args.every, camera=args.camera, also=args.also)
     elif args.cmd == "show":
         if not args.path and not args.clear:
             parser.error("show needs a picture, or --clear")
@@ -514,7 +597,11 @@ def poll(sock: Path, done: Callable[[dict], Any], doing: Callable[[dict], str], 
             return status
         now = time.monotonic()
         if now - start > limit:
-            return {"ok": False, "error": f"still {doing(status)} after {limit:.0f} s; the page carries on"}
+            return {
+                "ok": False,
+                "timed_out": True,
+                "error": f"still {doing(status)} after {limit:.0f} s; the page carries on",
+            }
         if now - said >= SAY_EVERY:
             _say(f"waiting: {doing(status)} ({now - start:.0f} s)")
             said = now
@@ -703,8 +790,14 @@ def serve_argv(args: argparse.Namespace, sock: Path) -> list[str]:
     return argv
 
 
-def spawn_server(argv: list[str], log_path: Path) -> subprocess.Popen:
-    """Start the server in a session of its own, its output to ``log_path`` (truncated first)."""
+def spawn_server(argv: list[str], log_path: Path, renderer: str = "") -> subprocess.Popen:
+    """Start the server in a session of its own, its output to ``log_path`` (truncated first).
+
+    ``renderer`` names what draws its pictures, as ``ROBOSIMSTUDIO_RENDERER`` in its environment.
+    """
+    env = dict(os.environ)
+    if renderer:
+        env[RENDERER_ENV] = renderer
     log_path.parent.mkdir(parents=True, exist_ok=True)
     with open(log_path, "wb") as log:
         return subprocess.Popen(
@@ -713,6 +806,7 @@ def spawn_server(argv: list[str], log_path: Path) -> subprocess.Popen:
             stdout=log,
             stderr=subprocess.STDOUT,
             start_new_session=True,
+            env=env,
         )
 
 
@@ -749,10 +843,133 @@ def _differs_from_running(args: argparse.Namespace, status: dict) -> str:
         )
     if args.share and not status.get("share_url"):
         return "a page is already up with no public URL; `quit` it and run `up --share` again"
+    asked = str(getattr(args, "renderer", "") or "").strip()
+    started = str(status.get("renderer_asked") or "")
+    drawing = str(status.get("renderer_drawing") or "")
+    machine = str(status.get("renderer_machine") or "")
+    # the renderer it was started under, or the one it draws with, or "auto" for a page drawing what the machine
+    # would pick (left to it, or named the same)
+    pick = asked == "auto" and (started in ("", "auto") or (drawing and drawing == machine))
+    # a page that has not said what it draws (its first build under way, or an older server) is not refused on it
+    unknown = not drawing and started in ("", "auto")
+    if asked and asked not in (started, drawing) and not pick and not unknown:
+        running = drawing or started or "the machine's pick"
+        return f"a page is already up drawing with {running}; `quit` it and run `up --renderer {asked}` again"
     return ""
 
 
+def cmd_physics(args: argparse.Namespace, sock: Path) -> int:
+    """Every physics replay of a routine, each from a reset scene, then the verdict (``physics.json``, a log line).
+
+    The replays are separate scripts because only a reset puts the scene back,
+    and a reset stops whatever plays: so this side resets, starts one, waits
+    for it to end, and starts the next.
+    """
+    from .physics import MODES
+
+    if "written" in args.only:
+        _say("physics: `written` always plays first; --only names the replays after it")
+    later = list(dict.fromkeys(m for m in (args.only or MODES[1:]) if m != "written"))
+    unknown = [m for m in later if m not in MODES]
+    if unknown:
+        print(f"ctl: no physics replay {', '.join(unknown)}; the replays are {', '.join(MODES)}", file=sys.stderr)
+        return 2
+    quiet = Path(args.run_dir) / ".physics-no-stream"  # never written: the replays' own output is not streamed
+
+    def ask(req: dict, timeout: float) -> dict:
+        return request(sock, {**req, "timeout": timeout}, timeout)
+
+    def reset() -> dict:
+        """Reset, and wait until the page has taken it: `reset` only asks, and the page resets on its next pass."""
+        before = int(ask({"cmd": "status", "light": True}, DEFAULT_TIMEOUT).get("resets", 0))
+        asked = ask({"cmd": "reset"}, TIMEOUTS["reset"])
+        if not asked.get("ok"):  # refused (no scene in the page): say so now, not after an hour of waiting
+            return asked
+        taken = poll(sock, lambda st: int(st.get("resets", 0)) > before, lambda st: "resetting", args.wait_limit)
+        return taken if not taken.get("ok") else wait_until_free(sock, args.wait_limit)
+
+    try:
+        # Held while the replays play, so each starts at its reset and not after a moment of free running (a thing
+        # that starts inside a finger would be pushed out before `frozen` began). The page still steps a routine
+        # that drives through it, and one that steps the scene itself steps it anyway.
+        # the light status: a busy page answers a full one without `paused`, which would read as running
+        first = ask({"cmd": "status", "light": True}, DEFAULT_TIMEOUT)
+        if first.get("playing"):  # before the first reset, which would stop it and its take
+            return show({"ok": False, "error": ROUTINE_PLAYING}, args.json)
+        if first.get("run_under_way"):  # pausing would end it, and resuming after would leave the page running free
+            return show({"ok": False, "error": "a `run N` is under way: let it end, or `pause` it"}, args.json)
+        was_paused = bool(first.get("paused"))
+        written_s, plain_cut = 0.0, False
+        ask({"cmd": "pause"}, TIMEOUTS["pause"])
+        try:
+            for mode in ["written", *later]:
+                free = reset()
+                if not free.get("ok"):
+                    return show(free, args.json)
+                started = ask({"cmd": "physics", "op": "replay", "mode": mode, "name": args.name}, TIMEOUTS["physics"])
+                if not started.get("ok"):
+                    return show(started, args.json)
+                if started.get("skipped"):
+                    _say(f"physics: {mode} skipped: {started['skipped']}")
+                    continue
+                _say(f"physics: {mode} ...")  # on stderr, as every wait's progress is: --json stays one document
+                t0 = time.monotonic()
+                # plain has no cap of its own (nothing hooked in): it gets a few written runs' time, and a plain that
+                # is still going then is read as not ending unwatched rather than waited on for an hour
+                limit = args.wait_limit if mode != "plain" else min(args.wait_limit, max(300.0, 5.0 * written_s))
+                ended = wait_for_script(sock, started, quiet, 0, limit)
+                if mode == "written":
+                    written_s = time.monotonic() - t0
+                if not ended.get("ok"):
+                    # still playing past --wait-limit, or failed: a reset stops it, and its own cleanup puts the
+                    # robot back (the friction, the torque, the masses); then say what happened
+                    if mode == "plain" and ended.get("timed_out"):  # past its time, not failed
+                        _say(f"physics: plain still going after {limit:.0f} s, read as not ending unwatched")
+                        plain_cut = True
+                        free = reset()  # and wait for it to land, so the next replay is not stopped by it
+                        if not free.get("ok"):
+                            return show(free, args.json)
+                        continue
+                    ask({"cmd": "reset"}, TIMEOUTS["reset"])
+                    return show(ended, args.json)
+            done = reset()
+            if not done.get("ok"):
+                return show(done, args.json)
+            reply = ask(
+                {
+                    "cmd": "physics",
+                    "op": "report",
+                    "settle_mm": args.settle_mm,
+                    "note": args.note,
+                    "plain_cut": plain_cut,
+                },
+                TIMEOUTS["physics"],
+            )
+        except BaseException:
+            # interrupted mid-replay: a reset stops it, and its own cleanup takes the hold and the changed friction,
+            # torque and masses off before the page runs on
+            try:
+                ask({"cmd": "reset"}, TIMEOUTS["reset"])
+            except Exception:
+                pass
+            raise
+        finally:
+            if not was_paused:
+                ask({"cmd": "resume"}, TIMEOUTS["resume"])
+    except NoServer:
+        print(f"ctl: no server at {sock}\nstart one with:  {START_HINT}", file=sys.stderr)
+        return 2
+    except NoReply as exc:
+        print(f"ctl: {exc}{busy_note(sock)}", file=sys.stderr)
+        return 1
+    return show(reply, args.json)
+
+
 def cmd_up(args: argparse.Namespace, sock: Path) -> int:
+    asked = str(getattr(args, "renderer", "") or "").strip()
+    if asked and asked not in RENDERERS and "." not in asked:  # before a running page is asked anything
+        print(f"ctl: no renderer {asked!r}; choose {', '.join(RENDERERS)}, or a dotted path", file=sys.stderr)
+        return 2
     scene = Path(args.scene)
     if not scene.is_file():
         print(
@@ -796,7 +1013,7 @@ def cmd_up(args: argparse.Namespace, sock: Path) -> int:
     run_dir = Path(args.run_dir)
     run_dir.mkdir(parents=True, exist_ok=True)  # before anything is written into it
     log_path = Path(args.log) if args.log else run_dir / "serve.log"
-    proc = spawn_server(serve_argv(args, sock), log_path)
+    proc = spawn_server(serve_argv(args, sock), log_path, asked)
     (run_dir / "serve.pid").write_text(f"{proc.pid}\n")
     (run_dir / "serve.log.path").write_text(f"{proc.pid} {log_path.resolve()}\n")  # for a page with no /proc
     try:
@@ -951,12 +1168,121 @@ def cmd_new(args: argparse.Namespace) -> int:
     return show(reply, args.json)
 
 
+def cmd_plate(args: argparse.Namespace) -> int:
+    """``ref plate``: a clean plate of a fixed camera's clip, written beside its stills; needs no page."""
+    from . import frames
+
+    if not args.path:
+        print("ctl: ref plate needs the clip", file=sys.stderr)
+        return 2
+    out = _absolute(args.out) if args.out else _ref_dir_without_a_page(Path(args.run_dir))
+    if out is None:
+        print("ctl: no scene.py beside the run directory or here; give --out", file=sys.stderr)
+        return 2
+    try:
+        reply = frames.plate(
+            _absolute(args.path),
+            windows=args.window,
+            count=args.count,
+            out_dir=out,
+            name=args.name,
+            paint=_absolute(args.paint) if args.paint else "",
+        )
+    except Exception as exc:  # a clip that will not decode: one line
+        print(f"ctl: {exc}", file=sys.stderr)
+        return 1
+    return show(reply, args.json)
+
+
+def cmd_camera(args: argparse.Namespace) -> int:
+    """``camera fit``: the pinhole that puts the given world points on their pixels, and how far each lands."""
+    from . import calib
+
+    try:
+        pairs = [calib.parse_point(p) for p in args.point]
+        if args.ref:
+            from PIL import Image
+
+            with Image.open(_absolute(args.ref)) as opened:
+                width, height = opened.size
+        elif args.size:
+            width, height = (int(v) for v in args.size.lower().split("x"))
+        else:
+            raise ValueError("give --ref (the still the pixels came from) or --size WxH")
+        fit = calib.fit_camera(
+            [w for w, _ in pairs],
+            [p for _, p in pairs],
+            width,
+            height,
+            free_center=args.free_center,
+            fov_y=args.fov or None,
+        )
+    except Exception as exc:
+        print(f"ctl: {exc}", file=sys.stderr)
+        return 1
+    spec = fit["spec"]
+    code = (
+        f'rss.CameraSpec(name="{args.name}", width={spec["width"]}, height={spec["height"]}, '
+        f"fx={spec['fx']}, fy={spec['fy']}, cx={spec['cx']}, cy={spec['cy']}, "
+        f"eye={spec['eye']}, look_at={spec['look_at']}, up={spec['up']})"
+    )
+    reply = {
+        "ok": True,
+        "camera": code,
+        "fov_y": fit["fov_y"],
+        "rms_px": fit["rms_px"],
+        "errors_px": ", ".join(f"{i}: {e}" for i, e in enumerate(fit["errors_px"])),
+    }
+    if fit["behind"]:
+        reply["warning"] = f"{fit['behind']} point(s) fell behind the camera: a pair is wrong"
+    elif fit["rms_px"] > 0.02 * width:
+        reply["warning"] = (
+            f"an RMS of {fit['rms_px']} px is no camera: a pair is read off wrong, two are crossed, or an axis is "
+            "flipped (+y is to the robot's left when it faces +x); the largest errors name the suspects"
+        )
+    if args.ref:
+        out = Path(_absolute(args.out)) if args.out else Path(args.run_dir) / f"camfit_{args.name}.png"
+        reply["overlay"] = str(
+            calib.overlay(_absolute(args.ref), [p for _, p in pairs], fit["projected"], out, fit["errors_px"])
+        )
+    return show(reply, args.json)
+
+
+def _join_points(argv: list[str]) -> list[str]:
+    """``--point -0.3,0.2,0.75=812,455`` as ``--point=-0.3,...``: argparse takes a leading minus for an option."""
+    out: list[str] = []
+    it = iter(argv)
+    for arg in it:
+        if arg == "--point":
+            value = next(it, None)
+            if value is not None and value[:1] == "-" and value[1:2] in "0123456789.":
+                out.append(f"--point={value}")  # a world point behind the origin, not an option
+            else:
+                out.extend([arg] if value is None else [arg, value])
+        else:
+            out.append(arg)
+    return out
+
+
 def main(argv=None) -> int:
     parser = build_parser()
-    args = parser.parse_args(argv)
-    sock = socket_path(args.run_dir, args.sock)
+    args = parser.parse_args(_join_points(list(sys.argv[1:] if argv is None else argv)))
+    # The commands that never talk to the page, before the socket is worked out: they need none.
     if args.cmd == "new":
         return cmd_new(args)
+    if args.cmd == "camera":
+        return cmd_camera(args)
+    if args.cmd == "ref" and args.op == "plate":
+        return cmd_plate(args)
+    try:
+        sock: Path | None = socket_path(args.run_dir, args.sock)
+    except OSError as exc:  # a run directory too deep for any socket path: one line, and how to name one
+        if not (args.cmd == "ref" and args.op == "frames"):
+            print(f"ctl: {exc}", file=sys.stderr)
+            return 2
+        sock = None  # stills are cut without a page when there is none, and with no socket there is none
+    if args.cmd == "physics":
+        return cmd_physics(args, sock)
     if args.cmd == "up":
         # the scene beside the run directory: `examples/live/ctl` pins run/ beside its scene.py, a twin's ctl beside its own
         args.scene = args.scene or str(Path(os.path.abspath(args.run_dir)).parent / "scene.py")
@@ -968,6 +1294,8 @@ def main(argv=None) -> int:
     log = server_log(sock, Path(args.run_dir)) if streams else Path()
     offset = _log_size(log) if streams else 0
     try:
+        if sock is None:
+            raise NoServer("no socket path fits")
         if args.cmd == "status" and waiting:
             reply = wait_until_free(sock, args.wait_limit)
             if reply.get("ok"):

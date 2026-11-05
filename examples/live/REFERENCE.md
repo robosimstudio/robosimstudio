@@ -84,7 +84,10 @@ scene.add(rss.robot("yam_bimanual"))  # a scene needs something that moves befor
 - The light is `rss.Scene(..., render=...)`; left out, it is the house room.
   Which fields count depends on the renderer that draws every `snapshot`,
   `compare` and take: the path tracer where the GPU has RT cores and ovrtx is
-  installed, else the tiled tracer.
+  installed, else the tiled tracer, unless the page was started with
+  `up --renderer` (*Renderers*, below; `status` says which draws). Blender
+  under `environment="lab"` reads the fields as the path tracer does, and
+  otherwise as the tiled tracer does.
   - The path tracer, under `environment="lab"`, lights the scene with one
     soft panel overhead and a neutral dome. Start from the lab room and
     change what it reads:
@@ -115,6 +118,28 @@ scene.add(rss.robot("yam_bimanual"))  # a scene needs something that moves befor
   out is the renderer's own default -- hence `replace(LAB, ...)`. A
   direction, a warmth or a shadow the renderer cannot make goes in the
   report. The page draws its own way: judge the light on the pair.
+- A camera with a `background` -- `rss.CameraSpec(name="cam", ..., background="ref/plate_cam.png")`,
+  a clean plate taken through that camera (`./ctl ref plate`), read beside
+  `scene.py` -- is drawn over that plate in every `snapshot`, `compare`,
+  `check` and take through it: what can move (the robot's moving links, the
+  things it handles, every deformable) is rendered, and every pixel where the
+  render hit nothing or a shape fixed to the world (the bench, a fixture, a
+  robot's base, a wall) is the plate's -- so a thing welded to the world that
+  the scene moves by rewriting its weld counts as static: give it a joint. The background is then the clip's own
+  pixels, and what is left is the camera and what moves. The static shapes
+  still collide: a collider not under its picture in the plate shows as a
+  thing resting on air or sunk into the table. What moves casts a soft
+  shadow onto the plate (the collider tracer draws the camera with and
+  without the moving things), from overhead unless `render=` states a
+  `light_direction`: aim that the way the clip's shadows fall. On the page,
+  the path-traced viewport locked to that camera (its **Lock to** list)
+  draws it over the plate too, for the price of a collider pass and a few
+  image filters a frame; the free view, the studio's video export and its
+  Cameras panel draw the scene alone. A camera on a body (a wrist) is drawn
+  without its plate, as is a camera whose plate is not found (beside
+  `scene.py` or among the asset roots); each says so once. Anything the path
+  tracer draws that has no collider or particle in the model (a co-simulated
+  actor with no Newton body) is covered by the plate.
 - Bind `routine` (a callable taking the built `sim`, and the page's `session`
   if it declares one, returning a generator), or `routines`, a dict of name to
   such callables, and the page grows a **Run** button per routine with a
@@ -128,16 +153,19 @@ scene.add(rss.robot("yam_bimanual"))  # a scene needs something that moves befor
 | Command | Does |
 | --- | --- |
 | `new NAME [--ref FILE ...] [--dir D]` | Make a twin's folder, `twins/NAME/` beside the run directory (or `D`): a starter `scene.py`, the files copied into `ref/`, `REPORT.md` with its four headings, and the folder's own `ctl`. Needs no page. Refused from a twin's own folder, and for a `D` inside another scene's own code (where that page would take the twin for its helpers). |
-| `up [--port N] [--scene F] [--share]` | Start a server on the file (default: the `scene.py` beside the run directory), wait for the page, and print its URL (the next free port if N is busy). With a page already up, names it; refuses if that page is on another scene file or lacks a requested `--share`. |
+| `up [--port N] [--scene F] [--share] [--renderer R]` | Start a server on the file (default: the `scene.py` beside the run directory), wait for the page, and print its URL (the next free port if N is busy). `--renderer` names what draws every picture: `rtx`, `blender`, `gl` or `tiled` (*Renderers*). With a page already up, names it; refuses if that page is on another scene file, lacks a requested `--share`, or draws with another renderer. |
 | `status [--wait [--wait-limit S]]` | What is loaded, the names in it and where they are, the last error, the page's address, how the last routine ended (`last_script`), and `speed`: simulated seconds per wall second. While the page is building or rendering it answers at once with `busy` and for how long; during a routine's step, within 5 s. `--wait` returns once the page is not building or rendering and every save is built (a routine may still be playing: `play --wait` waits on one), giving up after `--wait-limit` seconds (3600). |
 | `reload` | Rebuild now. Saving the file does this too. |
-| `snapshot [--camera N] [--beside REF] [--eye x,y,z --look-at x,y,z] [--size WxH] [--note TEXT]` | A path-traced PNG of the current state, with a reference picture beside it. A snapshot draws the room, the mat and the textures; the page draws only the bench and what you added. |
+| `snapshot [--camera N] [--beside REF] [--eye x,y,z --look-at x,y,z] [--size WxH] [--note TEXT]` | A PNG of the current state from the page's renderer (path-traced by default), with a reference picture beside it. A snapshot draws the room, the mat and the textures; the page draws only the bench and what you added. |
 | `ref frames CLIP [--at 0:closed,4.5:lid_open,end] [--every S] [--out D] [--width W]` | Stills out of a clip at those seconds, a contact sheet with the seconds burnt in, and `ref/timeline.json` anchoring them, in `ref/` beside the scene file or `--out`, at the clip's width or `--width`. Needs no page. |
-| `compare [--ref PHOTO] [--camera N] [--key NAME=HOW ...] [--note TEXT]` | The scene beside the photograph: the pair at full size and a look sheet; per keyed thing, its size, offset and overlap. |
+| `ref plate CLIP [--window 0:5,36:52] [--count N] [--paint MASK] [--name F] [--out D]` | A clean plate of a fixed camera's clip: the per-pixel median of `N` (60) frames drawn from those seconds (default: all of it), so whatever passes through a pixel for under half of them is gone, and `ref/plate_<clip>_spread.png`, the share of frames each pixel differs from the plate in (white: half, where a ghost can be). `--paint` fills the white of a mask the clip's size from around it (the nearest pixel outside, blurred across the hole, so a wide hole comes out smeared: fill a large one from another window instead): a thing that stayed put all along. Needs no page. A camera takes it as its `background` (*The contract*). |
+| `camera fit --point X,Y,Z=U,V ... --ref STILL [--name N] [--fov DEG] [--free-center]` | The pinhole that puts world points (metres, the frame `CameraSpec` uses) on their pixels in the still: six or more, spread over the picture and in depth. Prints the `rss.CameraSpec(...)` to paste, its field of view, and each point's reprojection error in pixels (a point read off wrong is the one far above the rest); `run/camfit_<name>.png` marks each clicked pixel (yellow) and where the fit puts its point (cyan). `--fov` holds the field of view, `--free-center` solves the principal point too (ten or more points). Needs no page. |
+| `compare [--ref PHOTO] [--camera N] [--key NAME=HOW ...] [--note TEXT]` | The scene beside the photograph: the pair at full size and a look sheet; per keyed thing, its size, offset and overlap; and how far the whole picture's colours are from the photo's, over the frame and behind the keyed things. |
 | `compare --take NAME [--key ...]` | A recorded take beside the clip's timeline: the clip's anchors above, the take's frames at the same point below, and what moved in the take. |
-| `check [--camera N] [--key ...] [--object NAME ...]` | The gate: builds, finite state, camera at the clip's aspect, every named thing present, penetration and drift at rest under their bars. |
+| `check [--camera N] [--clip CLIP] [--key ...] [--object NAME ...]` | The gate: builds, finite state, camera at the clip's aspect, every named thing present, penetration and drift at rest under their bars; with `--clip` (the camera's own clip) a camera on a wrist is held to the hand it shows (the `hand` line, *The gate*). |
 | `log [--last N]` | Every compare, check, take and `snapshot --note` so far: what it left (PASS/FAIL, the picture: a snapshot's pair when it made one) and the `scene.py` it measured. |
-| `play [NAME] [--record TAKE --camera N --every K] [--wait [--wait-limit S]]` | Play a routine the scene file binds, as its button on the page does; `--record` films a frame every `K` control steps (4). `--wait` returns when it ends and its take is written, printing the page's log as it goes, exits 1 with the traceback if it failed, and gives up after `--wait-limit` seconds (3600). |
+| `play [NAME] [--record TAKE --camera N --every K --also R,R] [--wait [--wait-limit S]]` | Play a routine the scene file binds, as its button on the page does; `--record` films a frame every `K` control steps (4). `--also gl,tiled,blender` draws each filmed frame of the same run with those renderers too, over the camera's plate when it has one: `TAKE.renderers/<renderer>.mp4` each and `TAKE.renderers/all.mp4` side by side (a folder made afresh for each take of that name), so renderers are compared on one run rather than on runs that drift apart. Each draws every filmed frame on the page's loop, so `--also blender` holds the page for a Cycles render a frame; a frame one fails is black in its video, three running stop it (`also_missed`, `also_failed` in `TAKE.json`), and the page's own renderer named there is left out (`also_skipped`). `--wait` returns when it ends and its take is written, printing the page's log as it goes, exits 1 with the traceback if it failed, and gives up after `--wait-limit` seconds (3600). |
+| `physics [NAME] [--only frozen,open,...] [--settle-mm MM] [--note TEXT]` | Replay a routine seven ways (written, frozen, open, built, heavy, drop, plain), each from a reset scene, and say whether its physics is real (*The physics replays*): as written, with the robot frozen, with the fingers held open, with the robot as built, with the handled things twice as heavy, with the fingers opened early in the carry (`drop`), and played with nothing hooked in (`plain`). Writes `run/physics.json` and a log line; takes as many times the routine's length as it plays replays. |
 | `show PATH [--label TEXT]`, `show --clear` | A picture on the page's board for the person watching. |
 | `run N [--no-wait] [--wait-limit S]` | Step N (at least 1) control steps, then hold, waiting until they are taken however slowly the scene steps (`--wait-limit`, 3600 s). Refused while a routine plays. A run cut short is an error saying how, at what step: paused, a routine started, a reset (also `check`'s), or a loop pass that failed end it held; a save that rebuilt the scene, `resume` or another run end it and leave the page to that. `status`'s `last_run` says how the last one ended. |
 | `pause`, `resume` | Pause or resume stepping. |
@@ -157,8 +185,32 @@ continues from the files already in `run/`, across restarts):
   take, `run/cmp_NNN_strip.png`
 - takes: `run/NAME.mp4`, `run/NAME.json` (every frame's step, time and
   positions), `run/NAME_seg.npz`
+- `run/physics.json` (the replays' readings and the lines)
 - `run/log.jsonl` (every reading), `run/serve.log` (the server's output)
 - from `ref frames`: `ref/tSSS.SS.jpg`, `ref/contact.jpg`, `ref/timeline.json`
+- from `ref plate`: `ref/plate_<clip>.png`, `ref/plate_<clip>_spread.png`; from
+  `camera fit --ref`: `run/camfit_<name>.png`
+
+## Renderers
+
+Every `snapshot`, `compare` and take is drawn by one renderer, named by
+`./ctl up --renderer` (or `ROBOSIMSTUDIO_RENDERER`); `status` says which and
+why, and each reading's reply and log line carry its name. A camera over a
+clean plate composites under all four, and `compare`'s per-thing readings
+(size, place, IoU) come off the colliders whichever draws, so only the
+`picture` line changes with the renderer.
+
+| Renderer | Draws | Runs where | A 960x540 still |
+| --- | --- | --- | --- |
+| `rtx` (default) | the path tracer: materials, the `lab` room's light, the scenery | an NVIDIA GPU with RT cores | a few seconds, the first through a camera a few more; the first in a process compiles shaders. Minutes for every new camera mean the renderer cannot write its cache (`ovrtx/bin/cache` in the environment, read-only in a sandbox): `status`'s `renderer_cache` says so -- make that folder writable rather than switching renderer |
+| `blender` | Cycles: the finishes and the `lab` light, as `rtx` does; no scenery | anywhere Blender 5 is installed (`ROBOSIMSTUDIO_BLENDER`, `blender` on the PATH, or Blender.app); Metal on a Mac | about a second on a GPU or a many-core CPU |
+| `gl` | flat colour and a sun, from the shapes as drawn; cloth, ropes and grains from their particles (a liquid as its grains) | anywhere: EGL on a GPU, software GL on a CPU, CGL on a Mac | milliseconds, and about 5 µs more a grain |
+| `tiled` | flat colour, from the colliders | anywhere Warp runs | milliseconds on a GPU, a second or two on a CPU |
+
+On a machine with no NVIDIA GPU -- a Mac -- the page steps on the CPU
+(MuJoCo's C library) and `rtx` cannot run: start it with `--renderer gl` to
+work fast, or `--renderer blender` for pictures that read like the path
+tracer's. Do not set the variable in `scene.py`: it outlives the save.
 
 ## Acting
 
@@ -205,6 +257,34 @@ page returns to its previous state when the routine ends -- held, if the
 routine cut a `run N` short -- and stays paused through a `reset` while
 paused.
 
+## Pitfalls twins have met
+
+Each of these cost a twin a quarter of an hour to find:
+
+- **A downloaded arm is not driven the page's way.** An arm from MuJoCo
+  Menagerie (the UR5e among them) brings its own actuators, and under the
+  page's joint targets the hand sags and stops short. Twins replaced them with
+  plain position servos -- `<position kp="2000" kv="400">` on a UR5e's
+  shoulder and elbow, `kp="500" kv="100"` on its wrist -- before tuning
+  anything else.
+- **Linkage fingers travel as they close.** A Robotiq 2F-85's pads swing up
+  and in on their four-bar: the grasp height read at open is not the one at
+  shut. Read the pads' colliders at the closing value you command.
+- **The contact gap is 2 mm.** Under `rss.GENERIC` rigid shapes start
+  touching 2 mm apart: a thing a few millimetres thick is held by the gap,
+  not its faces. A thin part wants a smaller gap -- the scene's
+  `rss.CollisionSpec(rigid_gap=...)`, or an asset's `contact_gap`
+  (`examples/08_demos/wipe_the_bar/bar.py` sets both kinds of knob).
+- **Many collider pieces overflow the contact buffers.** A thing built of
+  many convex parts (spokes, a rim of segments) in a pile of contacts runs out
+  of room: raise `rss.backend("mujoco", nconmax=..., njmax=...)` and
+  `CollisionSpec(rigid_contact_max=...)` as `bar.py` does.
+- **IK picks an elbow per call.** Two targets solved apart can land on two
+  branches and swing the arm through the bench between them: seed each solve
+  from the joints of the last one.
+- **The first path-traced picture compiles shaders** for minutes, in each new
+  process; `./ctl status` says so.
+
 ## Readings
 
 `compare` puts the render beside the photograph and writes the look sheet;
@@ -234,7 +314,13 @@ finds what was drawn.
 ```
 case: sim is 0.70x the photo's size (w 0.77x, h 0.60x), centre 5 px left, 78 px high (6.1% of the frame), IoU 0.31
 socket: sim is 0.81x the photo's size (w 0.44x, h 0.87x), centre 122 px left, 20 px low (9.7% of the frame), IoU 0.00
+picture: colour difference 14.2 (mean CIE76 dE) over the frame, 11.8 behind the keyed things; PSNR 17.9 dB, 19.3 dB behind them (identical pixels read dE 0)
 ```
+
+The `picture` line is the whole frame's pixels against the photo's: a dE of
+about 2 is the least a person sees side by side, 10 a plainly different
+colour. Behind the keyed things a camera drawn over its plate reads near 0
+where the camera is right.
 
 `snapshot --beside ref/<still>` and `compare` (as `cmp_NNN_beside.png`) put
 the render beside the still at full size, render on the left, photo on the
@@ -276,6 +362,205 @@ holds the camera's aspect to the clip's in `ref/timeline.json`, within 2%;
 against a photo, `compare` says when it had to stretch the photo to the
 camera's aspect. A line given nothing to look at (`objects` with no `--key`
 or `--object`) is a SKIP. The bars are defaults, and `check` blocks nothing.
+
+`--clip ref/<clip>` adds the `hand` line for a camera that rides the robot
+(`parent_frame`). A wrist camera carries the hand: in its clip the palm, the
+camera's housing and the fingers' usual place stay in the same pixels while
+the world sweeps past, so what changes in under 30% of 60 frames spread over
+the clip is the hand. The line draws the robot through the camera as the scene
+stands (run it from a reset, before the routine moves the arms), reads its
+overlap with that hand, and holds the camera to the robot's own camera on that
+arm, read from the registered robot's file:
+
+```
+FAIL  hand         the robot drawn over the clip's hand (what stays still through the clip): IoU 0.00 (bar 0.1); the clip's hand is centred 51% across, 10% down, the drawn robot 49% across, 87% down; turned 180 degrees it would read 0.15: is the camera mounted turned 180 degrees? (check_hand_cam_right.png: the clip's hand yellow, the drawn robot cyan); it sits 0 mm and 0 deg from the robot's own camera 'right', rolled 0 deg, with a 58 deg field of view against its 58
+```
+
+The overlap tells a camera the right way round from one that is not: it
+also tries the drawn robot turned 180 degrees and mirrored, and names one that
+reads clearly better, since a wrist camera is often mounted turned on its arm.
+The mount holds the rest: the camera within 20 mm of the robot's own, its view
+within 15 degrees of that camera's (a roll about the view is free), and its
+field of view within 25% of the camera's. Past any of those the line fails and
+prints the robot's own camera as `xform=(...)`, `fov_y=...`: start there and
+fit the roll. A twin that fitted the hand alone moved its cameras 60-90 mm off
+the robot's and opened them to 89 and 110 degrees against 58; the hand lined
+up and nothing else in the view did. Open `run/check_hand_<camera>.png` -- the
+clip's first frame, its hand yellow, the drawn robot outlined cyan. Measured on
+one clip at the robot's own mount and the clip's roll: 0.28-0.33 on one wrist,
+0.15 on the other, whose fingers stand at another opening for most of the
+clip; turned the wrong way, 0.00. A camera that rides nothing gets a SKIP, and
+a clip in which nothing stays still is no wrist clip. A robot whose file carries
+no camera on that link (a URDF, or an MJCF without one) has no mount to hold
+the camera to: the line keeps the overlap's verdict and says so, with where the
+camera sits on the link and its field of view -- the hand lining up does not
+settle them, so they come from a calibration that came with the clip or a
+measured mount, and the report says which.
+
+### The physics replays
+
+`physics` plays the routine again as written and six ways changed, each from
+a reset scene and each as long as the written one, and prints a line per
+finding, PASS and FAIL as `check` says them and NOTE for what the report has
+to explain:
+
+```
+PASS  contact  nothing ties a thing to the robot, no motor on a thing's joints, nothing welded
+PASS  written  finished; moved flower_1, flower_2, flower_3
+FAIL  frozen   flower_1 moved 18.6 mm with the robot frozen: it starts inside something, or something other than the robot pushes it
+PASS  open     with the fingers held open the task did not happen (RuntimeError: Flower 1 did not remain in the fingers)
+FAIL  built    with every friction at most 1 and the arm's torque at 27/10 Nm the routine stopped: RuntimeError: Flower 3 is outside the pitcher
+NOTE  heavy    with the handled things 2 times as heavy the routine stopped: RuntimeError: Flower 3 did not remain in the fingers (the grasp's margin)
+NOTE  grip     the fingers pressed flower_1 0.7 N (p95 0.7) by hand 2; ...; the solver used friction 2 to 4 at the finger contacts (above any real pad: the built line is the one to trust)
+```
+
+- **frozen** holds every target the robot has (arms, fingers, a torso or a
+  rail) where it started. A rigid thing that moves more than 5 mm is pushed
+  out of something it starts inside (a finger, the table) or by something
+  other than the robot; one that moves 2 to 5 mm (a key in a tight socket, a
+  bottle loose in a tray) and a deformable still settling (a heap, a liquid,
+  a draped cloth) are NOTEs. A thing tied to the robot or flagged kinematic
+  fails on the `contact` line whatever it moves, and `frozen` names it when it
+  moves past 2 mm (a part on its own joint is read like any other). `settle`
+  reads the start: a thing that starts more than 1 mm inside something and
+  moves past 2 mm with the robot frozen fails there, even where `frozen`
+  calls that move a note. One
+  the `contact` line names for a latch, an equality row or a motor in the
+  written run is read like any other, with that hold named as what may move
+  it. `--settle-mm` sets the 2 mm, and the
+  5 mm moves with it (2.5 times).
+- **open** holds the fingers fully open and moves the arms as written. A
+  pinch fails; a task that still happens is carried by a support, a hook or
+  two arms squeezing, and the report says which. What happened is read off
+  where the things end, so a routine that says it finished while the thing
+  never moved counts as the task not done.
+- **built** puts every contact friction at 1.0 or under and caps the arm's
+  joint torque at the real arm's, named by the robot or its own joints (a
+  YAM's 27 Nm and 10 Nm; a UR3's, UR5's, UR10's or UR16's; a Panda's 87 Nm and
+  12 Nm; for another robot, or a Universal Robots arm of no stated size,
+  friction only), and where the twin set its own gripper servo it puts back
+  the registered hand's (the YAM's 50 N clamp). It
+  passes when the routine finishes and the things end where the written run
+  left them (within 50 mm and 30°): a grip that only holds at a friction no
+  rubber pad has fails here, even when the routine's own checks miss it. A
+  thing that ends held up by other things alone, the same ones in both runs
+  (a mug on a peg, a plate in a rack: nothing static under it and no finger
+  on it, read off the last step's contacts), is held to where it ends, not to
+  how it is turned: it swings to where it swings, and one twin's replays left
+  the same mug on the same peg 1 to 13 mm and up to 92° apart. This holds for
+  every line that reads an end.
+  When `built` lowered nothing (the scene was already as built, so it only
+  played the routine again) and nothing in the scene keeps a friction built
+  does not cap (a deformable, or a thing another solver steps), a different
+  end or a routine's stop is a
+  NOTE: the outcome is not repeatable, and the report says so. When it lowered
+  something, a different end is a NOTE only where `plain`, which changes
+  nothing, carried the same thing (at least a third as far as written) and
+  missed it by the same measure (position, shape or turn) past the
+  tolerance, `built` missed it by no more than `plain` did plus one
+  tolerance, and `built` ended no farther from `plain`'s end than `plain`'s
+  is from the written one: the two are samples of the scene's spread, and a
+  slip outside it fails. Where `plain`'s own grasp failed, the FAIL says the
+  grasp is marginal at any friction. A thing it lost on the way or a thing it
+  knocked over that the written run left alone still fails, and so does a
+  routine that stops.
+  When the written replay did not finish, there is no end to hold it to, and
+  `built`, `heavy` and `open` are NOTEs that say so.
+- A replay the page cuts (a reset, a save, Stop) or whose own machinery
+  breaks gives no report: `./ctl physics` says which replay did not run to a
+  reading, and is run again.
+- **heavy** is `built` with every handled thing twice its mass: how much margin
+  the grasp has.
+- **drop** plays it as written and opens the fingers early in the written
+  run's carry (where a thing it lifted first reached 90% of its height). What
+  the fingers carried falls; a thing that still ends where the written run
+  left it fails, unless the robot's other parts still bear its weight (two
+  hands squeezing, a hook), which is a NOTE. It catches a weld or a pose
+  written every step even while the fingers touch the thing.
+- **plain** plays it with nothing hooked in -- no cap, no hold, nothing on
+  any hook list -- and reads only at the routine's own yields (and once when
+  it returns), cut a little past the written run's length. It fails when a
+  thing flies with nothing touching it: a routine that carries it another way
+  when it is not replayed. A different end, or a routine that does not finish,
+  is a NOTE: the sim is not deterministic, and a loose thing lands elsewhere
+  run to run. A routine that never yields while it steps is read only at its
+  start and end.
+- **model** reads the scene's own numbers: gravity off the Earth's by more
+  than 2% fails; a handled thing lighter than expanded polystyrene or heavier
+  than lead (its mass over its colliders' volume), and a collider nothing
+  draws touching a handled thing (an invisible shelf or lip), are NOTEs to
+  explain. A handled thing's drawn shapes that do not collide (a leaf, a
+  label) reaching more than 10 mm outside its colliders fail -- they pass
+  through what they meet -- and 3 to 10 mm is a NOTE.
+- **robot** compares the robot the scene was built with to the registered one
+  of its name. A copy of its file (in the twin's folder, edited or not), or
+  arm or gripper servo gains and force limits of the twin's own (`arm=`,
+  `gripper=`), fail: use the registered robot, placed with `at=` and
+  `arms_at=`. So does a robot built by a class of the twin's own (a subclass
+  of the library's swapped into the build), and so does any difference in the
+  built model's numbers from the registered robot built alone: each joint's
+  range, servo gain and damping, force and speed limits, armature, friction,
+  axis and frames; each shape's size, place on its link, kind, friction,
+  contact stiffness and what it collides with; each link's mass, inertia and
+  centre of mass -- whatever changed them (a hook that edits the builder
+  included). Where the bases stand is not compared. Its look -- `color`,
+  `finish`, `appearance` on the spec, and a shape's visibility -- is the
+  twin's. A robot built from a file nothing registered is a NOTE: its
+  limits are the file's own and are not checked.
+- **settle** reads how the scene's own settle, before the first step, moved
+  each thing from where it was put, and how deep each sits in something at
+  the reset: deeper than a soft contact sinks (5 mm), or more than 1 mm deep
+  and pushed out by the frozen run, fails; a shallower rest that stays, a thing
+  that starts higher than it was put, or one pushed aside without rising, is a
+  NOTE (say which); fallen into place is fine.
+- **contact** reads the model and the written replay. A joint between a thing
+  and the robot (either way round), an equality row between them that is on at
+  any step of the routine (a suction cup's seal is a NOTE instead), a thing flagged
+  kinematic or of infinite mass while free to move, a hook put on a substep
+  phase while the routine played (a dragger, a pin), or a stiff joint on a
+  thing whose target moved while it played (a motor) fails it. A thing welded
+  to the world or to another thing, or a hook the routine put on the step
+  lists, is a NOTE for the report to explain. A stiff joint held at its target
+  is the thing's own elasticity (a rod's bending), a hinge or a slide to the
+  world or to furniture is a mechanism, and damping alone is not a motor: all
+  pass.
+- **flight** is a single free body with nothing within the contact margin
+  that does not fall at g: something holds it that is not a contact. Ten
+  steps or more in a row fail; fewer are a NOTE (a contact that comes and goes between
+  reads). It is not read in a scene with a deformable, whose contacts are not
+  in MuJoCo's list.
+- **grip** is the median force each hand's fingers put on what they moved,
+  and the friction MuJoCo mixed at those contacts (the larger of the two
+  surfaces'): a hand whose own pads carry 2 or 4 grips with that, not with the
+  number written for the thing.
+  It fails when the fingers' median force while touching is more than 1.25
+  times what the real hand squeezes with both its jaws (a Robotiq 2F-85's
+  235 N a jaw, a Franka hand's 140 N, a YAM's 50 N): a squeeze no real hand
+  gives is the arm pressing, not the hand holding.
+  The default arrangement gives free rigid things a VBD island coupled to the
+  robot, whose contacts never reach MuJoCo's list: for those things the
+  replay runs a collision pass of its own after every step, so their flight
+  is judged and the fingers touching them is seen (`box (stepped by
+  SolverVBD): touched by hand 2, its force not read`). Put the handled things
+  in the robot's MuJoCo island (`backends=(("*", rss.backend("mujoco",
+  ...)),)`) to have their grip force read. A jointed part of such a thing
+  that sags on that solver's joints at the reset is a NOTE in `frozen`, as is
+  a part whose stiff joint is its elasticity (a stem bending under its own
+  weight).
+
+Every replay starts at the reset with the page held (it is put back as it
+was when `physics` ends): a routine that only works once the page has run a
+while, letting what starts inside something pop out and settle, fails
+`written`, and `frozen` says what moved. A replay holds the robot's joint
+targets in a pre-step hook, after the routine's commands land and before the
+physics, so it works whichever way the routine was written. A replay other
+than `written` is cut a little past the written run's length (10%, at least
+25 steps) when its routine is still going: one waiting for a pose the frozen
+arm never reaches is read as not done. A routine's own checks stopping it is
+a reading, not an error: the line quotes them. A deformable is read by its own particles; `built`
+and `heavy` change neither its friction nor its mass, and `drop` follows only a rigid thing's carry,
+so where what moved is deformable `heavy` and `drop` are NOTEs that say so. `physics` resets the
+scene when it ends; it is refused while a routine plays.
 
 ### The take
 
