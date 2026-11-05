@@ -221,6 +221,9 @@ dropped: the importer welds the root of a fixed-base robot to the world in its j
 WELDED = APART.replace("</worldbody>", '</worldbody><equality><weld body1="a_l2"/></equality>')
 """The two arms, the left one's wrist welded to the world by an equality."""
 
+FLOORED = APART.replace("<worldbody>", '<worldbody><geom name="floor" type="plane" size="1 1 0.1"/>', 1)
+"""The two arms, and a floor the file puts on the world body itself."""
+
 WANT = (0.3, 0.4, 0.6, 0.0, 0.0, H, H)
 
 
@@ -314,6 +317,21 @@ class TestThePlacement(unittest.TestCase):
         self.assertEqual("pegboard", labels[0], "the fixture welded before the robot was folded into the world")
         np.testing.assert_allclose(self._body(builder, "pegboard"), (0.5, 0.0, 0.2, 0.0, 0.0, 0.0, 1.0), atol=1e-6)
         self.assertNotIn("a_base", labels)
+
+    def test_a_shape_on_the_world_stays_and_is_named(self) -> None:
+        """A shape the file puts on the world belongs to no arm: it stays where the file put it, said once by name."""
+        import contextlib
+        import io
+
+        heard = io.StringIO()
+        with contextlib.redirect_stdout(heard):
+            builder = self._build(FLOORED, collapse=False, mounts={"a": WANT})
+        np.testing.assert_allclose(self._body(builder, "a_base"), WANT, atol=1e-6)
+        self.assertIn("1 shape(s) its file puts on the world stay where the file put them: floor", heard.getvalue())
+        quiet = io.StringIO()
+        with contextlib.redirect_stdout(quiet):
+            self._build(APART, collapse=False, mounts={"a": WANT})
+        self.assertNotIn("puts on the world", quiet.getvalue())
 
     def test_a_position_keeps_the_heading(self) -> None:
         """On a robot turned a quarter by its mount, a position moves the base and does not turn it."""
