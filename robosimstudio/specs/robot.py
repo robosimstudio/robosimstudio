@@ -118,8 +118,12 @@ class ActuationSpec:
             declares none. Written to the group's own DOFs only, after
             :attr:`armature`; a linkage's geared followers are not touched.
         joint_damping: Per-DOF joint damping, or ``None`` to keep the import's.
+            Written, like :attr:`armature`, to the group's DOFs and to every
+            joint geared to them: on a hand whose second finger rides an
+            equality the damping acts on the pair -- on the YAM's hand, the
+            230 N*s/m a finger that is its closing-speed limit.
         joint_friction: Per-DOF joint friction loss, or ``None`` to keep the
-            import's.
+            import's. Written to the same DOFs as :attr:`joint_damping`.
     """
 
     target_ke: float
@@ -858,6 +862,14 @@ class EmbodimentSpec:
     color: Vec3 | None = None
     finish: Finish | None = None
     appearance: Callable[..., int] | None = None
+
+    def resident(self, scene_resident: bool = False) -> bool:
+        """Whether this robot arrives inside the scene rather than by its own import.
+
+        Placed so by its binding, or with no asset of its own to import. The one rule
+        the entity builds by and the compiler decides arm collisions by.
+        """
+        return bool(scene_resident) or self.asset is None
 
     @property
     def import_self_collisions(self) -> bool:

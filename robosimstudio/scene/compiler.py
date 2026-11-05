@@ -461,6 +461,23 @@ def _for_platform(request: SceneRequest, plat: Platform, num_worlds: int) -> tup
     return request, tuple(notes)
 
 
+def _cross_arm_collisions(binding: Binding, embodiment_spec: EmbodimentSpec) -> bool:
+    """Whether this pairing's arms collide with each other.
+
+    Whether the arms may pass through each other is a fact about the pairing:
+    it only matters on a task that puts both hands in the same place, and the
+    pairs are not free. Tri-state on the binding, so it can also switch it
+    *off* for a robot that ships with it on. Left unstated it is the robot's
+    own -- except on a scene-resident robot, whose shapes the scene's own
+    import has already filtered against each other: a default cannot re-admit
+    those pairs, so it stays off there, where a binding that asks for it
+    outright is refused at build.
+    """
+    if binding.cross_arm_collisions is not None:
+        return bool(binding.cross_arm_collisions)
+    return bool(embodiment_spec.cross_arm_collisions) and not embodiment_spec.resident(binding.scene_resident)
+
+
 def _mount(request: SceneRequest, binding: Binding, scene: CellSpec | None, spec: EmbodimentSpec) -> Xform:
     """Where this pairing puts the robot's base, in world coordinates.
 
@@ -737,14 +754,11 @@ def _build_base(
                 arm_actuation=arm_gains or embodiment_spec.arm_actuation,
                 gripper_actuation=gripper_gains or embodiment_spec.gripper_actuation,
             )
-        if binding.cross_arm_collisions is not None:
-            # Whether the arms may pass through each other is a fact about the
-            # pairing: it only matters on a task that puts both hands in the
-            # same place, and the pairs are not free. Tri-state, so a binding can
-            # also switch it *off* for a robot that ships with it on.
+        crossed = _cross_arm_collisions(binding, embodiment_spec)
+        if crossed != embodiment_spec.cross_arm_collisions:
             from dataclasses import replace as _replace
 
-            embodiment_spec = _replace(embodiment_spec, cross_arm_collisions=bool(binding.cross_arm_collisions))
+            embodiment_spec = _replace(embodiment_spec, cross_arm_collisions=crossed)
         embodiment = _resolve_entity(_EMBODIMENT_ENTITY)(
             embodiment_spec,
             pose=_mount(request, binding, scene_spec, embodiment_spec),

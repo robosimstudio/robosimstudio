@@ -30,9 +30,11 @@ puts the shoulder at the height the suites had it; the wrist residual is the
 arm, and is what the suites' own graphs were re-measured against before these
 became their native pairing.
 
-**Gains** are the arena's actuator classes, stated in the asset -- a cell fact,
-as the USB-C insertion suite says of its own 1600 -- so ``arm_actuation`` and
-``gripper_actuation`` stay ``None``: the MJCF's, only checked.
+**Gains**: ``arm_actuation`` and ``gripper_actuation`` stay ``None``. The
+arm's are the asset's, the arena's actuator classes (kp 80 kv 6 on joints 1-3,
+kp 30 kv 2 on the wrist), not the hardware's 80/10 of i2rt's ``yam_v1.yml``;
+the hand's are ``yam_linear_arena``'s own, the real driver's 50 N-per-jaw
+clamp (see ``assets/PROVENANCE.md``).
 """
 
 from __future__ import annotations
@@ -96,6 +98,8 @@ def _spec(name: str, base_offset: tuple[float, ...]) -> EmbodimentSpec:
         appearance=split_yam_white_tubes,
         show_collision_shapes=True,
         enable_self_collisions=False,
+        # The arms collide with each other, each filtered against itself.
+        cross_arm_collisions=True,
         arms=(_arm("left"), _arm("right")),
         arm_actuation=None,
         gripper_actuation=None,

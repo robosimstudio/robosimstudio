@@ -45,11 +45,11 @@ is what the shared hardware family would suggest.
 
 from __future__ import annotations
 
-from robosimstudio.specs import GripperSpec
+from robosimstudio.specs import ActuationSpec, GripperSpec
 
 from ..registry import register_gripper
 
-__all__ = ["FINGER_OPEN", "GRASP_SITE_OFFSET", "GRASP_SITE_QUAT_XYZW", "YAM_LINEAR_ARENA"]
+__all__ = ["CLAMP", "FINGER_OPEN", "GRASP_SITE_OFFSET", "GRASP_SITE_QUAT_XYZW", "YAM_LINEAR_ARENA"]
 
 GRASP_SITE_OFFSET = (0.0, -0.044, 0.130)
 """The measured grip point, in the wrist frame [m] -- NOT the MJCF's site.
@@ -72,6 +72,31 @@ FINGER_OPEN = 0.0475
 
 Not the actuator's ``ctrlrange``, which says 0.0495 and which this spec used to
 carry: the joint stops at 0.0475, so a full-open command was 2 mm into the stop.
+"""
+
+CLAMP = ActuationSpec(target_ke=300000.0, target_kd=300.0, effort_limit=100.0, joint_damping=230.0)
+"""The real YAM's gripper servo: i2rt's driver clamps a blocked jaw at 50 N, whatever it closed on.
+
+i2rt runs the arm with ``limit_gripper_force=50.0`` (``i2rt/robots/get_robot.py``), and its
+``GripperForceLimiter`` (``i2rt/robots/utils.py``) sees a blocked jaw and holds the motor at the
+torque that makes 50 N of grip whatever the width. Here: a position servo stiff enough to reach
+its cap 0.33 mm past contact. The cap is the driver's limit on the one actuator, in the asset
+and restated here so it holds on a solver that reads the joint's limit rather than the MJCF
+actuator's: 100 N on the driven finger, which the finger equality splits onto the two jaws --
+50 N each. The
+asset's own gains are the arena's kp 200 N/m spring, which squeezed 0.3 N a jaw on a 6 mm box
+and 2.5 N on 50 mm.
+
+``joint_damping`` is the closing speed, on both fingers (the equality ties them, so the pair
+carries 460): pulling at the cap a finger runs at 100/460 = 0.22 m/s, the jaw at 0.43 m/s -- the
+DM4310 at the 30 rad/s i2rt's motor table gives it, through ``linear_4310.yml``'s 6.57 rad per
+96 mm of jaw. An upper bound: no closing time is published. A stiff clamp undamped slams the
+pads -- crossed 56 mm through each other, and through a 1-2 mm plate.
+
+Here, on the hand, so a page or task that states its own finger servo replaces it, damping
+included, and gets the asset's own joint physics back (under the asset's 100 N actuator cap on
+MuJoCo, the solver that reads it). Measured in
+``assets/PROVENANCE.md``.
 """
 
 YAM_LINEAR_ARENA = register_gripper(
@@ -116,5 +141,6 @@ YAM_LINEAR_ARENA = register_gripper(
         # around a housing knows to decline rather than trust a zero.
         finger_bodies=(("{arm}_link_left_finger",), ("{arm}_link_right_finger",)),
         open_axis_signs=(1.0, -1.0),
+        actuation=CLAMP,
     )
 )

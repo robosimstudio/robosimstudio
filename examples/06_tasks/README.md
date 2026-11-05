@@ -124,8 +124,8 @@ Source: [`05_suction_scored.py`](05_suction_scored.py)
 The same bag and hand as a task document, with a goal on how far the mouth stands open: turn the right hand to point down, open the bag as in `03_materials/06_bag`, and the goal turns true at 30 mm.
 
 The bag is a `Bag.from_spec` record the document places under its own name, the physics is
-`rss.BAG_60HZ` under a task-language name, and the staging states the stiffer finger servo the
-pinch needs. The hands start at the YAM's home, pointing ahead, so turn the right gizmo down
+`rss.BAG_60HZ` under a task-language name, and the staging states the page's own finger servo
+the pinch needs. The hands start at the YAM's home, pointing ahead, so turn the right gizmo down
 first. `tests/test_open_a_bag_scored` drives the right hand through the page and `evaluate`
 says success, the mouth 75 mm open; 12 ms per control step at rest through the page on an
 RTX PRO 6000, GPU 3. Needs the `[superdex]` extra (Python 3.12).
@@ -163,7 +163,7 @@ The same box and label as a task document, with a goal on the share of the label
 The label is a `Tape.from_spec` record and the box a `Body.from_spec` one, placed by the
 document under the names the label's `on` and the goal use, and the physics is
 `rss.TAPE_60HZ` under a task-language name. The staging states the finger servo of
-`03_materials/08_tape`: stiffer than the YAM's own, damped, and capped at 12 N a finger. The cap
+`03_materials/08_tape`: gentler than the YAM's own 50 N clamp, damped, and capped at 12 N a finger. The cap
 is what Close's first push meets: 1500 times the 47.5 mm to go is about 71 N, held to 12 N as on the
 material page; the pads then stall on the tab 3.8 mm short of shut and hold it with about 5.8 N
 through the peel (`g2_close.py`, `g2_grip.py`). The hands start at the YAM's home, pointing

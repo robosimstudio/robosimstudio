@@ -16,8 +16,10 @@ the grid sees it one voxel fatter than the hand does: otherwise the bottom
 voxel of grains passes under it (``probe_sweep``, GPU 3: 40% of a heap left
 behind a 160 mm pusher with no margin, 10% with one). What a tool pushes
 pushes back, and a parallel gripper feels it along its closing axis: 16,000
-grains of rice ahead of that pusher opened the YAM's jaws (``kp`` 200 N/m)
-from the pusher's 20 mm to 42 mm, with the fingers still either side of it.
+grains of rice ahead of that pusher opened the YAM's jaws from the pusher's
+20 mm to 42 mm, with the fingers still either side of it -- measured on the
+YAM's old hand, a 200 N/m spring, not re-measured on the 50 N-a-jaw clamp it
+has now.
 """
 
 from __future__ import annotations

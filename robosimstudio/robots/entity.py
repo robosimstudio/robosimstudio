@@ -702,7 +702,7 @@ class EntityEmbodiment(Entity):
     @property
     def resident(self) -> bool:
         """Whether the robot is already in the scene rather than imported here."""
-        return self.scene_resident or self.spec.asset is None
+        return self.spec.resident(self.scene_resident)
 
     def _mount_xform(self):
         """This robot's base pose as a Warp transform, or ``None`` at identity.
@@ -1055,6 +1055,7 @@ class EntityEmbodiment(Entity):
             # bodies, which is the failure rekey_custom_attributes exists for.
             set_body_attribute(builder, "mujoco:gravcomp", 1.0, self.body_indices(builder))
         unlimited_dofs: list[int] = []
+        geared: dict[int, tuple[int, ...]] | None = None  # built on first need: most actuations state no linkage term
         for arm in self.spec.arms:
             index = self._index_arm_builder(builder, arm)
             hand = self.hands.get(arm.name)
@@ -1090,12 +1091,21 @@ class EntityEmbodiment(Entity):
                         builder.joint_limit_lower[dof] = -1.0e6
                         builder.joint_limit_upper[dof] = 1.0e6
                         unlimited_dofs.append(dof)
+                # The linkage, not just the driven joints: a finger carried by an
+                # equality moves with the driven one, so its joint physics is the
+                # driven one's too -- damping, friction and armature alike.
+                if actuation.joint_damping is None and actuation.joint_friction is None and not actuation.armature:
+                    linkage = ()
+                else:
+                    geared = self._geared_dofs(builder) if geared is None else geared
+                    linkage = sorted({tied for dof in dofs for tied in geared.get(int(dof), (int(dof),))})
+                for dof in linkage:
                     if actuation.joint_damping is not None:
                         builder.joint_damping[dof] = float(actuation.joint_damping)
                     if actuation.joint_friction is not None:
                         builder.joint_friction[dof] = float(actuation.joint_friction)
-                if actuation.armature:
-                    self._set_armature(builder, dofs, actuation.armature)
+                    if actuation.armature:
+                        builder.joint_armature[dof] = float(actuation.armature)
                 if actuation.armature_exact is not None:
                     # After ``armature``, so stating a value outright wins over
                     # the field that cannot say zero; the group's own DOFs only.
@@ -1108,35 +1118,44 @@ class EntityEmbodiment(Entity):
             self._unlimit_ctrlrange(builder, unlimited_dofs)
 
     @staticmethod
-    def _set_armature(builder: newton.ModelBuilder, dofs: Sequence[int], armature: float) -> int:
-        """Give ``dofs`` -- and anything geared to them -- this armature.
+    def _geared_dofs(builder: newton.ModelBuilder) -> dict[int, tuple[int, ...]]:
+        """Each DOF an enabled mimic row ties to another, mapped to every DOF of its linkage.
 
-        The followers are the point. A geared hand names one driven joint, so a
-        spec's gripper DOFs are that joint alone; leaving the five passive joints
-        weightless is what lets the drive overpower their equality constraints.
-        They are found through the builder's own mimic table rather than by name,
-        so this works for any linkage the importer closed.
+        A geared hand names one driven joint, so a spec's gripper DOFs are that
+        joint alone; the joints its equalities carry are found through the
+        builder's own mimic table rather than by name, so this works for any
+        linkage the importer closed. A DOF no row ties is not in the map.
 
-        Returns:
-            How many DOFs were written.
+        Either side of a mimic row may be the driven joint: the MJCF equality
+        ``joint1 = poly(joint2)`` lands as ``joint0`` following ``joint1``, and
+        the arena YAM's names its *driven* finger as ``joint1`` -- read one way
+        round, its carried finger was never found. So a row joins its two
+        joints into one linkage, linkages that share a joint merge, and a
+        disabled row joins nothing. Built once per robot, a union-find over the
+        rows.
         """
-        followers = list(getattr(builder, "constraint_mimic_joint0", ()))
-        leaders = list(getattr(builder, "constraint_mimic_joint1", ()))
+        joint0 = list(getattr(builder, "constraint_mimic_joint0", ()))
+        joint1 = list(getattr(builder, "constraint_mimic_joint1", ()))
+        enabled = list(getattr(builder, "constraint_mimic_enabled", ())) or [True] * len(joint0)
+        parent: dict[int, int] = {}
+
+        def root(joint: int) -> int:
+            parent.setdefault(joint, joint)
+            while parent[joint] != joint:
+                parent[joint] = parent[parent[joint]]
+                joint = parent[joint]
+            return joint
+
+        for a, b, on in zip(joint0, joint1, enabled, strict=False):
+            if on:
+                parent[root(int(a))] = root(int(b))
         starts = builder.joint_qd_start
-        driven = {int(d) for d in dofs}
-        # A joint's DOFs, by its position in joint_qd_start.
-        for follower, leader in zip(followers, leaders, strict=False):
-            if int(starts[int(leader)]) not in driven:
-                continue
-            begin = int(starts[int(follower)])
-            end = int(starts[int(follower) + 1]) if int(follower) + 1 < len(starts) else len(builder.joint_armature)
-            driven.update(range(begin, end))
-        written = 0
-        for dof in sorted(driven):
-            if 0 <= dof < len(builder.joint_armature):
-                builder.joint_armature[dof] = float(armature)
-                written += 1
-        return written
+        count = len(builder.joint_armature)
+        linkages: dict[int, list[int]] = {}
+        for joint in list(parent):
+            end = int(starts[joint + 1]) if joint + 1 < len(starts) else count
+            linkages.setdefault(root(joint), []).extend(range(int(starts[joint]), end))
+        return {dof: tuple(sorted(members)) for members in linkages.values() for dof in members}
 
     # -------------------------------------------------------------- indexing
     def _arm_joints(

@@ -160,7 +160,9 @@ class Binding:
         gripper_actuation: The same for the fingers.
         cross_arm_collisions: Whether the two arms collide with each other, per
             :attr:`EmbodimentSpec.cross_arm_collisions`. ``None`` takes the
-            robot's own setting.
+            robot's own setting -- on, for the three YAMs, as two real arms on
+            one bench collide -- except on a scene-resident robot, whose import
+            has already filtered the pairs, where it stays off.
 
             Here as well as on the embodiment for the same reason the gains are:
             whether two arms may pass through each other only *matters* on a

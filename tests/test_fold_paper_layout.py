@@ -29,7 +29,7 @@ FOLD = EXAMPLES / "03_materials" / "05_paper.py"
 
 
 def _locals() -> dict:
-    """The literal locals ``main()`` opens with: the sheet, the box, the overhang, the nubs' friction."""
+    """The literal locals ``main()`` opens with: the sheet, the box, the overhang."""
     tree = ast.parse(FOLD.read_text())
     main = next(node for node in tree.body if isinstance(node, ast.FunctionDef) and node.name == "main")
     out = {}
@@ -82,7 +82,10 @@ class TestTheFoldIsLaidOutForTwoHands(unittest.TestCase):
         self.assertGreater(box[1], size[1], "and the box is wider than it")
 
     def test_the_arms_collide_with_each_other(self) -> None:
-        self.assertIn("cross_arm_collisions=True", self.source)
+        from robosimstudio.robots.registry import get_embodiment
+
+        self.assertTrue(get_embodiment("yam_bimanual").cross_arm_collisions, "the YAM's own setting")
+        self.assertNotIn("cross_arm_collisions=False", self.source)
 
     def test_the_grip_is_capped_and_feels_the_sheet(self) -> None:
         hands = _keywords(self.source, "ActuationSpec")
@@ -96,9 +99,17 @@ class TestTheFoldIsLaidOutForTwoHands(unittest.TestCase):
         self.assertTrue(coupling["contact_forces"])
 
     def test_no_pad_grips_paper_harder_than_friction_one(self) -> None:
+        """VBD mixes paper against a pad as the geometric mean: read the pads' friction off the hand's asset."""
+        import xml.etree.ElementTree as ET
+
+        from robosimstudio.paths import resolve_path
         from robosimstudio_materials.paper import PAPER
 
-        self.assertLessEqual(math.sqrt(PAPER.friction * self.found["nubs"]), 1.0)
+        asset = ET.parse(resolve_path("embodiments/yam/yam_bimanual_arms.xml"))
+        pads = [float(g.get("friction").split()[0]) for g in asset.iter("geom") if g.get("friction")]
+        self.assertTrue(pads)
+        self.assertLessEqual(math.sqrt(PAPER.friction * max(pads)), 1.0)
+        self.assertNotIn("shape_material_mu", self.source, "and the page writes no friction of its own")
 
     def test_nothing_on_the_page_pins_the_sheet_to_a_hand(self) -> None:
         for attachment in ("grab_set_requested", "follow_arm", "particle_sets", "pinned=", "attach"):

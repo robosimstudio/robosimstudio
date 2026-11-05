@@ -88,9 +88,9 @@ Source: [`01_rope_memory.py`](01_rope_memory.py)
 Two cables hang from a clamp, one twisting ten times more easily than it bends and one ten times less: drag each hand onto its cable's tip, press **Close**, turn each gizmo's ring a third of a turn about the cable and press **Open**, and the stiff one springs the turn back out while the soft one keeps it.
 
 `twist_ke` splits Newton's rod joint from its bend. The pads alone hold each
-tip, turned about the vertical. Turned 120 degrees, the soft cable takes 0.33
-turns and the stiff 0.16, slipping in the jaws; opened, the stiff reads 0.000 in
-30 steps, the soft 0.107 in 60 (`tests/test_cable_robot`, GPU 2).
+tip, turned about the vertical. Turned 120 degrees, the soft cable takes 0.32
+turns and the stiff 0.32 too, held by the hand's 50 N clamp; opened, the stiff
+reads 0.001 in 30 steps, the soft 0.106 in 60 (`tests/test_cable_robot`, GPU 7).
 
 ```bash
 uv run examples/03_materials/02_twist.py
@@ -146,9 +146,10 @@ Source: [`04_band.py`](04_band.py)
 
 Bring each hand in along the edge of the A4 sheet that runs past the box, from its own corner, with **Grip amount** 0.79, and press **Close**: the fingers stall on the sheet at the grip's 10 N cap. Carry the edge up and over, each hand turning with the flap to 88 degrees and no further, and press **Open** 100 mm over the far half: the flap falls onto it. Then, at **Grip amount** 0.6, run the side of each hand's lower finger along its half of the fold, the sheet pushing it up its slide against the same 10 N cap: the sheet stays folded in half.
 
-In 6 drives (`probe.py`) the arms, which collide, kept 79.3 mm apart and 9.0 mm on their own sides, each hand
-turned 88.0 degrees holding the edge, and no finger pushed over 15 N at any step (9.8 N holding, 5.6 after **Open**,
-13.5 pressing). The edges ended 4.7 to 4.9 mm apart and the fold kept 2.92 to 2.93 rad, unchanged 3 s after the hands.
+On the YAM's pads, at friction 1 (paper's 0.3 mixes to 0.55 on them), the arms, which collide, kept 79.5 mm
+apart and 12.0 and 9.0 mm on their own sides, each hand turned 88.0 degrees holding the edge, and no finger pushed
+over 15 N at any step (8.7 N holding, 4.8 after **Open**, 12.4 pressing). The edges ended 0.3 to 2.3 mm apart and the
+fold kept 2.89 rad, unchanged 3 s after the hands (`tests/test_fold_paper_robot`).
 
 ```bash
 uv run examples/03_materials/05_paper.py
@@ -169,8 +170,8 @@ over the lip's top, 45 mm up, the hand lifted nothing and the bag read shut (`f_
 1 and 3). The bag is one SuperDex shell that collides with itself: its layers rest 3.9 mm apart,
 a contact radius, and stayed 3.5 mm apart while the hand opened it. Set `self_contact` to
 False and the top layer lies in the bottom one instead: -0.24 mm at rest, -0.29 mm held open.
-The grip is stiffer than the YAM's own servo, 8 N a finger: at its own gains the pads squeezed
-the lip with 0.02-0.05 N, it slipped, and the mouth opened 64-67 mm. The **Bag** folder reads
+The grip is the page's own servo, 8 N a finger: on the YAM's old kp 200 spring the pads squeezed
+the lip with 0.02-0.05 N, it slipped, and the mouth opened 64-67 mm (its hand is a 50 N clamp now). The **Bag** folder reads
 `mouth_opening`, the widest span across the rim and the area it encloses, and `layer_gap`.
 Through the page, 11 ms per control step at rest and 41 ms while the pads hold the cloth (RTX
 PRO 6000, GPU 1). Needs the `[superdex]` extra (Python 3.12).

@@ -44,12 +44,12 @@
                     <site name="right_grasp_site" pos="0 0 -0.1347" quat="0 1 0 0" size="0.005" rgba="0 1 0 1" />
                     <body name="right_tip_left" pos="-0.0238981 0.0450619 -0.0545599" quat="0.499998 -0.5 -0.5 -0.500002" gravcomp="1">
                       <inertial pos="-0.0224716 0.0143408 -0.0426253" quat="0.498899 0.455348 -0.0576406 0.735143" mass="0.0710042" diaginertia="6.24193e-05 6.01079e-05 2.83591e-05" />
-                      <joint name="right_joint7" pos="0 0 0" type="slide" axis="0 0 -1" range="0 0.0475" armature="0.05" damping="2" frictionloss="0.5" actuatorfrcrange="-80 80" />
+                      <joint name="right_joint7" pos="0 0 0" type="slide" axis="0 0 -1" range="0 0.0475" armature="0.05" damping="2" frictionloss="0.5" actuatorfrcrange="-50 50" />
                       <geom pos="0.129783 0.00999321 -0.0914614" quat="0.499998 0.5 0.500002 0.5" type="mesh" rgba="0.596078 0.788235 0.921569 1" mesh="tip_left" />
                     </body>
                     <body name="right_tip_right" pos="0.0238981 -0.0450619 -0.0545599" quat="0.707105 0.707108 0 0" gravcomp="1">
                       <inertial pos="-0.0143408 -0.0224716 -0.0426253" quat="0.281222 0.8726 0.16705 -0.362738" mass="0.0710042" diaginertia="6.24193e-05 6.01079e-05 2.83591e-05" />
-                      <joint name="right_joint8" pos="0 0 0" type="slide" axis="0 0 -1" range="0 0.0475" armature="0.05" damping="2" frictionloss="0.5" actuatorfrcrange="-80 80" />
+                      <joint name="right_joint8" pos="0 0 0" type="slide" axis="0 0 -1" range="0 0.0475" armature="0.05" damping="2" frictionloss="0.5" actuatorfrcrange="-50 50" />
                       <geom pos="-0.0379932 0.129783 0.00133753" quat="0.707105 -0.707108 0 0" type="mesh" rgba="0.596078 0.788235 0.921569 1" mesh="tip_right" />
                     </body>
                   </body>
@@ -92,12 +92,12 @@
                     <site name="left_grasp_site" pos="0 0 -0.1347" quat="0 1 0 0" size="0.005" rgba="0 1 0 1" />
                     <body name="left_tip_left" pos="-0.0238981 0.0450619 -0.0545599" quat="0.499998 -0.5 -0.5 -0.500002" gravcomp="1">
                       <inertial pos="-0.0224716 0.0143408 -0.0426253" quat="0.498899 0.455348 -0.0576406 0.735143" mass="0.0710042" diaginertia="6.24193e-05 6.01079e-05 2.83591e-05" />
-                      <joint name="left_joint7" pos="0 0 0" type="slide" axis="0 0 -1" range="0 0.0475" armature="0.05" damping="2" frictionloss="0.5" actuatorfrcrange="-80 80" />
+                      <joint name="left_joint7" pos="0 0 0" type="slide" axis="0 0 -1" range="0 0.0475" armature="0.05" damping="2" frictionloss="0.5" actuatorfrcrange="-50 50" />
                       <geom pos="0.129783 0.00999321 -0.0914614" quat="0.499998 0.5 0.500002 0.5" type="mesh" rgba="0.596078 0.788235 0.921569 1" mesh="tip_left" />
                     </body>
                     <body name="left_tip_right" pos="0.0238981 -0.0450619 -0.0545599" quat="0.707105 0.707108 0 0" gravcomp="1">
                       <inertial pos="-0.0143408 -0.0224716 -0.0426253" quat="0.281222 0.8726 0.16705 -0.362738" mass="0.0710042" diaginertia="6.24193e-05 6.01079e-05 2.83591e-05" />
-                      <joint name="left_joint8" pos="0 0 0" type="slide" axis="0 0 -1" range="0 0.0475" armature="0.05" damping="2" frictionloss="0.5" actuatorfrcrange="-80 80" />
+                      <joint name="left_joint8" pos="0 0 0" type="slide" axis="0 0 -1" range="0 0.0475" armature="0.05" damping="2" frictionloss="0.5" actuatorfrcrange="-50 50" />
                       <geom pos="-0.0379932 0.129783 0.00133753" quat="0.707105 -0.707108 0 0" type="mesh" rgba="0.596078 0.788235 0.921569 1" mesh="tip_right" />
                     </body>
                   </body>
@@ -117,6 +117,10 @@
     <exclude body1="left_gripper" body2="left_tip_right" />
     <exclude body1="left_tip_left" body2="left_tip_right" />
   </contact>
+  <equality>
+    <joint joint1="right_joint7" joint2="right_joint8" polycoef="0 1 0 0 0" solref="0.004 1" solimp="0.95 0.99 0.001" />
+    <joint joint1="left_joint7" joint2="left_joint8" polycoef="0 1 0 0 0" solref="0.004 1" solimp="0.95 0.99 0.001" />
+  </equality>
   <actuator>
     <position name="act_right_joint1" joint="right_joint1" kp="300" kv="30" forcerange="-27 27" />
     <position name="act_right_joint2" joint="right_joint2" kp="300" kv="30" forcerange="-27 27" />
@@ -124,15 +128,15 @@
     <position name="act_right_joint4" joint="right_joint4" kp="300" kv="30" forcerange="-10 10" />
     <position name="act_right_joint5" joint="right_joint5" kp="300" kv="30" forcerange="-10 10" />
     <position name="act_right_joint6" joint="right_joint6" kp="300" kv="30" forcerange="-10 10" />
-    <position name="act_right_joint7" joint="right_joint7" kp="600" kv="20" ctrlrange="0 0.0475" forcerange="-80 80" />
-    <position name="act_right_joint8" joint="right_joint8" kp="600" kv="20" ctrlrange="0 0.0475" forcerange="-80 80" />
+    <position name="act_right_joint7" joint="right_joint7" kp="600" kv="20" ctrlrange="0 0.0475" forcerange="-50 50" />
+    <position name="act_right_joint8" joint="right_joint8" kp="600" kv="20" ctrlrange="0 0.0475" forcerange="-50 50" />
     <position name="act_left_joint1" joint="left_joint1" kp="300" kv="30" forcerange="-27 27" />
     <position name="act_left_joint2" joint="left_joint2" kp="300" kv="30" forcerange="-27 27" />
     <position name="act_left_joint3" joint="left_joint3" kp="300" kv="30" forcerange="-27 27" />
     <position name="act_left_joint4" joint="left_joint4" kp="300" kv="30" forcerange="-10 10" />
     <position name="act_left_joint5" joint="left_joint5" kp="300" kv="30" forcerange="-10 10" />
     <position name="act_left_joint6" joint="left_joint6" kp="300" kv="30" forcerange="-10 10" />
-    <position name="act_left_joint7" joint="left_joint7" kp="600" kv="20" ctrlrange="0 0.0475" forcerange="-80 80" />
-    <position name="act_left_joint8" joint="left_joint8" kp="600" kv="20" ctrlrange="0 0.0475" forcerange="-80 80" />
+    <position name="act_left_joint7" joint="left_joint7" kp="600" kv="20" ctrlrange="0 0.0475" forcerange="-50 50" />
+    <position name="act_left_joint8" joint="left_joint8" kp="600" kv="20" ctrlrange="0 0.0475" forcerange="-50 50" />
   </actuator>
 </mujoco>

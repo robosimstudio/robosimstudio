@@ -26,8 +26,10 @@ from tests.fixtures.grasp import drag_to_grasp, open_session, tick
 TIER = "medium"
 """Builds the two cloth examples and steps each through a page with no browser on it: about 80 s."""
 
-FINGERTIPS = 0.0175
-"""Where the gesture puts the tool centre over the bench [m]: the pads end 16.7 mm under it."""
+FINGERTIPS = 0.016
+"""Where the gesture puts the tool centre over the bench [m]: the pads end 16.7 mm under it, so the
+fingertips are on the bench, as the page says to drag them. At 17.5 mm, 0.8 mm of air under the pads,
+the pinch held only while the pads were at mu 4; at the real hand's 1.0 it kept 0 of 7 particles."""
 
 
 class TestTheTowelExamplePinchesItsEdge(unittest.TestCase):

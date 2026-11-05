@@ -28,13 +28,14 @@ tool reaches no more than about 45 degrees above level (multi-start
 its wrist roll's axis lies along a level tool, across the cable, where a roll
 swings the tip instead of twisting it. A level hand with its jaws across the tip
 turned about the vertical twists it; the IK turns the arm's wrist-yaw and base
-joints to do it, 120 degrees from 30 degrees out. Measured twice here: the soft
-cable takes 0.327 of the hand's 0.333 turns (0.114 in its middle third); the
-stiff one follows the hand to 53-64 degrees and then slips in the jaws, keeping
-0.156 turns (0.054 mid-cable), its twist moment there about 0.015 N*m. The slip
-does not depend on the rate (0.25-1 degree a step, ``twist_slip`` probe) nor on
-the pads' friction (mu 1000 kept as much); one filmed take kept 0.09 mid-cable.
-Opened, the stiff reads 0.0003 within 30 steps and the soft 0.107 after 60.
+joints to do it, 120 degrees from 30 degrees out. Measured on the YAM's real
+clamp (50 N a jaw, 2026-10-26): of the hand's 0.322 turns the soft cable takes
+0.317 (0.113 in its middle third) and the stiff one 0.319 (0.113): the clamp
+holds the stiff cable's twist moment too. The hand's old spring (kp 200 N/m,
+about 0.6 N a jaw on this 12 mm tip) did not -- the stiff cable followed it to
+53-64 degrees and slipped, keeping 0.156 turns, about 0.015 N*m, whatever the
+pads' friction (mu 1000 kept as much), so what held the twist was the squeeze. Opened, the stiff reads 0.0008 within 30
+steps and the soft 0.106 after 60.
 """
 
 from __future__ import annotations
@@ -286,12 +287,10 @@ class TestTheHandsTwistTheCables(unittest.TestCase):
         self.assertGreater(self.SIGN["left"] * self.taken["left"], 0.28, f"taken {self.taken}")
         self.assertGreater(self.SIGN["left"] * self.held["left"], 0.09, f"mid-cable {self.held}")
 
-    def test_the_stiff_cable_takes_part_of_it_and_slips(self) -> None:
-        """The pads hold about 0.015 N*m of twist: the stiff cable takes 0.15 turns of the 0.33, the rest slips."""
-        taken = self.SIGN["right"] * self.taken["right"]
-        self.assertGreater(taken, 0.10, f"taken {self.taken}")
-        self.assertLess(taken, 0.30, "the stiff cable no longer slips in the jaws: the docstrings say it does")
-        self.assertGreater(self.SIGN["right"] * self.held["right"], 0.03, f"mid-cable {self.held}")
+    def test_the_stiff_cable_takes_the_turn_in_the_clamp(self) -> None:
+        """At 50 N a jaw the pads hold the stiff cable's twist moment: it takes 0.319 of the 0.322 turns."""
+        self.assertGreater(self.SIGN["right"] * self.taken["right"], 0.28, f"taken {self.taken}")
+        self.assertGreater(self.SIGN["right"] * self.held["right"], 0.09, f"mid-cable {self.held}")
 
     def test_let_go_the_stiff_one_unwinds_and_the_soft_one_keeps_it(self) -> None:
         soft = {at: abs(r["left"]) for at, r in self.released.items()}

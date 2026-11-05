@@ -4,8 +4,8 @@
 The same bag and hand as a task document, with a goal on how far the mouth stands open: turn the right hand to point down, open the bag as in ``03_materials/06_bag``, and the goal turns true at 30 mm.
 
 The bag is a ``Bag.from_spec`` record the document places under its own name, the physics is
-``rss.BAG_60HZ`` under a task-language name, and the staging states the stiffer finger servo the
-pinch needs. The hands start at the YAM's home, pointing ahead, so turn the right gizmo down
+``rss.BAG_60HZ`` under a task-language name, and the staging states the page's own finger servo
+the pinch needs. The hands start at the YAM's home, pointing ahead, so turn the right gizmo down
 first. ``tests/test_open_a_bag_scored`` drives the right hand through the page and ``evaluate``
 says success, the mouth 75 mm open; 12 ms per control step at rest through the page on an
 RTX PRO 6000, GPU 3. Needs the ``[superdex]`` extra (Python 3.12).

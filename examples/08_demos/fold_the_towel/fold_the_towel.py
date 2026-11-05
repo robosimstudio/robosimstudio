@@ -33,39 +33,45 @@ UP = np.array([0.0, 0.0, 1.0])
 DOWN = (0.0, 1.0, 0.0, 0.0)
 """The tool pointing down with the jaws closing along y, across the far edge (xyzw)."""
 PINCH_X = -0.08
-"""Where along the far edge the left hand takes it [m]. At the middle (-0.05) the corner
-nearer the robot folds back on itself and the fold scores 0.82; at -0.07, 0.85. At -0.09 it
-scores 0.87-0.90 but that corner can overshoot the near edge by 19 mm, a span of 0.61."""
+"""Where along the far edge the left hand takes it [m]. Measured on the arena hand, with the arms
+passing through each other: at the middle (-0.05) the corner nearer the robot folds back on
+itself and the fold scores 0.82; at -0.07, 0.85. At -0.09 it scores 0.87-0.90 but that corner
+can overshoot the near edge by 19 mm, a span of 0.61."""
 EDGE_IN = 0.006
 """Tool centre in from the far edge [m]: the outer pad lands on bare bench, the inner on the towel."""
 ON_BENCH = 0.0155
 """Tool centre over the bench [m] that puts the fingertips on it: the pads end 16.7 mm below
 the tool centre, so the bench stops them about a millimetre short of this."""
-SQUEEZE = 0.95
-"""The grip [0-1]: pads 3.5 mm apart. Shut (1.0) they close through each other and the
-towel, -1.3 mm, and carry the edge away with them when they open; at 0.90 (8.4 mm) the
-edge slips out on the lift."""
+SQUEEZE = 0.97
+"""The grip [0-1]: pads 2.9 mm apart, a position the hand's stiff servo holds. At 0.96 the edge
+slipped out on the lift; at 0.98 the fold scored 0.84 and at 0.99 0.75, the towel squeezed flat
+under the pads dragging the near half; shut (1.0) the pads meet and the fold scored 0.58. (On
+the arena hand's soft spring the same edge took 0.95: its pads lagged the command.)"""
 SQUEEZE_RISE = 0.003
-"""How far the hand rises while it squeezes [m]. On the bench, the pads' friction with it
-holds them 42-45 mm open after a second; in free air 1.5 mm over it, they pinched 5-7
-particles and lifted nothing in 3 of 4 runs. Down, then up while squeezing, pinches 31-37."""
+"""How far the hand rises while it squeezes [m]. Measured on the arena hand's soft spring: on
+the bench, the pads' friction with it held them 42-45 mm open after a second; in free air 1.5 mm
+over it, they pinched 5-7 particles and lifted nothing in 3 of 4 runs; down, then up while
+squeezing, pinched 31-37. The real clamp is not held open by the bench, and pinches 24-25."""
 APEX = 0.06
 """How high the carry arcs over the place [m]: the suite's low, page-turn arc."""
 CARRY = 5.0
-"""Seconds over the arc. At 4 s the fold scored 0.85-0.89, at 5 s 0.87-0.92."""
+"""Seconds over the arc. On the arena hand, at 4 s the fold scored 0.85-0.89, at 5 s 0.87-0.92."""
 SLACK = 0.0125
 """How far short of its mirror the edge is laid [m]: 2.5 thicknesses, the suite's, because a
 5 mm slab's crease loop takes up cloth."""
 PLACE_Z = 0.03
 """Tool centre over the bench at the place [m]: the flap's own thickness over the near half."""
-PRESS = (0.0, -0.04)
+PRESS = (0.03, -0.06)
 """Where the right hand presses the near half [m]. Without it the near half was dragged
 27-35 mm and the fold scored 0.18-0.45. At (-0.13, -0.015), the suite's spot on the other side
-of the carry, the flap's near corner caught on it: 0.79."""
+of the carry, the flap's near corner caught on it: 0.79. The pressing arm's upper arm stands in
+the carrying forearm's way, and with the arms colliding they meet for about 2 s of the carry
+(39-51 N, left link 4 on right link 3): at (0.0, -0.04) that dragged the near half 11 mm and the
+fold scored 0.84; here it moves 6 mm and the fold scores 0.854-0.858 (five runs)."""
 PRESS_UNTIL = 0.9
 """The fraction of the carry the press stays down for. Left down through the landing the flap
-lands on the fingers; lifted at 0.4-0.6 the near half drifts 13-14 mm. Over three runs each,
-lifted at 0.8 the fold scored 0.844-0.878, and at 0.9, 0.851-0.885."""
+lands on the fingers; lifted at 0.4-0.6 the near half drifts 13-14 mm. Over three runs each on
+the arena hand, lifted at 0.8 the fold scored 0.844-0.878, and at 0.9, 0.851-0.885."""
 
 
 def together(*moves):
