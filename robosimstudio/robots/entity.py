@@ -28,7 +28,7 @@ import newton
 import numpy as np
 import warp as wp
 
-from robosimstudio.core.builder import restate_body_attribute, set_body_attribute
+from robosimstudio.core.builder import rekey_custom_attributes, restate_body_attribute, set_body_attribute
 from robosimstudio.core.suction import Suction
 from robosimstudio.paths import resolve_asset
 from robosimstudio.robots.registry import resolve_gripper
@@ -58,6 +58,47 @@ def _in_last_articulation(builder: newton.ModelBuilder, body: int) -> bool:
     if not joints:
         return False
     return int(joints[0]) >= starts[-1]
+
+
+def _wp_xform(values) -> wp.transform:
+    """Seven numbers ``(x, y, z, qx, qy, qz, qw)`` as a Warp transform, its rotation normalized."""
+    v = [float(x) for x in values]
+    return wp.transform(wp.vec3(v[0], v[1], v[2]), wp.normalize(wp.quat(v[3], v[4], v[5], v[6])))
+
+
+def _arm_base(arm: ArmSpec, arm_j: Sequence[int], joint_parent, joint_types, body_labels) -> int:
+    """The body ``arm`` stands on: the one its spec names, else the one its first moving joint hangs on.
+
+    "First" in the tree, which an importer numbers depth first -- so the lowest
+    index, whatever order ``joint_names`` lists them in -- and "moving" because a
+    prefix scan of an uncollapsed import also sweeps up welds, which are not the
+    arm's. One rule, read by :meth:`EntityEmbodiment.bind` for the handle's
+    ``base_body`` and by :meth:`EntityEmbodiment._place_arms` for the body
+    ``arms_at`` places, so the two are the same body wherever the base survives
+    the import as a body. A collapse folds a welded base into the world, and the
+    handle then reads -1 (``yam_bimanual``): the arm still stands where it was
+    placed, and IK measures its frame off the model. -1 is the world, or no
+    moving joint at all.
+    """
+    if arm.base_body_name:
+        return label_index(body_labels, arm.base_body_name)
+    fixed = int(newton.JointType.FIXED)
+    moving = [int(j) for j in arm_j if int(joint_types[j]) != fixed]
+    return int(joint_parent[min(moving)]) if moving else -1
+
+
+def _equality_ends(builder: newton.ModelBuilder) -> list[tuple[int, int]]:
+    """Every equality constraint's two bodies, both ways round; -1 is the world.
+
+    A joint-coupling equality (a finger mimic) names joints rather than bodies,
+    so both its ends read -1 and it ties nothing to anything here.
+    """
+    if "mujoco:equality_constraint_body1" not in builder.custom_attributes:
+        return []
+    ends = list(
+        zip(builder._eq_list("equality_constraint_body1"), builder._eq_list("equality_constraint_body2"), strict=True)
+    )
+    return [(int(a), int(b)) for a, b in ends] + [(int(b), int(a)) for a, b in ends]
 
 
 def _limb_bodies(joint_parent, joint_child, joints: Sequence[int], seed_joints: Sequence[int]) -> set[int]:
@@ -203,14 +244,36 @@ class EntityEmbodiment(Entity):
             ``base_offset``; identity means the asset already places itself,
             which is what every asset does until it is re-origined.
         world: Which world.
+        arm_mounts: Per arm name, the world pose its base body goes to, over
+            ``pose``: what ``rss.robot(arms_at=...)`` asks for, after the
+            compiler has checked the names. Empty leaves every arm where
+            ``pose`` and the file put it. See :meth:`_place_arms`.
     """
 
     domain = "articulated"
 
     spec: EmbodimentSpec
 
-    def __init__(self, spec: EmbodimentSpec, *, pose=None, world: int = 0, scene_resident: bool = False) -> None:
+    def __init__(
+        self,
+        spec: EmbodimentSpec,
+        *,
+        pose=None,
+        world: int = 0,
+        scene_resident: bool = False,
+        arm_mounts: dict[str, Sequence[float]] | None = None,
+    ) -> None:
         super().__init__(spec, world=world)
+        self.arm_mounts: dict[str, tuple[float, ...]] = {
+            str(name): tuple(float(v) for v in value) for name, value in (arm_mounts or {}).items()
+        }
+        """Per arm, the world pose its base was placed at -- or a position, keeping
+        the heading -- or empty: see :meth:`_place_arms`."""
+        unknown = sorted(set(self.arm_mounts) - {a.name for a in spec.arms})
+        if unknown:
+            raise ValueError(
+                f"{spec.name}: arm_mounts places arm(s) {unknown}, and its arms are {[a.name for a in spec.arms]}"
+            )
         self.scene_resident = bool(scene_resident)
         """Whether this robot already exists inside the task's scene asset.
 
@@ -288,20 +351,33 @@ class EntityEmbodiment(Entity):
                     "would re-admit have already been filtered and cannot be recovered. Import the robot "
                     "separately (scene_resident=False with a stripped scene) to ask for it."
                 )
+            if self.arm_mounts:
+                raise RuntimeError(
+                    f"{self.spec.name}: arms {sorted(self.arm_mounts)} are placed on their own, and this robot "
+                    "arrives inside the scene's asset and is never imported here, so there is no import to move "
+                    "them in. Import the robot separately (scene_resident=False) to place its arms."
+                )
             return
 
         path = resolve_asset(self.spec.asset)
         source = str(path)
         stripped = strip_free_bodies(source) if path.suffix.lower() in (".xml", ".mjcf") else None
         shape_start = builder.shape_count
+        joint_start = builder.joint_count
         # The mount, composed onto every root the asset declares. Never through
         # ``override_root_xform``: both YAM cells are two separate articulation
         # roots in one file, and overriding would collapse the pair onto a
         # single pose rather than carrying them rigidly to a new place.
         mount = self._mount_xform()
+        # Arms placed on their own move the welds a collapse folds away, so the
+        # placement runs between the import and the collapse: with arm mounts,
+        # every path imports uncollapsed and collapses afterwards, which is
+        # what add_mjcf_collapsed does anyway. Without them nothing changes.
+        placing = bool(self.arm_mounts)
+        collapse = self.spec.collapse_fixed_joints and not placing
         try:
             if path.suffix.lower() in (".xml", ".mjcf"):
-                if self.spec.collapse_fixed_joints:
+                if collapse:
                     from robosimstudio.scene.build.imports import add_mjcf_collapsed
 
                     add_mjcf_collapsed(
@@ -329,13 +405,22 @@ class EntityEmbodiment(Entity):
                 # static -- see EntityStatic._add_usd.
                 from robosimstudio.scene.build.imports import add_usd_stage
 
-                add_usd_stage(
+                stage = add_usd_stage(
                     builder,
                     source,
-                    collapse_fixed_joints=self.spec.collapse_fixed_joints,
+                    collapse_fixed_joints=collapse,
                     verbose=False,
                     **({} if mount is None else {"xform": mount}),
                 )
+                if placing and stage.get("collapse_results"):
+                    # A stage may fold its own welds whatever the importer is
+                    # told (``newton:collapse_fixed_joints`` on its PhysicsScene),
+                    # and then the bases the placement moves are already gone.
+                    raise RuntimeError(
+                        f"{self.spec.name}: {source} collapses its own fixed joints at import, so its arms' bases "
+                        "are folded into the world before arms_at can place them. Clear "
+                        "newton:collapse_fixed_joints on the stage's PhysicsScene to place its arms."
+                    )
             elif path.suffix.lower() == ".urdf":
                 joints_before = builder.joint_count
                 builder.add_urdf(
@@ -343,7 +428,8 @@ class EntityEmbodiment(Entity):
                     scale=self.spec.asset.scale,
                     floating=False,
                     # Collapsed below, folding only this import's fixed joints:
-                    # the importer's own flag folds the whole builder.
+                    # the importer's own flag folds the whole builder. With arm
+                    # mounts the collapse waits until the arms are placed.
                     collapse_fixed_joints=False,
                     enable_self_collisions=self.spec.import_self_collisions,
                     # The URDF's own <inertial> tags, not a recomputation from
@@ -361,7 +447,7 @@ class EntityEmbodiment(Entity):
                     joint_damping_mode="drive",
                     **({} if mount is None else {"xform": mount}),
                 )
-                if self.spec.collapse_fixed_joints:
+                if collapse:
                     from robosimstudio.scene.build.imports import collapse_own_fixed_joints
 
                     collapse_own_fixed_joints(builder, joints_before)
@@ -370,6 +456,11 @@ class EntityEmbodiment(Entity):
         finally:
             if stripped is not None:
                 os.unlink(stripped)
+
+        if placing:
+            self._place_arms(builder, joint_start)
+            if self.spec.collapse_fixed_joints:
+                rekey_custom_attributes(builder, builder.collapse_fixed_joints(verbose=False))
 
         self._attach_hands(builder)
 
@@ -719,6 +810,135 @@ class EntityEmbodiment(Entity):
             wp.vec3(float(pose[0]), float(pose[1]), float(pose[2])),
             wp.quat(float(pose[3]), float(pose[4]), float(pose[5]), float(pose[6])),
         )
+
+    # ------------------------------------------------------- arms on their own
+    def _place_arms(self, builder: newton.ModelBuilder, joint_start: int) -> None:
+        """Stand each arm :attr:`arm_mounts` names with its base body at that world pose.
+
+        Runs on the import as the file declares it, before any fixed joint is
+        collapsed, because that is where an arm's base is still a body: the one
+        :attr:`~robosimstudio.specs.ArmSpec.base_body_name` names, else the body
+        the arm's first moving joint hangs on -- on ``yam_bimanual``, ``left_arm``
+        and ``right_arm``; first in the tree, which an importer numbers depth
+        first, whatever order ``joint_names`` lists them in. A mount of three
+        numbers is a position: the base goes there and keeps the heading the
+        import gave it. From the base the walk climbs welds to the arm's *root*,
+        the body the importer welded to the world, and the whole root is carried
+        rigidly by the one transform that lands the base on its pose: the root's
+        weld (``joint_X_p``, which for a joint on the world is a world pose) and
+        every body under it (``body_q``). Shapes, joints, actuators, the hand and
+        the wrist camera ride their bodies, so the arm is the file's own arm in a
+        new place. A collapse afterwards folds the moved weld exactly as it would
+        have folded the file's, and everything that reads the arm's frame off
+        the finalized model -- IK, a planner's base, the handle's ``base_body``
+        where the base survives as a body (a collapse folds it into the world,
+        and the handle reads -1) -- reads the base where it now stands.
+
+        Refused rather than approximated:
+
+        * an arm whose first joint hangs on the world: there is no base to place;
+        * a base under a moving joint: its pose would hold at one posture only;
+        * a root that carries another arm: placing one would silently move
+          both. Arms on one root move together, with ``at=``;
+        * an equality constraint, or a second joint, from the moved bodies to the
+          world or to a body that stays: it would hold the arm where the file
+          put it.
+        """
+        fixed = int(newton.JointType.FIXED)
+        joints = range(joint_start, builder.joint_count)
+        labels = builder.joint_label
+        types = builder.joint_type
+        hung_on = {int(builder.joint_child[j]): j for j in joints}
+        claimed: dict[str, list[int]] = {}
+        for arm in self.spec.arms:
+            # The arm joints alone: a hand with a file of its own is welded on
+            # after this, so its fingers cannot be looked up yet -- and they
+            # hang under the wrist, so the arm joints already say whose root
+            # an arm stands on. Moving joints only: uncollapsed, a prefix scan
+            # also matches the welds the collapse is about to fold away.
+            arm_j, _ = self._arm_joints(labels, arm, joint_types=types, fingers=False)
+            claimed[arm.name] = [j for j in arm_j if j >= joint_start and int(types[j]) != fixed]
+        ends = _equality_ends(builder)
+        for arm in self.spec.arms:
+            want = self.arm_mounts.get(arm.name)
+            if want is None:
+                continue
+            if not claimed[arm.name]:
+                raise RuntimeError(f"{self.spec.name} arm {arm.name!r} matched no joints; there is no arm to place")
+            # The same rule the finalized model's handle reads its base_body by.
+            base = _arm_base(arm, claimed[arm.name], builder.joint_parent, types, builder.body_label)
+            if base < 0:
+                raise ValueError(
+                    f"{self.spec.name} arm {arm.name!r}: its first joint hangs on the world, so it has no base body "
+                    "for arms_at to place. Name the body it stands on (ArmSpec.base_body_name)."
+                )
+            chain: list[int] = []
+            body = base
+            while True:
+                joint = hung_on.get(body)
+                if joint is None:
+                    raise ValueError(
+                        f"{self.spec.name} arm {arm.name!r}: base body {builder.body_label[base]!r} is not part of "
+                        "this robot's import, so arms_at cannot move it"
+                    )
+                if int(types[joint]) != fixed:
+                    where = "hangs on" if body == base else f"is welded to {builder.body_label[body]!r}, which hangs on"
+                    raise ValueError(
+                        f"{self.spec.name} arm {arm.name!r}: base body {builder.body_label[base]!r} {where} the "
+                        f"moving joint {labels[joint]!r}, so a pose for it would hold at one posture only. arms_at "
+                        "places an arm whose base is welded to the world."
+                    )
+                chain.append(joint)
+                if int(builder.joint_parent[joint]) < 0:
+                    break
+                body = int(builder.joint_parent[joint])
+            root = chain[-1]
+            carried = _limb_bodies(builder.joint_parent, builder.joint_child, joints, (root,))
+            shared = [
+                other
+                for other, seeds in claimed.items()
+                if other != arm.name and any(int(builder.joint_child[j]) in carried for j in seeds)
+            ]
+            if shared:
+                raise ValueError(
+                    f"{self.spec.name} arm {arm.name!r} stands on {builder.body_label[int(builder.joint_child[root])]!r}"
+                    f" with arm(s) {shared}, so placing it would move them too. arms_at places an arm whose root "
+                    "carries no other arm; move arms that share one together with at=."
+                )
+            crossing = [
+                j
+                for j in joints
+                if j != root and (int(builder.joint_child[j]) in carried) != (int(builder.joint_parent[j]) in carried)
+            ]
+            if crossing:
+                raise ValueError(
+                    f"{self.spec.name} arm {arm.name!r}: joint {labels[crossing[0]]!r} ties the moved bodies to "
+                    "the world or to a body arms_at does not move, so it would hold the arm where the file put it"
+                )
+            for end, other in ends:
+                if end in carried and other not in carried:
+                    raise ValueError(
+                        f"{self.spec.name} arm {arm.name!r}: an equality constraint ties "
+                        f"{builder.body_label[end]!r} to "
+                        f"{'the world' if other < 0 else repr(builder.body_label[other])}, which arms_at does not "
+                        "move, so it would hold the arm where the file put it"
+                    )
+            # The base's world pose through the welds, as the collapse composes them.
+            have = wp.transform_identity()
+            for joint in reversed(chain):
+                have = (
+                    have
+                    * _wp_xform(builder.joint_X_p[joint])
+                    * wp.transform_inverse(_wp_xform(builder.joint_X_c[joint]))
+                )
+            if len(want) == 3:
+                target = wp.transform(wp.vec3(*want), wp.transform_get_rotation(have))
+            else:
+                target = _wp_xform(want)
+            delta = target * wp.transform_inverse(have)
+            builder.joint_X_p[root] = delta * _wp_xform(builder.joint_X_p[root])
+            for b in carried:
+                builder.body_q[b] = delta * _wp_xform(builder.body_q[b])
 
     def _hull_colliders(self, builder: newton.ModelBuilder) -> None:
         """Convex-hull the arm's link meshes, keeping the visual meshes.
@@ -1159,7 +1379,12 @@ class EntityEmbodiment(Entity):
 
     # -------------------------------------------------------------- indexing
     def _arm_joints(
-        self, labels: Sequence[str], arm: ArmSpec, *, joint_types: Sequence[int] | None = None
+        self,
+        labels: Sequence[str],
+        arm: ArmSpec,
+        *,
+        joint_types: Sequence[int] | None = None,
+        fingers: bool = True,
     ) -> tuple[list[int], list[int]]:
         """This arm's joint indices, split into arm joints and **driven** finger joints.
 
@@ -1184,13 +1409,16 @@ class EntityEmbodiment(Entity):
                 It only bites in prefix mode, and only for a scene assembled
                 outside the binding matrix, which is why no shipped task hits
                 it: a benchmark's objects are named for what they are.
+            fingers: Look the hand's named finger joints up. Off for a caller
+                that runs before a hand with a file of its own is welded on --
+                :meth:`_place_arms` -- since that hand's joints do not exist yet.
         """
         hand = self.hands.get(arm.name)
         driven = list(hand.finger_names) if hand else []
         followers = set(hand.follower_names) if hand else set()
         if arm.joint_names:
             arm_j = [label_index(labels, n) for n in arm.joint_names]
-            finger_j = [label_index(labels, n) for n in driven]
+            finger_j = [label_index(labels, n) for n in driven] if fingers else []
             return arm_j, finger_j
         # Prefix mode: the arm's joints are its prefix minus whatever the hand
         # claimed. Naming the hand's joints explicitly is what stops a token
@@ -1212,7 +1440,7 @@ class EntityEmbodiment(Entity):
             # all. It is the silent path -- a token matching nothing yields a
             # hand that never moves -- so a hand that can name its joints does.
             (finger_j if token and token in tail else arm_j).append(j)
-        if driven:
+        if driven and fingers:
             finger_j = [label_index(labels, n) for n in driven]
         return arm_j, finger_j
 
@@ -1241,6 +1469,7 @@ class EntityEmbodiment(Entity):
         qd_start = model.joint_qd_start.numpy()
         joint_parent = model.joint_parent.numpy()
         joint_child = model.joint_child.numpy()
+        joint_types = model.joint_type.numpy().tolist()
         shape_body = model.shape_body.numpy()
         upper = model.joint_limit_upper.numpy()
         # Every joint, not this robot's range: a free-jointed object's parent is
@@ -1249,7 +1478,7 @@ class EntityEmbodiment(Entity):
         all_joints = range(model.joint_count)
 
         for arm in self.spec.arms:
-            arm_j, finger_j = self._arm_joints(joint_labels, arm, joint_types=model.joint_type.numpy().tolist())
+            arm_j, finger_j = self._arm_joints(joint_labels, arm, joint_types=joint_types)
             if not arm_j:
                 raise RuntimeError(f"{self.spec.name} arm {arm.name!r} matched no joints after finalize")
             index = ArmIndex(arm.name)
@@ -1273,9 +1502,7 @@ class EntityEmbodiment(Entity):
                 index.ee_body = self._hand_body(body_labels, arm, tcp_body)
             else:
                 index.ee_body = label_index(body_labels, tcp_body) if tcp_body else int(joint_child[arm_j[-1]])
-            index.base_body = (
-                label_index(body_labels, arm.base_body_name) if arm.base_body_name else int(joint_parent[arm_j[0]])
-            )
+            index.base_body = _arm_base(arm, arm_j, joint_parent, joint_types, body_labels)
             sides = hand.finger_bodies if hand else ()
             index.finger_bodies = tuple(tuple(label_index(body_labels, n) for n in side) for side in sides)
             # Finger travel from the model's own limits, so a retuned gripper is
