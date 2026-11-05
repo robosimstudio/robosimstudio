@@ -903,25 +903,60 @@ def compare_models(model: Any, ref: Any, name: str, ref_name: str) -> list[str]:
     return out
 
 
+class _Kept:
+    """A finalized model as :func:`compare_models` reads it, kept on the host after the model is gone: every array
+    copied once (read back with ``.numpy()``, as on the model), every other attribute as it was."""
+
+    class _Array:
+        def __init__(self, values: np.ndarray) -> None:
+            self._values = values
+
+        def numpy(self) -> np.ndarray:
+            return self._values
+
+    def __init__(self, model: Any) -> None:
+        for key, value in vars(model).items():
+            kept = value
+            if hasattr(value, "numpy") and callable(value.numpy):
+                try:
+                    kept = self._Array(np.array(value.numpy(), copy=True))
+                except Exception:  # an array the host cannot read (a graph-owned buffer): not compared
+                    continue
+            setattr(self, key, kept)
+
+
+_REGISTERED: dict[tuple[str, str], _Kept] = {}
+"""Each registered robot built alone, by its name and the physics it was built on: built once a process for the
+robot line, not once every replay that reads it (a whole second robot model, on the page's own GPU)."""
+
+
 def built_departures(sim: Any, reg: Any) -> tuple[list[str], str]:
     """:func:`compare_models` of the scene's robot against the registered ``reg`` built alone, on the scene's own
-    physics, and ``""``; or no departures and why they were not read, when that build fails."""
+    physics, and ``""``; or no departures and why they were not read, when that build fails. The registered build
+    is kept (:data:`_REGISTERED`): it depends on the robot and the physics and nothing else."""
     import robosimstudio as rss
 
     spec = sim.scene.embodiment.spec
-    try:
-        scene = rss.Scene(cell="void", name="registered_robot", physics=sim.request.physics)
-        scene.add(rss.robot(reg))
-        ref = scene.build(control_mode="joint_position")
-    except Exception as exc:
-        return [], f"its built numbers were not compared: the registered {reg.name} would not build alone ({exc})"
-    try:
-        return compare_models(sim.model, ref.model, spec.name, reg.name), ""
-    finally:
+    key = (str(reg.name), repr(sim.request.physics))
+    ref = _REGISTERED.get(key)
+    if ref is None:
         try:
-            ref.close()
-        except Exception:
-            pass
+            scene = rss.Scene(cell="void", name="registered_robot", physics=sim.request.physics)
+            scene.add(rss.robot(reg))
+            built = scene.build(control_mode="joint_position")
+        except Exception as exc:
+            return [], f"its built numbers were not compared: the registered {reg.name} would not build alone ({exc})"
+        try:
+            ref = _Kept(built.model)
+        finally:
+            try:
+                built.close()
+            except Exception:
+                pass
+        while len(_REGISTERED) >= 4:
+            _REGISTERED.pop(next(iter(_REGISTERED)))
+        _REGISTERED[key] = ref
+    return compare_models(sim.model, ref, spec.name, reg.name), ""
 
 
 def robot_departures(sim: Any) -> dict[str, Any]:
@@ -1777,8 +1812,11 @@ class Replay:
 
 
 def _mimic_linkage(model: Any) -> dict[int, tuple[int, ...]]:
-    """Each DOF an enabled mimic row ties to another, mapped to every DOF of its linkage (the robot entity's
-    ``_geared_dofs``, read off the model): a finger an equality carries has the driven one's joint physics."""
+    """Each DOF an enabled mimic row ties to another, mapped to every DOF of its linkage: the robot's build reads
+    the same rule off its builder (``robots.entity.mimic_linkages``); a finger an equality carries has the driven
+    one's joint physics."""
+    from robosimstudio.robots.entity import mimic_linkages
+
     try:
         j0 = model.constraint_mimic_joint0.numpy()
         j1 = model.constraint_mimic_joint1.numpy()
@@ -1786,22 +1824,7 @@ def _mimic_linkage(model: Any) -> dict[int, tuple[int, ...]]:
         starts = model.joint_qd_start.numpy()
     except AttributeError:
         return {}
-    parent: dict[int, int] = {}
-
-    def root(j: int) -> int:
-        parent.setdefault(j, j)
-        while parent[j] != j:
-            parent[j] = parent[parent[j]]
-            j = parent[j]
-        return j
-
-    for a, b, e in zip(j0, j1, on, strict=False):
-        if e and a >= 0 and b >= 0:
-            parent[root(int(a))] = root(int(b))
-    linkages: dict[int, list[int]] = {}
-    for j in list(parent):
-        linkages.setdefault(root(j), []).extend(range(int(starts[j]), int(starts[j + 1])))
-    return {d: tuple(sorted(m)) for m in linkages.values() for d in m}
+    return mimic_linkages(j0, j1, on, starts, int(model.joint_dof_count))
 
 
 class AsBuilt:

@@ -158,16 +158,6 @@ def first_render_note(renderer: str, first_in_process: bool, first_in_scene: boo
     return f"; {note}"
 
 
-def _read_replay(run: dict) -> bool:
-    """Whether a physics replay ran to a reading (:func:`physics.cut_short`, the verdict's own rule)."""
-    return not physics.cut_short(run)
-
-
-def _why(run: dict) -> str:
-    """Why a replay is not a reading: its log's error when that is it, else how it ended."""
-    return physics.cut_short(run) or str(run.get("outcome", ""))
-
-
 class LiveServer:
     """One page, one scene file, one socket. Everything but the accept loop runs on the main thread."""
 
@@ -265,12 +255,12 @@ class LiveServer:
         from robosimstudio.solvers.render import ENV as RENDERER_ENV
 
         self.renderer_asked = os.environ.get(RENDERER_ENV, "").strip()
+        """The renderer the page was started under (``up --renderer``), ``""`` for the machine's pick. A scene that
+        sets the variable itself changes what draws -- ``status``'s ``renderer`` says -- but not this."""
         self.renderer_cache = stills.rtx_cache_warning()
         """Why the path tracer's pictures would take minutes each (its cache cannot be written), or ``""``."""
         if self.renderer_cache:
             print(f"[live] {self.renderer_cache}", file=sys.stderr, flush=True)
-        """The renderer the page was started under (``up --renderer``), ``""`` for the machine's pick. A scene that
-        sets the variable itself changes what draws -- ``status``'s ``renderer`` says -- but not this."""
         self.script_meta: dict[int, dict] = {}
         """Per playing script (by ``id``): its serial, its name, and where it started."""
         self.scripts_started = 0
@@ -1720,11 +1710,11 @@ class LiveServer:
             plain = self.physics.get("plain")
             if plain_cut and plain and plain.get("outcome") == physics.STOPPED:  # the ctl cut it on its wall clock
                 plain["outcome"] = physics.PLAIN_SLOW  # plain marks one past its steps itself (PLAIN_LONG)
-            unread = [mode for mode, run in self.physics.items() if not _read_replay(run)]
+            unread = [mode for mode, run in self.physics.items() if physics.cut_short(run)]
             if unread:
                 return {
                     "ok": False,
-                    "error": f"the {', '.join(unread)} replay did not run to a reading: {_why(self.physics[unread[0]])}",
+                    "error": f"the {', '.join(unread)} replay did not run to a reading: {physics.cut_short(self.physics[unread[0]])}",
                 }
             bar = physics.SETTLE_MM if settle_mm is None else float(settle_mm)
             result = physics.verdict(self.physics_model, self.physics, bar)
@@ -1758,10 +1748,10 @@ class LiveServer:
                 "ok": False,
                 "error": "replay `written` first: the others run as long as it did and are read against it",
             }
-        elif not _read_replay(self.physics["written"]):
+        elif physics.cut_short(self.physics["written"]):
             return {
                 "ok": False,
-                "error": f"the written replay did not run to a reading ({_why(self.physics['written'])}): nothing to "
+                "error": f"the written replay did not run to a reading ({physics.cut_short(self.physics['written'])}): nothing to "
                 "read the others against",
             }
         if mode == "drop" and not self.physics["written"].get("carried"):  # nothing lifted: nothing to release
