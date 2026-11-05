@@ -170,10 +170,6 @@ class RtxCacheWarning(unittest.TestCase):
             self.assertEqual(stills.rtx_cache_warning(), "")
 
 
-if __name__ == "__main__":
-    unittest.main()
-
-
 MJCF = """<mujoco><worldbody>
   <body name="link_6">
     <body name="camera_mount" pos="0.01 0.08 0.066" quat="0.906 0.423 0 0">
@@ -234,3 +230,7 @@ class MountReading(unittest.TestCase):
         self.assertAlmostEqual(reading["axis_deg"], 40.0, places=3)
         self.assertFalse(checks.mount_reading(mount, 110.0, mount, 58.0)["ok"], "a field of view opened to 110")
         self.assertTrue(checks.mount_reading(mount, 65.0, mount, 58.0)["ok"], "within a quarter of it")
+
+
+if __name__ == "__main__":
+    unittest.main()
