@@ -500,7 +500,14 @@ class Sim(EnvBase):
                 cache.pop(next(iter(cache)))[0].close()
         if entry[2] != self._static_poses():  # a reset re-placed a weld, or a person dragged a fixture
             entry[0].close()
-            entry = self._plate_passes(key)
+            try:
+                entry = self._plate_passes(key)
+            except Exception as exc:  # as on the first build: the picture as rendered, said once, not a raise
+                self._plates_failed.add(key)
+                print(
+                    f"[rss] the plate passes for camera {spec.name!r} failed ({type(exc).__name__}: {exc}); drawing it without its plate"
+                )
+                return {}
         cache[key] = entry  # last in is the most recently used
         renderer, bare, _ = entry
         try:
@@ -562,7 +569,10 @@ class Sim(EnvBase):
 
         if not self.model.body_count:
             return b""
-        static = plate.static_bodies(self.model)
+        # Which bodies are welded to the world is the finalized model's, so it is read once, not every frame.
+        static = self.__dict__.get("_static_bodies")
+        if static is None:
+            static = self.__dict__["_static_bodies"] = plate.static_bodies(self.model)
         return np.round(self.state.body_q.numpy()[static], 4).tobytes()
 
     def _plate_refused(self, background: str, why: str) -> None:
