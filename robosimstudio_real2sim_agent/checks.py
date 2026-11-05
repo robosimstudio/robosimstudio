@@ -1284,6 +1284,20 @@ def _outline(mask: np.ndarray) -> np.ndarray:
     return mask & ~binary_erosion(mask, iterations=2)
 
 
+def _unread_mount(sim: Any, cam: Any, why: str = "") -> str:
+    """What the hand line says of a wrist camera whose robot's file carries no camera to hold it to: where it sits on
+    its link and its field of view, which the hand lining up does not settle (a camera moved back with its view
+    opened draws the same hand), so the report has to say where they came from."""
+    body = str(list(sim.model.body_label)[cam.parent_body]).rsplit("/", 1)[-1]
+    offset = 1000.0 * float(np.linalg.norm(np.asarray(cam.world_matrix)[:3, 3]))
+    return (
+        f"{why or f'the robot file carries no camera on {body}'}, so the mount is not held: the camera sits "
+        f"{offset:.0f} mm from {body}'s origin with a {cam.fov_y_from_intrinsics:.0f} deg field of view, and "
+        "the hand lining up does not settle either -- take them from a calibration that came with the clip or a "
+        "measured mount, and the report says which"
+    )
+
+
 def hand_line(server: Any, cam: Any, clip: str, *, count: int = 60) -> dict:
     """:func:`hand_reading` for camera ``cam`` (resolved, riding a body) against its clip, with the picture
     ``run/check_hand_<camera>.png``: the clip's first frame, its hand tinted yellow and the drawn robot outlined cyan.
@@ -1312,11 +1326,15 @@ def hand_line(server: Any, cam: Any, clip: str, *, count: int = 60) -> dict:
     stills.save_png(pic.astype(np.uint8), path)
     reading["picture"] = str(path)
     reading["detail"] += f" ({path.name}: the clip's hand yellow, the drawn robot cyan)"
+    own, unread = None, ""
     try:
         own = _own_camera(sim, cam)
     except Exception as e:  # a robot file that will not parse leaves the mount unread, said
-        own, reading["detail"] = None, reading["detail"] + f"; the robot's own camera was not read ({e})"
-    if own is not None:
+        unread = f"the robot's own camera was not read ({e})"
+    if own is None:
+        reading["mount"] = None
+        reading["detail"] += "; " + _unread_mount(sim, cam, unread)
+    else:
         mount = mount_reading(cam.world_matrix, cam.fov_y_from_intrinsics, own[0], own[1])
         reading["mount"] = mount
         words = (

@@ -124,7 +124,9 @@ itself; Claude Code through `CLAUDE.md`. Every command and reading is in
   can read silver, grey or tan under the clip's light; a rubber part is
   black), and check them in the composite, not in the free view. The robot's
   look is its spec's `color`, `finish` and `appearance` (`replace(...)` of the
-  registered one), never a copy of its file.
+  registered one), never a copy of its file; `appearance` changes how it
+  looks and nothing the physics reads; a start pose is each arm's `home_q`
+  and its fingers' `home_gripper_q`.
 - **A camera on a wrist is calibrated against the hand it carries.** In its
   clip the robot's own palm and fingers sit in the same pixels in every
   frame, so they say where the camera is on the wrist -- its offset, its roll
@@ -137,7 +139,11 @@ itself; Claude Code through `CLAUDE.md`. Every command and reading is in
   file's; the line prints it): start there, fit its roll and a few
   millimetres, and get the `hand` line to PASS, the cyan outline on the
   yellow, before the routine. Moving the camera or opening its field of view
-  until the hand lines up leaves the rest of the view wrong. A wrist view
+  until the hand lines up leaves the rest of the view wrong. When the robot's
+  file carries no camera there, the line says the mount is not held: the
+  camera's place and field of view come from a calibration that came with the
+  clip (or a measured mount), checked against the hand, and the report says
+  which. A wrist view
   that does not match is the camera or the arm, never something to explain
   away.
 - **Read the reference before writing the routine**: every camera, its phases

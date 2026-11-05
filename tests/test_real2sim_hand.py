@@ -6,8 +6,10 @@ every frame. Two twins of one two-arm clip mounted the right wrist camera the
 way round the left one was, though the clip has that camera turned 180 degrees;
 nothing they ran could see it. These are the pure parts of the line that does:
 the still pixels of a clip, their overlap with the drawn robot and the turn
-that would fit it, the frames it samples, the ``check --clip`` request, and the
-warning a page gives when the path tracer cannot keep its cache.
+that would fit it, the frames it samples, the ``check --clip`` request, the
+robot's own camera it is held to (and what it says when the robot's file has
+none), and the warning a page gives when the path tracer cannot keep its
+cache.
 """
 
 from __future__ import annotations
@@ -230,6 +232,30 @@ class MountReading(unittest.TestCase):
         self.assertAlmostEqual(reading["axis_deg"], 40.0, places=3)
         self.assertFalse(checks.mount_reading(mount, 110.0, mount, 58.0)["ok"], "a field of view opened to 110")
         self.assertTrue(checks.mount_reading(mount, 65.0, mount, 58.0)["ok"], "within a quarter of it")
+
+
+class UnreadMount(unittest.TestCase):
+    """A robot whose file carries no camera: the hand line says the mount is not held and what it would have held."""
+
+    def _sim_cam(self):
+        sim = types.SimpleNamespace(
+            model=types.SimpleNamespace(body_label=["ur5e/left/base", "ur5e/left/wrist_3_link"])
+        )
+        pose = np.eye(4)
+        pose[:3, 3] = (0.0, 0.06, 0.08)
+        cam = types.SimpleNamespace(parent_body=1, world_matrix=pose, fov_y_from_intrinsics=58.0)
+        return sim, cam
+
+    def test_it_says_where_the_camera_sits_and_that_nothing_holds_it(self) -> None:
+        text = checks._unread_mount(*self._sim_cam())
+        self.assertIn("carries no camera on wrist_3_link", text)
+        self.assertIn("mount is not held", text)
+        self.assertIn("100 mm from wrist_3_link's origin with a 58 deg field of view", text)
+        self.assertIn("the report says which", text)
+
+    def test_a_file_that_would_not_parse_says_so_instead(self) -> None:
+        text = checks._unread_mount(*self._sim_cam(), "the robot's own camera was not read (bad xml)")
+        self.assertTrue(text.startswith("the robot's own camera was not read (bad xml), so the mount is not held"))
 
 
 if __name__ == "__main__":

@@ -390,7 +390,12 @@ clip's first frame, its hand yellow, the drawn robot outlined cyan. Measured on
 one clip at the robot's own mount and the clip's roll: 0.28-0.33 on one wrist,
 0.15 on the other, whose fingers stand at another opening for most of the
 clip; turned the wrong way, 0.00. A camera that rides nothing gets a SKIP, and
-a clip in which nothing stays still is no wrist clip.
+a clip in which nothing stays still is no wrist clip. A robot whose file carries
+no camera on that link (a URDF, or an MJCF without one) has no mount to hold
+the camera to: the line keeps the overlap's verdict and says so, with where the
+camera sits on the link and its field of view -- the hand lining up does not
+settle them, so they come from a calibration that came with the clip or a
+measured mount, and the report says which.
 
 ### The physics replays
 
@@ -494,10 +499,13 @@ NOTE  grip     the fingers pressed flower_1 0.7 N (p95 0.7) by hand 2; ...; the 
   `arms_at=`. So does a robot built by a class of the twin's own (a subclass
   of the library's swapped into the build), and so does any difference in the
   built model's numbers from the registered robot built alone: each joint's
-  range, servo gain and damping, force limit and armature, each shape's
-  friction and each body's mass, whatever changed them. Where the bases stand
-  is not compared. Its look -- `color`, `finish`, `appearance` on the spec --
-  is the twin's. A robot built from a file nothing registered is a NOTE: its
+  range, servo gain and damping, force and speed limits, armature, friction,
+  axis and frames; each shape's size, place on its link, kind, friction,
+  contact stiffness and what it collides with; each link's mass, inertia and
+  centre of mass -- whatever changed them (a hook that edits the builder
+  included). Where the bases stand is not compared. Its look -- `color`,
+  `finish`, `appearance` on the spec, and a shape's visibility -- is the
+  twin's. A robot built from a file nothing registered is a NOTE: its
   limits are the file's own and are not checked.
 - **settle** reads how the scene's own settle, before the first step, moved
   each thing from where it was put, and how deep each sits in something at
