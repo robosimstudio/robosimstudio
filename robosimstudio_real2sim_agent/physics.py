@@ -783,10 +783,44 @@ MODEL_ARRAYS = (
     ("joint_target_ke", "servo gain"),
     ("joint_target_kd", "servo damping"),
     ("joint_effort_limit", "force limit"),
+    ("joint_velocity_limit", "speed limit"),
     ("joint_armature", "armature"),
+    ("joint_friction", "joint friction"),
+    ("joint_damping", "joint damping"),
 )
 """The per-DOF numbers of the built robot held to a fresh build of the registered one: whatever changed them -- a
-copied file, an ``arm=``, a class of the twin's own in the build, an edit to the model after it -- shows here."""
+copied file, an ``arm=``, a class of the twin's own in the build, a hook that edits the builder (an ``appearance=``
+is for the look), an edit to the model after it -- shows here."""
+
+PART_ARRAYS = (
+    ("joint_label", "joint_axis", "joint axis"),
+    ("joint_label", "joint_type", "joint kind"),
+    ("joint_label", "joint_X_p", "joint frame"),
+    ("joint_label", "joint_X_c", "joint frame"),
+    ("joint_label", "joint_mimic_coeffs", "finger coupling"),
+    ("shape_label", "shape_material_mu", "friction"),
+    ("shape_label", "shape_material_mu_torsional", "torsional friction"),
+    ("shape_label", "shape_material_mu_rolling", "rolling friction"),
+    ("shape_label", "shape_material_ke", "contact stiffness"),
+    ("shape_label", "shape_material_kd", "contact damping"),
+    ("shape_label", "shape_material_restitution", "restitution"),
+    ("shape_label", "shape_scale", "shape size"),
+    ("shape_label", "shape_transform", "shape place on its link"),
+    ("shape_label", "shape_type", "shape kind"),
+    ("shape_label", "shape_flags", "what a shape collides with"),
+    ("shape_label", "shape_gap", "contact gap"),
+    ("shape_label", "shape_margin", "contact margin"),
+    ("body_label", "body_mass", "mass"),
+    ("body_label", "body_inertia", "inertia"),
+    ("body_label", "body_com", "centre of mass"),
+)
+"""The robot's joints, shapes and links held, label by label, to the registered build's: their frames and axes, each
+shape's size, place, kind, contact and what it collides with, each link's mass and inertia. A base joint's parent frame
+and a shape on the world (a fixed base folded into it) are where ``at=`` and ``arms_at=`` stand the robot, so they are
+not compared, and a shape's visibility is the look's."""
+
+_PLACE_MM, _TURN_DEG = 0.5, 0.5
+"""How far a frame may sit or turn from the registered one's before it is a different frame: float noise, not a fit."""
 
 
 def _own_labels(labels: Any, prefix: str) -> dict[str, int]:
@@ -794,20 +828,40 @@ def _own_labels(labels: Any, prefix: str) -> dict[str, int]:
     return {str(lab)[len(prefix) :]: i for i, lab in enumerate(labels) if str(lab).startswith(prefix)}
 
 
+def _apart(field: str, a: Any, b: Any) -> str:
+    """How value ``a`` differs from the registered ``b`` of ``field`` in a few words, or ``""`` when they agree."""
+    a, b = np.asarray(a, dtype=float), np.asarray(b, dtype=float)
+    if field.endswith(("_X_p", "_X_c", "_transform")):
+        moved = 1000.0 * float(np.linalg.norm(a[:3] - b[:3]))
+        dot = min(
+            1.0, abs(float(np.dot(a[3:7], b[3:7]))) / max(float(np.linalg.norm(a[3:7]) * np.linalg.norm(b[3:7])), 1e-12)
+        )
+        turned = math.degrees(2.0 * math.acos(dot))
+        if moved <= _PLACE_MM and turned <= _TURN_DEG:
+            return ""
+        return f"{moved:.1f} mm and {turned:.1f} deg off"
+    if field == "shape_flags":
+        visible = int(newton.ShapeFlags.VISIBLE)
+        a, b = np.asarray(int(a) & ~visible), np.asarray(int(b) & ~visible)
+    if np.allclose(a, b, rtol=1e-3, atol=1e-6):
+        return ""
+    if a.size == 1:
+        return f"{float(a):.4g} (registered {float(b):.4g})"
+    return f"{np.array2string(a.ravel(), precision=4)} (registered {np.array2string(b.ravel(), precision=4)})"
+
+
 def compare_models(model: Any, ref: Any, name: str, ref_name: str) -> list[str]:
     """How ``model``'s robot (labels under ``name/``) differs from ``ref``'s (under ``ref_name/``), in a few words per
-    measure: each DOF's :data:`MODEL_ARRAYS`, each shape's friction and each body's mass, matched by label. Placement
-    (where the bases stand) is not compared: ``at=`` and ``arms_at=`` are the twin's."""
+    measure: each DOF's :data:`MODEL_ARRAYS` and each joint's, shape's and link's :data:`PART_ARRAYS`, matched by
+    label. Placement (where the bases stand) is not compared: ``at=`` and ``arms_at=`` are the twin's."""
     out: list[str] = []
+    by_kind: dict[str, list[str]] = {}
 
-    def words(kind: str, diffs: list[str]) -> None:
-        if diffs:
-            more = f" and {len(diffs) - 3} more" if len(diffs) > 3 else ""
-            out.append(f"{kind} {', '.join(diffs[:3])}{more}")
+    def note(kind: str, what: str) -> None:
+        by_kind.setdefault(kind, []).append(what)
 
     mj, rj = _own_labels(model.joint_label, name + "/"), _own_labels(ref.joint_label, ref_name + "/")
     mq, rq = model.joint_qd_start.numpy(), ref.joint_qd_start.numpy()
-    by_kind: dict[str, list[str]] = {}
     for field, kind in MODEL_ARRAYS:
         if getattr(model, field, None) is None or getattr(ref, field, None) is None:
             continue
@@ -819,23 +873,33 @@ def compare_models(model: Any, ref: Any, name: str, ref_name: str) -> list[str]:
             for k in range(int(rq[j + 1] - rq[j])):
                 va, vb = float(a[int(mq[i]) + k]), float(b[int(rq[j]) + k])
                 if not math.isclose(va, vb, rel_tol=1e-3, abs_tol=1e-6):
-                    by_kind.setdefault(kind, []).append(f"{lab.rsplit('/', 1)[-1]} {va:.4g} (registered {vb:.4g})")
-    for kind, diffs in by_kind.items():
-        words(kind, list(dict.fromkeys(diffs)))
-    for field, labels, kind in (("shape_material_mu", "shape_label", "friction"), ("body_mass", "body_label", "mass")):
+                    note(kind, f"{lab.rsplit('/', 1)[-1]} {va:.4g} (registered {vb:.4g})")
+    # A base joint's parent frame, and a shape standing on the world (a fixed base folded into it), are where the
+    # twin placed the robot.
+    placed = {
+        "joint_X_p": ref.joint_parent.numpy() < 0 if getattr(ref, "joint_parent", None) is not None else None,
+        "shape_transform": ref.shape_body.numpy() < 0 if getattr(ref, "shape_body", None) is not None else None,
+    }
+    for labels, field, kind in PART_ARRAYS:
+        if getattr(model, field, None) is None or getattr(ref, field, None) is None:
+            continue
         a, b = getattr(model, field).numpy(), getattr(ref, field).numpy()
         mine, theirs = (
             _own_labels(getattr(model, labels), name + "/"),
             _own_labels(getattr(ref, labels), ref_name + "/"),
         )
-        words(
-            kind,
-            [
-                f"{lab.rsplit('/', 1)[-1]} {float(a[mine[lab]]):.4g} (registered {float(b[j]):.4g})"
-                for lab, j in theirs.items()
-                if lab in mine and not math.isclose(float(a[mine[lab]]), float(b[j]), rel_tol=1e-3, abs_tol=1e-6)
-            ],
-        )
+        for lab, j in theirs.items():
+            i = mine.get(lab)
+            where = placed.get(field)
+            if i is None or (where is not None and bool(where[j])):
+                continue
+            words = _apart(field, a[i], b[j])
+            if words:
+                note(kind, f"{lab.rsplit('/', 1)[-1]} {words}")
+    for kind, found in by_kind.items():
+        diffs = list(dict.fromkeys(found))
+        more = f" and {len(diffs) - 3} more" if len(diffs) > 3 else ""
+        out.append(f"{kind} {', '.join(diffs[:3])}{more}")
     return out
 
 

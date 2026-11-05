@@ -5,9 +5,10 @@ Three twins of one clip built the robot three ways: a copy of its file with the
 wrist widened and stiffer servos, a copy that only changed a colour, and the
 registered file built by a class of the twin's own that moved the arm bases. The
 robot line read the spec, so the third passed. It now holds the built model's
-per-DOF ranges, gains, force limits and armature, its shapes' friction and its
-bodies' masses to the registered robot built alone, and names a class of the
-twin's own. And a mug hung on a peg swings to where it swings: replays of one
+per-DOF ranges, gains, force limits and armature, its joints' frames and axes,
+its shapes' size, place, contact and what they collide with, and its links'
+masses and inertia to the registered robot built alone, and names a class of
+the twin's own. And a mug hung on a peg swings to where it swings: replays of one
 twin left it 1 to 13 mm and up to 92 degrees from the written run, which failed
 ``built`` on a turn that means nothing.
 """
@@ -61,6 +62,54 @@ class CompareModels(unittest.TestCase):
     def test_what_is_not_the_robot_and_another_name_are_matched_by_label(self) -> None:
         mine = _model("twin_robot", base=3.0)  # the table weighs more: not the robot's
         self.assertEqual(physics.compare_models(mine, _model("yam"), "twin_robot", "yam"), [])
+
+
+def _parts(name: str, **edit):
+    """A robot of a world-standing base shape, a link with one finger shape, and the base joint and one more."""
+    base_x = edit.get("base_x", 0.0)
+    finger = [0.01, 0.0, 0.05, 0.0, 0.0, 0.0, 1.0]
+    finger[2] += edit.get("finger_dz", 0.0)
+    return types.SimpleNamespace(
+        joint_label=[f"{name}/base_joint", f"{name}/joint1"],
+        joint_qd_start=_arr([0, 0, 1]),
+        joint_parent=_arr([-1, 0]),
+        joint_X_p=_arr([[base_x, 0.0, 0.0, 0.0, 0.0, 0.0, 1.0], [0.0, 0.0, 0.1, 0.0, 0.0, 0.0, 1.0]]),
+        joint_axis=_arr([[0.0, 0.0, 1.0], edit.get("axis", [0.0, 0.0, 1.0])]),
+        shape_label=[f"{name}/base_geom", f"{name}/finger_geom"],
+        shape_body=_arr([-1, 1]),
+        shape_transform=_arr([[base_x, 0.0, 0.0, 0.0, 0.0, 0.0, 1.0], finger]),
+        shape_scale=_arr([[0.1, 0.1, 0.1], [0.01, 0.01, edit.get("finger_len", 0.03)]]),
+        shape_flags=_arr([3, edit.get("finger_flags", 3)]),
+        shape_material_mu=_arr([1.0, 1.0]),
+        body_label=[f"{name}/base", f"{name}/link_1"],
+        body_mass=_arr([2.0, 0.5]),
+        body_inertia=_arr([np.eye(3) * 0.01, np.eye(3) * edit.get("inertia", 0.001)]),
+    )
+
+
+class CompareModelsParts(unittest.TestCase):
+    def test_where_the_robot_stands_is_the_twins(self) -> None:
+        self.assertEqual(physics.compare_models(_parts("yam", base_x=0.75), _parts("yam"), "yam", "yam"), [])
+
+    def test_a_longer_finger_a_moved_shape_and_a_turned_axis_are_named(self) -> None:
+        mine = _parts("yam", finger_len=0.05, finger_dz=0.004, axis=[0.0, 1.0, 0.0], inertia=0.002)
+        text = "; ".join(physics.compare_models(mine, _parts("yam"), "yam", "yam"))
+        self.assertIn("shape size finger_geom", text)
+        self.assertIn("shape place on its link finger_geom 4.0 mm and 0.0 deg off", text)
+        self.assertIn("joint axis joint1", text)
+        self.assertIn("inertia link_1", text)
+
+    def test_a_shape_made_not_to_collide_is_named_and_one_only_hidden_is_not(self) -> None:
+        import newton
+
+        visible = int(newton.ShapeFlags.VISIBLE)
+        hidden = physics.compare_models(_parts("yam", finger_flags=3 & ~visible), _parts("yam"), "yam", "yam")
+        self.assertEqual(hidden, [], "visibility is the look's")
+        ghost = physics.compare_models(_parts("yam", finger_flags=visible), _parts("yam"), "yam", "yam")
+        self.assertIn("what a shape collides with finger_geom", "; ".join(ghost))
+
+    def test_float_noise_in_a_frame_is_not_a_departure(self) -> None:
+        self.assertEqual(physics.compare_models(_parts("yam", finger_dz=1e-5), _parts("yam"), "yam", "yam"), [])
 
 
 class Hangs(unittest.TestCase):
