@@ -94,9 +94,11 @@ Isaac Sim.
 
 This module is where the private-attribute reach is *isolated*. It overrides
 ``ViewerRTX._add_camera_lights_and_render_product``, ``_render_and_display``,
-``_update_ovrtx_camera``, ``_apply_ground_material`` and ``_log_triangles``,
-writes through ``_write_runtime_attribute`` (Newton 1.7's route to OVRTX, which
-goes by its OVStage scene from OVRTX 0.4 on), and touches ``viewer._rtx``,
+``_update_ovrtx_camera``, ``_apply_ground_material``, ``_log_triangles`` and
+``_init_ovrtx`` (around which ``ovrtx.Renderer`` and ``ovstage.Stage`` are
+wrapped, for the GPU and a stage name of each viewer's own), writes through
+``_write_runtime_attribute`` (Newton 1.7's route to OVRTX, which goes by its
+OVStage scene from OVRTX 0.4 on), and touches ``viewer._rtx``,
 ``viewer._render_product_path``, ``viewer._shape_to_batch``, ``viewer._meshes``
 and ``viewer.stage``. Nothing else in this package does, which is what the
 version pins are protecting: ``ovrtx`` to a release in the ``[rtx]`` extra,
@@ -107,6 +109,8 @@ once, afterwards.
 
 from __future__ import annotations
 
+import contextlib
+import itertools
 import os
 from collections.abc import Callable, Mapping, Sequence
 from typing import Any
@@ -230,6 +234,103 @@ def _usd_camera_matrix(world: np.ndarray) -> np.ndarray:
 
 
 # ----------------------------------------------------------------- viewer
+@contextlib.contextmanager
+def _renderer_on_gpu(ordinal: int | None):
+    """While Newton's ``_init_ovrtx`` runs, an OVRTX renderer it makes goes on CUDA device ``ordinal``.
+
+    THE PATH TRACER GOES ON THE SAME GPU AS THE SIMULATION.
+
+    ``ovrtx.RendererConfig`` carries ``active_cuda_gpus`` and Newton never sets
+    it, so OVRTX picks its own device -- in practice GPU 0. On a one-GPU box
+    that is always the sim's GPU and the omission is invisible. On two, a
+    worker whose warp device is cuda:1 renders on GPU 0 and then maps the
+    render var back into a cuda:1 array, and the interop fails on the first
+    frame::
+
+        RuntimeError: Operation 'unmap_attribute(4294967296)' failed:
+          op 4: ovrtx_unmap_attribute: CUDA stream synchronization failed
+
+    Measured: with ``--devices cuda:0,cuda:1``, every odd worker (the ones
+    round-robin put on cuda:1) died there during startup while the even ones
+    ran, so half the pool was lost and the second GPU sat at 0% holding nothing
+    but contexts.
+
+    Set through the module attribute because the config object is built inside
+    Newton's own ``_init_ovrtx``; the wrapper only fills a value the caller left
+    as ``None``, so an explicit choice upstream still wins. CUDA_VISIBLE_DEVICES
+    is NOT an alternative here -- OVRTX enumerates graphics devices separately
+    from CUDA and skips every GPU when it is set.
+    """
+    if ordinal is None:
+        yield
+        return
+    import ovrtx
+
+    original = ovrtx.Renderer
+
+    def _on_sim_gpu(*args, config=None, **kwargs):
+        if config is not None and getattr(config, "active_cuda_gpus", None) is None:
+            config.active_cuda_gpus = str(int(ordinal))
+        return original(*args, config=config, **kwargs)
+
+    ovrtx.Renderer = _on_sim_gpu
+    try:
+        yield
+    finally:
+        ovrtx.Renderer = original
+
+
+_STAGES = itertools.count(1)
+"""Numbers the OVStage of every viewer this process opens; see :func:`_stage_of_its_own`."""
+
+
+@contextlib.contextmanager
+def _stage_of_its_own():
+    """While Newton's ``_init_ovrtx`` runs, the OVStage it makes is named for this viewer alone.
+
+    **A second renderer in one process lost the colours the first one kept.**
+    Newton names every viewer's stage ``"newton.ViewerRTX"``, and OVStage calls
+    the name a diagnostic, but two stages of one name in one process are not
+    kept apart: on a real-to-sim twin -- a two-arm robot, a room of slabs, three
+    mugs on one ``displayColor`` material -- a renderer made after another on
+    the same sim drew all three mugs near black, the material's fallback, in
+    3 runs of 3 (mean 8-bit error over the frame 4.5-7.6 against the first
+    renderer's), while the first renderer, rendered again afterwards, stayed
+    right. The two stages it decorated were identical, line for line, so the
+    difference was inside OVRTX. Each stage named apart: 1.2, the noise floor
+    of two renders of one state, in 2 runs of 2 -- as was a material root of
+    each renderer's own, the narrower cure.
+
+    It is what a live page does all day -- a still, a recorder and a script's
+    own four-camera export, each a renderer on the scene in one process -- and
+    a twin built that way saw its mugs' colours go and baked constant
+    materials to get them back. Smaller scenes (three boxes on one material, a
+    few hundred more on it, the robot without the room, the room without the
+    robot) kept their colours either way, so what triggers it is OVRTX's own;
+    a name of its own takes away what the two stages shared.
+
+    A subclass rather than a function, so ``isinstance`` against
+    ``ovstage.Stage`` holds for the stage it makes. Without ``ovstage`` (an
+    OVRTX before 0.4 opens the file itself) there is nothing to name.
+    """
+    try:
+        import ovstage
+    except ImportError:
+        yield
+        return
+    original = ovstage.Stage
+
+    class _Named(original):
+        def __init__(self, name=None, *args, **kwargs):
+            super().__init__(f"{name or 'stage'}.{next(_STAGES)}", *args, **kwargs)
+
+    ovstage.Stage = _Named
+    try:
+        yield
+    finally:
+        ovstage.Stage = original
+
+
 def _viewer_class():
     """``ViewerRTX`` with a camera rig, depth, per-deformable meshes and a
     stage-decoration hook.
@@ -337,47 +438,9 @@ def _viewer_class():
         def _init_ovrtx(self):
             if self._decorate is not None:
                 self._decorate(self)
-
-            # THE PATH TRACER GOES ON THE SAME GPU AS THE SIMULATION.
-            #
-            # ``ovrtx.RendererConfig`` carries ``active_cuda_gpus`` and Newton
-            # never sets it, so OVRTX picks its own device -- in practice GPU 0.
-            # On a one-GPU box that is always the sim's GPU and the omission is
-            # invisible. On two, a worker whose warp device is cuda:1 renders on
-            # GPU 0 and then maps the render var back into a cuda:1 array, and
-            # the interop fails on the first frame:
-            #
-            #   RuntimeError: Operation 'unmap_attribute(4294967296)' failed:
-            #     op 4: ovrtx_unmap_attribute: CUDA stream synchronization failed
-            #
-            # Measured: with ``--devices cuda:0,cuda:1``, every odd worker (the
-            # ones round-robin put on cuda:1) died there during startup while the
-            # even ones ran, so half the pool was lost and the second GPU sat at
-            # 0% holding nothing but contexts.
-            #
-            # Set through the module attribute because the config object is
-            # built inside Newton's own ``_init_ovrtx``; the wrapper only fills a
-            # value the caller left as ``None``, so an explicit choice upstream
-            # still wins. CUDA_VISIBLE_DEVICES is NOT an alternative here -- OVRTX
-            # enumerates graphics devices separately from CUDA and skips every
-            # GPU when it is set.
-            import ovrtx
-
             ordinal = self.device.ordinal if getattr(self.device, "is_cuda", False) else None
-            original = ovrtx.Renderer
-            if ordinal is None:
-                return super()._init_ovrtx()
-
-            def _on_sim_gpu(*args, config=None, **kwargs):
-                if config is not None and getattr(config, "active_cuda_gpus", None) is None:
-                    config.active_cuda_gpus = str(int(ordinal))
-                return original(*args, config=config, **kwargs)
-
-            ovrtx.Renderer = _on_sim_gpu
-            try:
+            with _renderer_on_gpu(ordinal), _stage_of_its_own():
                 super()._init_ovrtx()
-            finally:
-                ovrtx.Renderer = original
 
         # -- deformables ------------------------------------------------------
         def _log_triangles(self, state):
