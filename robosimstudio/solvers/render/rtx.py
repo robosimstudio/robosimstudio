@@ -66,9 +66,10 @@ the stage before OVRTX opens it:
   primvar and binds no material, so OVRTX shades everything as the same plastic.
   :func:`decorate_stage` binds a ``UsdPreviewSurface`` per distinct
   :class:`~robosimstudio.core.render.finish.Finish` to every instance prim --
-  roughness, metallicity, opacity, a texture -- with the colour still read
-  *from the primvar*, so ``model.shape_color`` keeps meaning what it means
-  everywhere else.
+  roughness, metallicity, opacity, a texture -- with the colour taken from that
+  primvar, so ``model.shape_color`` keeps meaning what it means everywhere else:
+  baked into the material for a shape whose colour cannot change, and read from
+  the primvar for one that can (:data:`BAKE_COLORS_ENV` says why).
 * **Live colour.** A decal field that fades its own shapes writes
   ``model.shape_color`` from a kernel; a viewer that bakes colour at load never
   sees it. The shapes the scene declares live (``handles.live_shapes``) are
@@ -299,6 +300,61 @@ first frame a little texture detail."""
 def bound_first_frame_wait() -> None:
     """Bound a first frame's wait on a stuck streaming client (:data:`STREAMING_TIMEOUT_ENV`), unless the caller chose."""
     os.environ.setdefault(STREAMING_TIMEOUT_ENV, str(STREAMING_TIMEOUT_S))
+
+
+BAKE_COLORS_ENV = "ROBOSIMSTUDIO_RTX_BAKE_COLORS"
+"""``0`` keeps every untextured shape's colour in its ``displayColor`` primvar, read by a material's primvar reader.
+
+**One renderer in 20 to 30 loses the colour of one of those materials, for its
+whole life, and says nothing.** Every prim bound to that material draws with no
+diffuse colour: its reflections stay, its depth stays, and it comes out black,
+from the first frame to the last. Nothing in the log at info level. Which
+material is luck, and what that costs depends on what it holds:
+
+* On ``cable_routing`` the one holding the cable and the bench takes the graph's
+  first perception with it: every world of the wave aborts at control step 85
+  with "No feasible grasp relative to the fixed anchor". Painting that material
+  black on purpose reproduces the bad frames' means to the second decimal.
+* ``tool_sorting``'s robot goes the same way.
+* The one holding the base plates was the commonest, and nothing notices.
+
+A renderer rebuilt in the same process was fine 5 times of 6, and the second of
+two renderers went wrong after a clean first 5 times, so it belongs to one build
+rather than to a process or a scene. Re-rendering 30 times does not clear it, and
+neither does writing the primvars again. The bounded streaming wait is not its
+cause: it was seen before that bound existed.
+
+The reader is what fails: it runs, finds no primvar on any prim of that material,
+and returns its ``fallback``. That is black by default; authored magenta in a
+test, the bad material came out magenta (2 of 2).
+
+A material with no reader has nothing to lose this way. First frames of
+``cable_routing``, real benches and idle builds together:
+
+=====================  =========  ===============
+colour                 renderers  lost a material
+=====================  =========  ===============
+primvar reader (four)  378        15
+baked (none)           254        0
+=====================  =========  ===============
+
+That is p = 0.0007 (Fisher). 153 and 150 of them ran side by side on the same two
+GPUs in the same hours, and came to 7 and 0, p = 0.015.
+
+And it changes nothing else that was measured. Frames of six scenes (one per
+benchmark) differ from the primvar's by what two runs of either differ from each
+other: mean absolute difference 0.42-0.88 levels against 0.44-0.92 at the first
+frame, 0.22-0.51 against 0.23-0.55 ten frames in. First frames took the same time
+(tool sorting 62 s against 64 s, cable routing 75 s against 75 s, under load),
+with 20 materials rather than 15 on the cable's stage. The colour itself cannot
+go stale, because a primvar written after the stage loads is not re-read unless
+the shape is declared live, and those keep their reader: Newton's render phase
+only moves transforms."""
+
+
+def bake_colors() -> bool:
+    """Whether untextured shapes get their colour baked into the material (:data:`BAKE_COLORS_ENV`)."""
+    return os.environ.get(BAKE_COLORS_ENV, "1").strip().lower() not in ("0", "off", "false", "no")
 
 
 def _usd_camera_matrix(world: np.ndarray) -> np.ndarray:
@@ -732,6 +788,20 @@ def _albedo(color):
     return srgb_to_linear(color) if PALETTE_IS_DISPLAY else color
 
 
+def _baked_albedo(prim) -> tuple[float, float, float] | None:
+    """The one colour a prim's ``displayColor`` holds, as the renderer would read it; ``None`` if it has no single one."""
+    from pxr import UsdGeom
+
+    primvar = UsdGeom.PrimvarsAPI(prim).GetPrimvar("displayColor")
+    if not primvar:
+        return None
+    times = primvar.GetAttr().GetTimeSamples()
+    values = primvar.Get(times[-1]) if times else primvar.Get()
+    if values is None or len(values) != 1:
+        return None
+    return tuple(float(v) for v in values[0])
+
+
 def _decode_display_color(prim) -> None:
     """Rewrite a prim's ``displayColor`` primvar from display values to albedo, once."""
     from pxr import UsdGeom
@@ -762,10 +832,11 @@ def _decode_display_color(prim) -> None:
 class _MaterialLibrary:
     """One ``UsdPreviewSurface`` per distinct finish, bound to many prims.
 
-    Untextured materials take their colour from the prim's ``displayColor``
-    primvar, so every shape of one finish shares a material whatever its colour
-    and a live colour write needs no material of its own. A constant colour is
-    only baked for prims that carry no primvar -- deformable meshes, scenery.
+    An untextured material takes its colour from the prim's ``displayColor``
+    primvar if the shape's colour may change, so a live colour write needs no
+    material of its own, and as a constant otherwise, ``albedo`` being what that
+    primvar holds (:data:`BAKE_COLORS_ENV`). Prims that carry no primvar --
+    deformable meshes, scenery -- pass a palette ``color``.
     """
 
     def __init__(self, stage, root: str = "/root/Materials") -> None:
@@ -778,24 +849,41 @@ class _MaterialLibrary:
         self._cache: dict[tuple, Any] = {}
         self._count = 0
 
-    def material(self, finish: Finish, color: tuple[float, float, float] | None = None):
-        """The material for ``finish``; ``color`` bakes a constant colour."""
-        key = (finish, None if color is None else tuple(round(float(v), 4) for v in color))
+    def material(
+        self,
+        finish: Finish,
+        color: tuple[float, float, float] | None = None,
+        *,
+        albedo: tuple[float, float, float] | None = None,
+    ):
+        """The material for ``finish``; ``color`` bakes a palette colour, ``albedo`` one already linear."""
+        key = (
+            finish,
+            None if color is None else tuple(round(float(v), 4) for v in color),
+            None if albedo is None else tuple(round(float(v), 6) for v in albedo),
+        )
         found = self._cache.get(key)
         if found is not None:
             return found
-        made = self._build(finish, key[1])
+        made = self._build(finish, key[1], key[2])
         self._cache[key] = made
         return made
 
-    def bind(self, prim, finish: Finish, color: tuple[float, float, float] | None = None) -> None:
+    def bind(
+        self,
+        prim,
+        finish: Finish,
+        color: tuple[float, float, float] | None = None,
+        *,
+        albedo: tuple[float, float, float] | None = None,
+    ) -> None:
         from pxr import UsdShade
 
-        material = self.material(finish, color)
+        material = self.material(finish, color, albedo=albedo)
         UsdShade.MaterialBindingAPI.Apply(prim)
         UsdShade.MaterialBindingAPI(prim).Bind(material)
 
-    def _build(self, finish: Finish, color):
+    def _build(self, finish: Finish, color, albedo=None):
         from pxr import Gf, Sdf, UsdShade
 
         self._count += 1
@@ -831,6 +919,8 @@ class _MaterialLibrary:
         if finish.texture:
             tex = self._texture(f"{path}/DiffuseTexture", texture_path(finish.texture), st, "auto")
             diffuse.ConnectToSource(tex.ConnectableAPI(), "rgb")
+        elif albedo is not None:
+            diffuse.Set(Gf.Vec3f(*albedo))
         elif color is None:
             reader = UsdShade.Shader.Define(self.stage, f"{path}/PrimvarColor")
             reader.CreateIdAttr("UsdPrimvarReader_float3")
@@ -1147,7 +1237,9 @@ def decorate_stage(
             finish = finish_for(color)
         if PALETTE_IS_DISPLAY:
             _decode_display_color(prim)
-        library.bind(prim, finish)
+        # Baked, unless the colour may change: see BAKE_COLORS_ENV.
+        baked = None if s in live or finish.texture or not bake_colors() else _baked_albedo(prim)
+        library.bind(prim, finish, albedo=baked)
         if finish.texture or finish.roughness_texture:
             # A primitive's own UVs are one square per face; a finish stated in
             # repeats per metre wants the mesh's coordinates instead.
