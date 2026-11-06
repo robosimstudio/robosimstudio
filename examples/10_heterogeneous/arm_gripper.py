@@ -14,6 +14,7 @@ from __future__ import annotations
 from dataclasses import dataclass
 from pathlib import Path
 
+import newton
 import numpy as np
 
 import robosimstudio as rss
@@ -26,8 +27,10 @@ ASSET = Path(__file__).resolve().parent / "assets" / "airbot_play" / "airbot_pla
 CELL = "bench_075_airbot"
 """``bench_075``'s top, extended behind the arm's mount."""
 
-MOUNT = (-0.48, 0.0, 0.132, 0.0, 0.0, 0.0, 1.0)
-"""The arm's base in the work-surface frame: on its pedestal, 0.35 m from the toy.
+MOUNT = (-0.30, 0.0, 0.132, 0.0, 0.0, 0.0, 1.0)
+"""The arm's base in the work-surface frame: on its pedestal, 0.17 m from the toy.
+
+At 0.35 m the hand could not stay vertical over the bottle.
 
 Lowering it to the bench top changes the IK's wrist roll and the pads miss the
 loop, so the mount height every route was planned and measured at is kept, and
@@ -48,8 +51,7 @@ rss.register_cell(
         # The frame stays bench_075's, so every scene coordinate is unchanged.
         center=(0.6, 0.0, 0.0),
         half=(0.62, 0.65, 0.375),
-        # bench_075's top reaches x = 0.3025 and the arm's mount is at 0.12, so its
-        # base stood 180 mm off the near edge in mid-air.
+        # bench_075's top reaches x = 0.3025; the extension carries the pedestal.
         statics=(
             StaticSpec(
                 name="table",
@@ -60,7 +62,7 @@ rss.register_cell(
             StaticSpec(
                 name="arm_pedestal",
                 half_extents=(0.09, 0.09, PEDESTAL_TOP / 2.0),
-                xform=(0.104, 0.0, 0.75 + PEDESTAL_TOP / 2.0, 0.0, 0.0, 0.0, 1.0),
+                xform=(0.584 + MOUNT[0], 0.0, 0.75 + PEDESTAL_TOP / 2.0, 0.0, 0.0, 0.0, 1.0),
                 color=BENCH_LIGHT,
             ),
         ),
@@ -77,6 +79,16 @@ GRASP_QUAT = (0.70710678, 0.70710678, 0.0, 0.0)
 """Tool frame facing down the bench with the jaw axis along world x, xyzw.
 
 The loop's pads close along x, so this puts the jaws across the cord.
+"""
+
+GLOBAL_MU = 0.9
+"""The toy's soft-contact friction (the loop's source estimate)."""
+
+GRIP_MU = 2.83
+"""Effective pad-toy friction: sqrt(8 * 1.0), what global mu 8 gave the stock pads.
+
+Newton mixes particle-shape friction as ``sqrt(soft_contact_mu * shape_mu)``, so
+this is set on the pads alone and the rest of the scene keeps ``GLOBAL_MU``.
 """
 
 FINGER_OPEN_Q = 0.04
@@ -132,11 +144,13 @@ stall well below it, so the scene's press path is measured against this.
 """
 
 
-PAD_RISE = 0.011
-"""How far above the tool-centre point this hand's pads sit [m], grasp down.
+PAD_RISE = -0.014
+"""Tool-centre offset that puts this hand's pad bottoms at the claw's [m], grasp down.
 
-Measured on the built rod scene: finger bodies land 6.2 mm above the commanded
-point and each pad box is centred 5 mm up its finger's frame.
+The scenes state the claw's 12 mm pad centre; the stock pad is 40 mm tall and
+centred on the tool centre, so the tool centre goes 20 - 6 mm above that point.
+Measured with ``pad_bounds``: the earlier +11 mm left the pad bottoms 12 mm
+inside the bench.
 """
 
 
@@ -246,6 +260,58 @@ def vbd_solver(solver):
     A two-island scene hands back the coupler, which owns VBD as ``soft``.
     """
     return getattr(solver, "soft", solver)
+
+
+def finger_shapes(sim, *, name: str = ARM) -> np.ndarray:
+    """Every collision shape on the hand's two fingers."""
+    arms = sim.handles.arms[name]
+    return np.unique(
+        np.array([int(s) for side in arms.finger_groups for _, shapes in side for s in shapes], dtype=np.int32)
+    )
+
+
+def set_contact_friction(sim, *, global_mu: float = GLOBAL_MU, grip_mu: float = GRIP_MU, name: str = ARM) -> dict:
+    """Use ``global_mu`` for the toy and ``grip_mu`` for pad-toy contacts only.
+
+    The pads' ``shape_material_mu`` becomes ``grip_mu**2 / global_mu``.
+    """
+    solver = vbd_solver(sim.pipeline.program.solver)
+    pads = finger_shapes(sim, name=name)
+    pad_mu = float(grip_mu) ** 2 / float(global_mu)
+    for model in {id(sim.model): sim.model, id(solver.model): solver.model}.values():
+        model.soft_contact_mu = float(global_mu)
+        mu = model.shape_material_mu.numpy()
+        mu[pads] = pad_mu
+        model.shape_material_mu.assign(mu)
+    return {"global_soft_contact_mu": float(global_mu), "pad_shape_mu": pad_mu, "pad_toy_mu": float(grip_mu)}
+
+
+def _rotate(quat: np.ndarray, vectors: np.ndarray) -> np.ndarray:
+    """Rotate ``vectors`` [N, 3] by one xyzw quaternion."""
+    axis, w = np.asarray(quat[:3], dtype=np.float64), float(quat[3])
+    vectors = np.asarray(vectors, dtype=np.float64)
+    inner = np.cross(axis, vectors) + w * vectors
+    return vectors + 2.0 * np.cross(axis, inner)
+
+
+def pad_bounds(sim, *, name: str = ARM) -> tuple[np.ndarray, np.ndarray]:
+    """World-space bounds of the fingers' collision boxes, ``(low, high)`` [m]."""
+    model = sim.model
+    shapes = finger_shapes(sim, name=name)
+    # The finger groups carry the visual meshes too; only the boxes collide.
+    shapes = shapes[model.shape_type.numpy()[shapes] == int(newton.GeoType.BOX)]
+    local = model.shape_transform.numpy()[shapes]
+    scale = model.shape_scale.numpy()[shapes]
+    body = model.shape_body.numpy()[shapes]
+    body_q = sim.pipeline.state_0.body_q.numpy()
+    signs = np.array([[x, y, z] for x in (-1, 1) for y in (-1, 1) for z in (-1, 1)], dtype=np.float64)
+    points = []
+    for index in range(len(shapes)):
+        corners = local[index, :3] + _rotate(local[index, 3:], signs * scale[index])
+        frame = body_q[int(body[index])]
+        points.append(frame[:3] + _rotate(frame[3:], corners))
+    points = np.concatenate(points)
+    return points.min(axis=0), points.max(axis=0)
 
 
 def check_arm(sim, *, limit: float = GRASP_LIMIT_N, name: str = ARM) -> dict:

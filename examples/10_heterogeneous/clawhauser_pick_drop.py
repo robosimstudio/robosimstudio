@@ -2,7 +2,7 @@
 """Pick the labelled Clawhauser volume up by its loop, carry it, and drop it.
 
 The toy starts lying on its lowest face, loop flat, and the gripper closes on
-the loop's rim, lifts it clear, carries it 80 mm, opens and lets it fall. The run
+the loop's rim, lifts it clear, carries it 150 mm, opens and lets it fall. The run
 measures whether the grip held, how far the toy moved, whether it came to rest
 on the bench, and what the mesh did.
 
@@ -40,17 +40,20 @@ ASSET = Path(__file__).resolve().parent / "assets" / "clawhauser"
 OUTPUT = Path(__file__).resolve().parents[2] / "outputs" / "clawhauser_pick_drop"
 CONTROL_HZ = 30
 SUBSTEPS = 20
-# 20 s: the phases below still end at 5.2 s, so the drop is unchanged and the
-# remaining 11 s is the toy at rest. That is the window a drift is measured in.
-DURATION = 20.0
+# 10 s: the phases below end at 7.6 s, and the rest is the toy at rest -- the
+# window a drift is measured in.
+DURATION = 10.0
 TABLE_Z = 0.75
-# The move: 80 mm along the bench, and a lift that takes the toy's own length
-# clear of the surface it is resting on. The toy hangs from the pinch with its
-# tail about the loop's height (197 mm) below the pads, so a 210 mm lift is what
-# leaves the tail 40 mm off the bench before the carry starts.
+# The move: 150 mm along the bench, and a lift that takes the toy's own length
+# clear of the bench. On the arm the toy hangs ~234 mm below the pads (the
+# pinched loop stretches), so 210 mm left the tail dragging; 270 mm clears it.
 SOURCE_X = -0.13
-TARGET_X = -0.05
-LIFT_M = 0.210
+TARGET_X = 0.02
+LIFT_M = 0.270
+WITHDRAW_Z = 0.040
+"""How far the opened hand rises once the toy has been let go [m]."""
+LIFTED_MIN = 0.030
+"""The tail must clear the bench by this much for the run to count as a pick [m]."""
 CONTACT_GAP = 0.02
 CONTACT_KE = 100000.0
 COARSE_BUDGET = 0.005
@@ -79,10 +82,11 @@ PHASES = {
     "close": (0.0, 0.6),
     # The pads hold still once they are closed: the toy settles onto the pinch
     # before the lift loads it.
-    "lift": (1.1, 2.7),
-    "hang": (2.7, 3.5),
-    "carry": (3.5, 4.7),
-    "open": (5.3, 5.7),
+    "lift": (1.1, 3.1),
+    "hang": (3.1, 3.9),
+    "carry": (3.9, 5.9),
+    "open": (6.4, 6.8),
+    "withdraw": (7.0, 7.6),
 }
 """Planned phase windows. ``hang`` is a phase with no motion: the toy comes off
 the bench at an angle and swings to hang from the pinch before it is carried.
@@ -98,7 +102,8 @@ SOURCE_HASHES = {
 def build_scene(
     *,
     coarse: bool,
-    mu: float | None = 8.0,
+    mu: float | None = arm_gripper.GLOBAL_MU,
+    grip_mu: float = arm_gripper.GRIP_MU,
     force_limit: float = arm_gripper.GRASP_LIMIT_N,
     squeeze: float = GRIP_SQUEEZE,
     self_contact: bool = True,
@@ -233,7 +238,7 @@ def build_scene(
         )
     if split:
         # Three-quarter from the arm's side: reach, close and lift all in frame.
-        eye, look_at, fov_y = (0.05, -0.95, 1.25), (0.33, 0.0, 0.90), 50.0
+        eye, look_at, fov_y = (0.10, -0.95, 1.22), (0.42, 0.0, 0.92), 50.0
     else:
         # Side on and level with the loop: the pads close across the frame and the
         # lift is vertical, so the grasp reads as a side pinch.
@@ -260,7 +265,13 @@ def build_scene(
         raise RuntimeError("RSS lost Clawhauser tetrahedra or part labels")
     if sim.model.attachment_particle_body_count:
         raise RuntimeError("the contact grasp scene must not contain particle attachments")
-    if mu is not None:
+    if split:
+        # Grip friction on the pads only; the toy keeps its own elsewhere.
+        geometry["friction"] = arm_gripper.set_contact_friction(
+            sim, global_mu=arm_gripper.GLOBAL_MU if mu is None else mu, grip_mu=grip_mu
+        )
+        geometry["global_soft_contact_mu"] = geometry["friction"]["global_soft_contact_mu"]
+    elif mu is not None:
         # Newton VBD exposes one global soft-contact friction coefficient; this is
         # it, and here it is the knob the sweep turns. The solver steps the model
         # it was built with, so if that is a distinct object the assignment has to
@@ -331,7 +342,7 @@ def arm_route(sim, geometry: dict, capacity: int, dt: float):
             (
                 (TARGET_X - SOURCE_X) * smooth(time, *PHASES["carry"]),
                 0.0,
-                geometry["lift_m"] * smooth(time, *PHASES["lift"]),
+                geometry["lift_m"] * smooth(time, *PHASES["lift"]) + WITHDRAW_Z * smooth(time, *PHASES["withdraw"]),
             )
         )
 
@@ -384,7 +395,7 @@ def judge(geometry: dict, diagnostics, quality, entity, steps: int) -> dict:
     max_penetration = float(np.max(np.concatenate([row["penetration_m"] for row in diagnostics] + [np.zeros(1)])))
     if not released:
         stop = "held"
-    elif lifted < 0.5 * geometry["lift_m"]:
+    elif lifted < LIFTED_MIN:
         stop = "not-lifted"
     else:
         stop = "dropped"
@@ -408,7 +419,8 @@ def judge(geometry: dict, diagnostics, quality, entity, steps: int) -> dict:
         "steps": steps,
         "success": bool(
             released
-            and abs(moved - (TARGET_X - SOURCE_X)) <= 0.020
+            and lifted >= LIFTED_MIN
+            and abs(moved - (TARGET_X - SOURCE_X)) <= 0.030
             and -0.0005 <= clearance <= 0.002
             and max_inverted == 0
             and max_penetration <= 0.0005
@@ -423,7 +435,8 @@ def run(
     steps: int,
     render_every: int = 0,
     coarse: bool = False,
-    mu: float | None = 8.0,
+    mu: float | None = arm_gripper.GLOBAL_MU,
+    grip_mu: float = arm_gripper.GRIP_MU,
     force_limit: float = arm_gripper.GRASP_LIMIT_N,
     squeeze: float = GRIP_SQUEEZE,
     enable_self_contact: bool = True,
@@ -433,6 +446,7 @@ def run(
     sim, obj, jaw, camera, geometry = build_scene(
         coarse=coarse,
         mu=mu,
+        grip_mu=grip_mu,
         force_limit=force_limit,
         squeeze=squeeze,
         self_contact=enable_self_contact,
@@ -617,7 +631,12 @@ def main() -> None:
     parser.add_argument("--steps", type=int, default=round(DURATION * CONTROL_HZ))
     parser.add_argument("--render-every", type=int, default=0)
     parser.add_argument("--coarse", action="store_true", help="run the coarse common-translation solve")
-    parser.add_argument("--mu", type=float, default=8.0, help="global soft-contact friction coefficient")
+    parser.add_argument(
+        "--mu", type=float, default=arm_gripper.GLOBAL_MU, help="the toy's global soft-contact friction coefficient"
+    )
+    parser.add_argument(
+        "--grip-mu", type=float, default=arm_gripper.GRIP_MU, help="the arm's pad-toy friction, set on the pads only"
+    )
     parser.add_argument(
         "--force-limit",
         type=float,
@@ -646,6 +665,7 @@ def main() -> None:
         render_every=args.render_every,
         coarse=args.coarse,
         mu=args.mu,
+        grip_mu=args.grip_mu,
         force_limit=args.force_limit,
         squeeze=args.squeeze,
         enable_self_contact=args.self_contact,

@@ -89,6 +89,16 @@ FLOOR_Z = 0.004
 """Height of the container's floor above the work surface."""
 LIFT_CLEARANCE = 0.020
 """How far the toy's lowest point clears the rim while it is carried across."""
+CARRY_CLEARANCE = 0.035
+"""Clearance of the toy's measured lowest point over the rim before the carry [m].
+
+The pinched loop stretches, so the rest-mesh lift left the tail 23 mm under the
+rim and the carry dragged it into the wall; the carry first raises by the deficit.
+"""
+RAISE_TIME = 1.0
+"""Duration of that raise [s]."""
+PADS_MAX_Z = 1.11
+"""Highest finger height [m, world] the arm reaches with the hand still vertical."""
 APPROACH = 0.004
 """How far it clears the rim when the descent starts."""
 DESCEND_RATE = 0.035
@@ -166,6 +176,8 @@ room it has left above the container's floor stopped the pads while the toy was
 wedged in the mouth (85.3 mm deep, 47 % inside, 0.1 mm of shell penetration, no
 inverted tetrahedra); the same travel at 20 mm/s stalled at 12 mm.
 """
+ARM_PRESS_DEPTH = 0.040
+"""The arm's press depth [m]: it has no force cap, and 130 mm reached 330 N."""
 PRESS_HOLD = 0.5
 """How long the press holds at its deepest pose [s]."""
 JAM_OPEN = 0.6
@@ -241,10 +253,11 @@ def build_scene(
     bore: float,
     cap: float,
     push_cap: float,
-    mu: float | None = 8.0,
+    mu: float | None = arm_gripper.GLOBAL_MU,
     squeeze: float = GRIP_SQUEEZE,
     self_contact: bool = True,
     claw: str = "arm",
+    grip_mu: float = arm_gripper.GRIP_MU,
 ):
     for relative, expected in SOURCE_HASHES.items():
         actual = hashlib.sha256((ASSET / relative).read_bytes()).hexdigest()
@@ -469,7 +482,14 @@ def build_scene(
         raise RuntimeError("RSS lost Clawhauser tetrahedra or part labels")
     if sim.model.attachment_particle_body_count:
         raise RuntimeError("the contact grasp scene must not contain particle attachments")
-    if mu is not None:
+    if grip is None:
+        # Pad-only grip friction: a global 8 also made the toy grip the glass (2.8)
+        # and itself (8).
+        geometry["friction"] = arm_gripper.set_contact_friction(
+            sim, global_mu=arm_gripper.GLOBAL_MU if mu is None else mu, grip_mu=grip_mu
+        )
+        geometry["global_soft_contact_mu"] = geometry["friction"]["global_soft_contact_mu"]
+    elif mu is not None:
         # Newton VBD exposes one global soft-contact friction coefficient; this is
         # it, and it is the knob the sweep turns. The solver steps the model it was
         # built with, so if that is a distinct object the assignment has to land
@@ -544,6 +564,8 @@ def carry_path(positions, target, dt: float, capacity: int, geometry: dict, clos
     arms.
     """
     centre = 0.5 * (np.asarray(positions, dtype=np.float64)[0] + positions[1])
+    raise_m = float(geometry.get("raise_m", 0.0))
+    move_from = RAISE_TIME if raise_m > 0.0 else 0.0
     lower_at = CARRY_TIME + CARRY_HOLD
     descend_at = lower_at + LOWER_TIME
     open_at = descend_at + DESCENT_TIME + 0.6
@@ -555,9 +577,10 @@ def carry_path(positions, target, dt: float, capacity: int, geometry: dict, clos
         gap = closed + (OPENED_HALF_GAP - closed) * smooth(time, open_at, open_at + 0.5)
         place = np.array(
             [
-                centre[0] + (float(target[0]) - centre[0]) * smooth(time, 0.0, CARRY_TIME),
-                centre[1] + (float(target[1]) - centre[1]) * smooth(time, 0.0, CARRY_TIME),
+                centre[0] + (float(target[0]) - centre[0]) * smooth(time, move_from, CARRY_TIME),
+                centre[1] + (float(target[1]) - centre[1]) * smooth(time, move_from, CARRY_TIME),
                 centre[2]
+                + raise_m * smooth(time, 0.0, RAISE_TIME)
                 + geometry["lower_m"] * smooth(time, lower_at, descend_at)
                 + max(-DESCEND_RATE * max(0.0, time - descend_at), geometry["descend_m"])
                 + WITHDRAW_Z * smooth(time, withdraw_at, withdraw_at + 0.5),
@@ -632,7 +655,13 @@ def chase_path(positions: np.ndarray, dt: float, body_centre: np.ndarray) -> np.
     return poses
 
 
-def press_path(positions: np.ndarray, dt: float, start_half_gap: float = RELEASE_HALF_GAP) -> np.ndarray:
+def press_path(
+    positions: np.ndarray,
+    dt: float,
+    start_half_gap: float = RELEASE_HALF_GAP,
+    depth: float = PRESS_DEPTH,
+    opened: float = OPENED_HALF_GAP,
+) -> np.ndarray:
     """From the contact pose: press straight down, hold, open, then rise.
 
     The pads start at ``start_half_gap``: the release gap when the chase hands
@@ -642,7 +671,7 @@ def press_path(positions: np.ndarray, dt: float, start_half_gap: float = RELEASE
     """
     positions = np.asarray(positions, dtype=np.float64)
     centre = 0.5 * (positions[0] + positions[1])
-    press_s = PRESS_DEPTH / PRESS_RATE
+    press_s = depth / PRESS_RATE
     hold_end = press_s + PRESS_HOLD
     # Open before rising: loaded into the plush, the jaws cannot slide out from
     # under that normal, and rising while opening dragged the toy up by 26 mm.
@@ -653,7 +682,7 @@ def press_path(positions: np.ndarray, dt: float, start_half_gap: float = RELEASE
     poses[:, :, 3:] = (0.0, 0.0, 0.0, 1.0)
     for index in range(count):
         time = index * dt
-        gap = start_half_gap + (OPENED_HALF_GAP - start_half_gap) * smooth(time, hold_end, open_end)
+        gap = start_half_gap + (opened - start_half_gap) * smooth(time, hold_end, open_end)
         drop = -PRESS_RATE * min(time, press_s)
         rise = WITHDRAW_Z * smooth(time, open_end, rise_end)
         poses[index, 0, :3] = centre + np.array([-gap, 0.0, drop + rise])
@@ -679,10 +708,11 @@ def run(
     bore: float = BORE_RADIUS,
     cap: float = arm_gripper.GRASP_LIMIT_N,
     push_cap: float = PUSH_LIMIT_N,
-    mu: float | None = 8.0,
+    mu: float | None = arm_gripper.GLOBAL_MU,
     squeeze: float = GRIP_SQUEEZE,
     enable_self_contact: bool = True,
     claw: str = "arm",
+    grip_mu: float = arm_gripper.GRIP_MU,
 ) -> dict:
     out.mkdir(parents=True, exist_ok=True)
     sim, obj, grip, camera, ring, glass_shapes, glass_bodies, geometry = build_scene(
@@ -694,6 +724,7 @@ def run(
         squeeze=squeeze,
         self_contact=enable_self_contact,
         claw=claw,
+        grip_mu=grip_mu,
     )
     entity = obj.entity
     particles = entity.particles
@@ -733,9 +764,9 @@ def run(
     if grip is None:
         closed_gap = reach - squeeze + arm_gripper.PAD_INNER_OFFSET
         open_gap = arm_gripper.OPEN_HALF_GAP - arm_gripper.PAD_INNER_OFFSET
-        # At the substep rate, as the claw's own capacity is: 8 s covers close, lift
-        # and hang; `carry_path` replans at the end of the hang.
-        capacity = round(8.0 * CONTROL_HZ) * SUBSTEPS
+        # At the substep rate, as the claw's own capacity is. `carry_path` reuses it
+        # and runs ~11.6 s, so 8 s cut its descent off.
+        capacity = round(12.0 * CONTROL_HZ) * SUBSTEPS
     else:
         closed_gap = float(grip.spec.closed_half_gap)
         open_gap = float(grip.spec.half_gap)
@@ -814,6 +845,8 @@ def run(
     chase_frame = None
     press_frame = None
     shape_body = sim.model.shape_body.numpy()
+    # The arm presses shallower, and opens fully before it rises.
+    arm_press = () if grip is not None else (ARM_PRESS_DEPTH, arm_gripper.OPEN_HALF_GAP)
     body_contact_seen = False
     jam_streak = 0
     depth_best = 0.0
@@ -973,7 +1006,11 @@ def run(
                 # has to come from where it actually hangs or the descent starts
                 # with the tail already inside the mouth.
                 hanging = dict(geometry)
-                hanging["lower_m"] = APPROACH - (float(owned[:, 2].min()) - rim)
+                lowest = float(owned[:, 2].min())
+                hanging["raise_m"] = min(
+                    max(0.0, rim + CARRY_CLEARANCE - lowest), max(0.0, PADS_MAX_Z - float(fingers[:, 2].mean()))
+                )
+                hanging["lower_m"] = APPROACH - (lowest + hanging["raise_m"] - rim)
                 paths, descend = carry_path(fingers, target, dt, capacity, hanging, closed_gap)
                 set_path(paths, start=frame + 1)
                 descend_frame = frame + 1 + round(descend * CONTROL_HZ)
@@ -983,6 +1020,8 @@ def run(
                             "carry_frame": frame + 1,
                             "body_from_pads_mm": (1000.0 * (body - pads)).tolist(),
                             "carry_mm": (1000.0 * (target - pads)).tolist(),
+                            "lowest_over_rim_mm": 1000.0 * (lowest - rim),
+                            "raise_mm": 1000.0 * hanging["raise_m"],
                         }
                     ),
                     flush=True,
@@ -1003,14 +1042,18 @@ def run(
             # Armed once the toy's own lowest point is under the rim: before that
             # the depth is the claw's descent and cannot stall.
             armed = depth_best > 0.0 and frame >= descend_frame
-            jam_streak = jam_streak + 1 if armed and frame - progress_frame >= JAM_FRAMES else 0
+            # A toy still sliding in when the descent runs out is pressed from there.
+            stalled = frame - progress_frame >= JAM_FRAMES or frame + 1 >= descend_frame + DESCENT_TIME * CONTROL_HZ
+            jam_streak = jam_streak + 1 if armed and stalled else 0
             if jam_frame is None and jam_streak > 0:
                 jam_frame = frame + 1
                 fingers = np.array([[body_q[b][0], body_q[b][1], body_q[b][2]] for b in finger_bodies])
                 body_centre = body_top_centre(owned, ring)[:2]
                 pads = 0.5 * (fingers[0] + fingers[1])[:2]
                 over_bore = float(np.linalg.norm(pads - axis)) < bore
-                if over_bore:
+                # The arm's toy hangs canted, so its pads are off the bore when the
+                # tail is in; it presses with the pinch either way.
+                if over_bore or grip is None:
                     # Stalled over the bore with the pinch still on the loop: this
                     # is the press's cue, not the release's. Opening here drops the
                     # toy -- measured, it tipped off the rim, fell to the bench and
@@ -1020,7 +1063,7 @@ def run(
                         if grip is not None
                         else arm.aperture() + arm_gripper.PAD_INNER_OFFSET
                     )
-                    set_path(press_path(fingers, dt, start_half_gap=held), start=frame + 1)
+                    set_path(press_path(fingers, dt, held, *arm_press), start=frame + 1)
                     press_frame = frame + 1
                 else:
                     set_path(after_jam(fingers, dt, closed_gap), start=frame + 1)
@@ -1350,7 +1393,12 @@ def main() -> None:
     parser.add_argument("--push-cap", type=float, default=PUSH_LIMIT_N, help="carrier push clamp [N]")
     parser.add_argument("--force-limit", type=float, default=None, help="alias for --cap, the sweep's name")
     parser.add_argument("--squeeze", type=float, default=GRIP_SQUEEZE, help="close travel past the loop [m]")
-    parser.add_argument("--mu", type=float, default=8.0, help="global soft-contact friction coefficient")
+    parser.add_argument(
+        "--mu", type=float, default=arm_gripper.GLOBAL_MU, help="the toy's global soft-contact friction coefficient"
+    )
+    parser.add_argument(
+        "--grip-mu", type=float, default=arm_gripper.GRIP_MU, help="the arm's pad-toy friction, set on the pads only"
+    )
     parser.add_argument(
         "--no-self-contact", dest="self_contact", action="store_false", help="turn the toy's self-contact off"
     )
@@ -1373,6 +1421,7 @@ def main() -> None:
         squeeze=args.squeeze,
         enable_self_contact=args.self_contact,
         claw=args.claw,
+        grip_mu=args.grip_mu,
     )
 
 
