@@ -78,6 +78,16 @@ class FleetSolution(SolutionCommon):
             the fleet itself.
     """
 
+    reads_verdicts: bool = True
+    """Whether this policy can read a live world's verdict off its slot while the episode runs.
+
+    True unless a policy can say otherwise: a scripted one may read ``slot.info``,
+    and a graph with the ``sim.*`` tools reaches it through ``sim.check_success``.
+    A runner scores a world on every step while this is true, and may leave a
+    :attr:`~robosimstudio_bench.goals.reward.Scored.memoryless` verdict unread
+    until the episode closes when it is false.
+    """
+
     def __init__(self, fleet, **kwargs: Any) -> None:
         self.fleet = fleet
         self.kwargs = kwargs

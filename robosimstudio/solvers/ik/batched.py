@@ -280,6 +280,8 @@ class RobotIKRig:
             np.asarray(ik_model.joint_q.numpy(), dtype=np.float32), dtype=wp.float32, device=device
         )
         self.seeds = wp.zeros((self.num_worlds, n_ik), dtype=wp.float32, device=device)
+        self.driving = False
+        """Whether the enables on the *device* name any world: :attr:`active` as of the last :meth:`flush`."""
         self._graph = None
         self._graph_key: tuple[int, int] | None = None
 
@@ -361,6 +363,7 @@ class RobotIKRig:
         """Push every arm's host-side targets and enables to the device."""
         for arm in self.arms.values():
             arm.flush()
+        self.driving = self.active
 
     def solution(self) -> np.ndarray:
         """The last solve's joint vectors, ``[worlds, ik_coords]``. Syncs."""

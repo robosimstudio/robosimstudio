@@ -78,6 +78,7 @@ __all__ = [
     "Peak",
     "WorstOf",
     "combinator_names",
+    "holds_history",
 ]
 
 
@@ -368,6 +369,27 @@ class WorstOf(Node):
             reward=results[worst].reward,
             metrics=metrics,
         )
+
+
+def holds_history(node: Node) -> bool:
+    """Whether what this node answers now depends on what it was asked before.
+
+    False only for a tree of the pure shapes: :class:`AllOf`, :class:`AnyOf`,
+    :class:`Not`, :class:`WorstOf` over leaves that measure one snapshot. Every
+    other node -- the temporal combinators, and anything a later change adds,
+    which is why this is an allowlist -- answers "yes", as does a leaf with a
+    smoothing window (:attr:`Leaf.on_reset` is how a measure declares one).
+
+    What :attr:`~robosimstudio_bench.goals.reward.Scored.memoryless` is built
+    from. A pure tree scored once at the end says what it would have said had
+    it been scored on every step, so it can be left alone until its answer is
+    needed; a stateful one cannot.
+    """
+    if isinstance(node, Leaf):
+        return node.on_reset is not None
+    if type(node) in (AllOf, AnyOf, Not, WorstOf):
+        return any(holds_history(child) for child in node.children())
+    return True
 
 
 @dataclass

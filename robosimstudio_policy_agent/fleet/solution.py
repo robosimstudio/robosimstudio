@@ -317,6 +317,19 @@ class SolutionGraphBatched(FleetSolution):
             timeout=stall_timeout or self.bus_timeout,
         )
 
+    @property
+    def reads_verdicts(self) -> bool:
+        """Whether this wave's graphs can see the evaluator: only with the privileged tools.
+
+        Every road from a graph to ``snapshot.info`` is a privileged tool:
+        ``sim.check_success`` and ``sim.next_goal``, and the suites' own readers
+        (``tool_hanging``'s job cursor), all of them ``sim.`` names or tagged
+        ``privileged``, which :class:`~robosimstudio_policy_agent.connector.NonPrivilegedRegistry`
+        drops. That boundary is what ``--no-privileged`` means: a graph that can
+        read the verdict is not running on vision.
+        """
+        return self.privileged
+
     # ------------------------------------------------------------------ set-up
     @staticmethod
     def _resolve_graph(fleet, graph: str, *, registries: Any = None) -> str:

@@ -47,6 +47,8 @@ from __future__ import annotations
 import multiprocessing
 import os
 import queue
+import shutil
+import tempfile
 import time
 from collections.abc import Sequence
 from dataclasses import dataclass, field, replace
@@ -54,6 +56,7 @@ from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any
 
+from robosimstudio.core.gpu_turn import TURN_ENV
 from robosimstudio.record import EpisodeStore, RunMeta
 from robosimstudio.specs import JobSpec
 
@@ -366,6 +369,9 @@ def run_pooled(
     wave_off = _wave_off_array(ctx, len(job_list))
     wave_guard = (watch.wave_steps, watch.wave_worlds, wave_off) if watch.guards_waves else None
     threads = threads_per_worker or max(1, (os.cpu_count() or workers) // workers)
+    # Several workers on a GPU take turns between their renders and their physics:
+    # see robosimstudio.core.gpu_turn. A caller's own setting stands, off included.
+    turn_dir = tempfile.mkdtemp(prefix="rss-gpu-turn-") if workers > 1 and not os.environ.get(TURN_ENV) else ""
 
     def spawn(index: int, *, stagger_s: float = 0.0, generation: int = 0, first: Any = None):
         """A worker process, not yet started; a replacement passes the unit it inherits as ``first``."""
@@ -392,6 +398,9 @@ def run_pooled(
         # else this process starts inherits a cap meant for these workers. A
         # replacement the watchdog starts later gets the same cap the same way.
         saved_threads = _limit_threads(threads, override=bool(threads_per_worker))
+        saved_turn = {TURN_ENV: os.environ.get(TURN_ENV)}
+        if turn_dir:
+            os.environ[TURN_ENV] = turn_dir
         try:
             for proc in processes:
                 proc.start()
@@ -399,6 +408,7 @@ def run_pooled(
             # A spawned child copies the environment at ``start``, so it is safe
             # to restore now.
             _restore_env(saved_threads)
+            _restore_env(saved_turn)
 
     started = datetime.now(UTC).isoformat()
     wall0 = time.perf_counter()
@@ -426,6 +436,9 @@ def run_pooled(
         # the run's private MPS daemon was left behind.
         _stop(procs, grace=5.0)
         raise
+    finally:
+        if turn_dir:
+            shutil.rmtree(turn_dir, ignore_errors=True)
     wall = time.perf_counter() - wall0
     _stop(procs, grace=30.0)
 
@@ -1281,6 +1294,7 @@ class _FleetWorker:
             # A wave stamps progress on every scoring step. A pool worker never
             # serves a live view (``--view`` needs one process), so the hook is free.
             self.runner.on_wave_tick = self._tick
+            self.runner.tick_reads_verdicts = False
             self.task = job_task(job)
             self.job = job
             # Documents resolve with the job's seed applied, so a cache filled

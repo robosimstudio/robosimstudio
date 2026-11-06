@@ -432,6 +432,51 @@ def _viewer_class():
             super().__init__(**kwargs)
 
         # -- stage ------------------------------------------------------------
+        def set_visible_worlds(self, worlds) -> None:
+            """Which worlds the overlays draw, leaving the shape batches alone once rendering has begun.
+
+            :meth:`RendererRTX.render_worlds` calls this ``n + 1`` times for a
+            look at ``n`` worlds. Newton's version clears every shape batch and
+            runs ``_populate_shapes`` again, a Python loop over every shape of
+            every visible world, and in the render phase nothing it rebuilds is
+            read: ``ViewerRTX`` writes transforms from the flat prim rows it
+            built once, at the end of the build phase (``_build_flat_shape_arrays``),
+            and ``log_state`` touches the batches only to clear a flag and to
+            follow ``show_ground``. So the rebuild is the whole of the cost and
+            none of the picture. Measured at 15 worlds on the three-camera
+            ``yam_station_cable@v1`` rig: a render took 775 ms, of which this
+            call was 631 ms against 83 ms in the tracer and 56 ms in the readback.
+            That was 13 % of a ``cable_routing/L2`` wave's wall time, and it
+            grows with the wave. Rendered without it the frames match those
+            with it to 0.24-0.27 grey levels in 255, against 0.18 between two
+            runs of the old code and 0.5-0.9 between two renders in one run; the
+            depth is the same to 0.01 mm, and a world compared with any other
+            differs by 2.6-3.1.
+
+            Everything else Newton's version does still happens, because the
+            overlays do read it: the mask, the triangle caches, the world
+            offsets. It runs in full in the build phase, whose batches do become
+            the stage, and for a Gaussian or an SDF isomesh, which are logged
+            per world from what ``_populate_shapes`` collects.
+            """
+            if self._phase != self._PHASE_RENDER or self._gaussian_instances or self._sdf_isomesh_instances:
+                super().set_visible_worlds(worlds)
+                return
+            count = self.model.world_count
+            self._visible_worlds = None if worlds is None else {w for w in worlds if 0 <= w < count}
+            self._build_visible_worlds_mask()
+            self._triangle_appearance_groups = None
+            self._triangle_appearance_signature = None
+            self._triangle_color_cached = None
+            self._triangle_opacity_cached = None
+            self._triangle_color_change_flag = None
+            self._triangle_opacity_change_flag = None
+            if self._user_spacing is not None:
+                self.set_world_offsets(self._user_spacing)
+            else:
+                self._auto_compute_world_offsets()
+            self.model_changed = True
+
         def _add_camera_lights_and_render_product(self):
             """Author the rig beside the viewport Newton just authored."""
             super()._add_camera_lights_and_render_product()
