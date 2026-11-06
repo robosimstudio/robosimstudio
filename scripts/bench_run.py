@@ -349,11 +349,23 @@ def create_parser() -> argparse.ArgumentParser:
         help="re-runs of a killed worker's episode before it is written as a watchdog error row (default 1)",
     )
     group.add_argument(
+        "--watchdog-wave-steps",
+        type=int,
+        default=None,
+        metavar="N",
+        help=(
+            "a wave whose every world a graph aborted by control step N is run once more on a fresh worker: "
+            "its worker's renderer is the likelier fault. A graph that fails again keeps its first rows, so "
+            "it scores the same. 0 turns this off (default 500)"
+        ),
+    )
+    group.add_argument(
         "--no-watchdog",
         action="store_true",
         help=(
-            "never kill a silent worker (the pool then waits on a hung one for ever). Without any "
-            "--watchdog flag, ROBOSIMSTUDIO_POOL_WATCHDOG ('off', or 'build=S,step=S,retries=N') decides"
+            "never kill a silent worker (the pool then waits on a hung one for ever), and never re-run a wave. "
+            "Without any --watchdog flag, ROBOSIMSTUDIO_POOL_WATCHDOG ('off', or "
+            "'build=S,step=S,retries=N,wave_steps=N,wave_worlds=N') decides"
         ),
     )
 
@@ -756,6 +768,7 @@ def watchdog_from_args(args: argparse.Namespace) -> Watchdog | None:
             ("build_s", args.watchdog_build),
             ("step_s", args.watchdog_step),
             ("retries", args.watchdog_retries),
+            ("wave_steps", args.watchdog_wave_steps),
         )
         if value is not None
     }

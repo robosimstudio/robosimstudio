@@ -118,6 +118,11 @@ class Watchdog:
             before its episodes are written as ``close_kind="watchdog"``
             error rows.
 
+        wave_steps: A wave every world of which a graph aborted by this control
+            step is one the pool does not believe yet; see :func:`_wave_aborted`.
+            0 turns that off.
+        wave_worlds: The narrowest wave that rule applies to.
+
     A batched (fleet) unit is one wave, so a kill re-runs every world in it, and
     a wave's reset or mid-unit rebuild has no stamp of its own: a fleet unit gets
     the larger of the two budgets throughout.
@@ -126,10 +131,16 @@ class Watchdog:
     build_s: float = 900.0
     step_s: float = 300.0
     retries: int = 1
+    wave_steps: int = 500
+    wave_worlds: int = 6
 
     @property
     def enabled(self) -> bool:
         return self.build_s > 0 or self.step_s > 0
+
+    @property
+    def guards_waves(self) -> bool:
+        return self.enabled and self.wave_steps > 0
 
     @classmethod
     def from_env(cls, value: str | None = None) -> Watchdog:
@@ -148,13 +159,17 @@ class Watchdog:
         for part in text.split(","):
             key, sep, number = part.partition("=")
             key = key.strip()
-            if not sep or key not in ("build", "step", "retries"):
-                raise ValueError(f"{WATCHDOG_ENV}={text!r}: expected 'off' or 'build=S,step=S,retries=N'")
+            if not sep or key not in ("build", "step", "retries", "wave_steps", "wave_worlds"):
+                raise ValueError(
+                    f"{WATCHDOG_ENV}={text!r}: expected 'off' or 'build=S,step=S,retries=N,wave_steps=N,wave_worlds=N'"
+                )
             fields_[key] = float(number)
         return cls(
             build_s=fields_.get("build", cls.build_s),
             step_s=fields_.get("step", cls.step_s),
             retries=int(fields_.get("retries", cls.retries)),
+            wave_steps=int(fields_.get("wave_steps", cls.wave_steps)),
+            wave_worlds=int(fields_.get("wave_worlds", cls.wave_worlds)),
         )
 
     def budget(self, job: JobSpec, phase: int, attempt: int) -> float:
@@ -173,7 +188,44 @@ class Watchdog:
         return 0.0
 
     def provenance(self) -> dict[str, Any]:
-        return {"build_s": self.build_s, "step_s": self.step_s, "retries": self.retries}
+        return {
+            "build_s": self.build_s,
+            "step_s": self.step_s,
+            "retries": self.retries,
+            "wave_steps": self.wave_steps,
+            "wave_worlds": self.wave_worlds,
+        }
+
+
+def _aborted_early(row: dict[str, Any], steps: int) -> bool:
+    """Whether a graph ended this episode by control step ``steps``, rather than the task or the clock."""
+    return bool(row.get("graph_error")) and not row.get("success") and int(row.get("episode_length", 0)) <= steps
+
+
+def _wave_aborted(rows: Sequence[dict[str, Any]], width: int, steps: int, worlds: int) -> bool:
+    """Whether a finished wave looks like a fault of its worker rather than a result of its graph.
+
+    **Now and then a renderer draws a material without its diffuse colour, for
+    its whole life, and says nothing.** On ``cable_routing`` that material holds
+    the cable and the bench: they come out black, the graph's first perception
+    finds no cable, and all 15 worlds of the wave abort at control step 85 with
+    "No feasible grasp relative to the fixed anchor", while the other worker's
+    wave in the same bench is fine. A worker's fault takes its whole wave, and
+    a graph's early failures do not line up like that:
+
+    Of the 131 waves at least 6 wide in the pooled batched runs on disk, 123 had
+    no world abort within 500 steps and 8 had every world abort, with nothing in
+    between. All 8 were the worker: 4 of these bad renderers at step 85 and 4
+    ``BusTimeout: render was not answered within 180 s`` at step 291. A graph's
+    own failures showed up later, and are left alone by the 500: whole waves
+    aborted from step 807 and from step 8,040.
+
+    Width is the evidence, so a wave narrower than ``worlds`` never qualifies --
+    a serial episode that aborts says nothing about its worker -- and neither
+    does a wave whose rows do not cover its work, which raised part way and is
+    reported as what it is.
+    """
+    return len(rows) >= max(1, worlds) and len(rows) >= width and all(_aborted_early(row, steps) for row in rows)
 
 
 # What a worker is doing, as its progress slot says. Idle is never watched: it
@@ -197,8 +249,9 @@ class PoolResult(RunSummary):
             what the run actually cost, whatever it was spent on.
         wave_wall_s: For a batched job, every wave's wall time, from every
             worker that ran one. Empty for a serial job.
-        watchdog: The pool's :class:`Watchdog` settings and every worker it
-            killed on this job's units (``kills``), for the run's provenance.
+        watchdog: The pool's :class:`Watchdog` settings, every worker it killed
+            on this job's units (``kills``) and every wave it ran twice
+            (``wave_retries``), for the run's provenance.
     """
 
     pool_wall_s: float = 0.0
@@ -308,6 +361,10 @@ def run_pooled(
 
     watch = watchdog if watchdog is not None else Watchdog.from_env()
     progress = _progress_array(ctx, workers)
+    # ``(steps, worlds, per-job off flags)``; the flags are how a job whose re-run
+    # failed too tells its workers to stop asking. See :meth:`_Watcher.wave`.
+    wave_off = _wave_off_array(ctx, len(job_list))
+    wave_guard = (watch.wave_steps, watch.wave_worlds, wave_off) if watch.guards_waves else None
     threads = threads_per_worker or max(1, (os.cpu_count() or workers) // workers)
 
     def spawn(index: int, *, stagger_s: float = 0.0, generation: int = 0, first: Any = None):
@@ -322,6 +379,7 @@ def run_pooled(
                 "progress": progress,
                 "generation": generation,
                 "first": first,
+                "wave_guard": wave_guard,
             },
             name=f"pool-{index}" if not generation else f"pool-{index}r{generation}",
         )
@@ -347,7 +405,9 @@ def run_pooled(
     procs = [spawn(index, stagger_s=stagger * index) for index in range(workers)]
     start(procs)
     watcher = (
-        _Watcher(watch, job_list, units, progress, spawn, start, devices=worker_devices, verbose=verbose)
+        _Watcher(
+            watch, job_list, units, progress, spawn, start, devices=worker_devices, verbose=verbose, wave_off=wave_off
+        )
         if watch.enabled
         else None
     )
@@ -383,7 +443,11 @@ def run_pooled(
             workers=workers,
             builds=[build for job_index, build in builds if job_index == index],
             wave_wall_s=list(waves.get(index, [])),
-            watchdog={**watch.provenance(), "kills": kills} if watch.enabled else {"off": True},
+            watchdog=(
+                {**watch.provenance(), "kills": kills, "wave_retries": watcher.wave_retries.get(index, [])}
+                if watcher is not None
+                else {"off": True}
+            ),
         )
         _write_pooled(result, started=started)
         out[job.name] = result
@@ -421,6 +485,12 @@ def _progress_array(ctx, workers: int):
     return make("d", _SLOT * workers, lock=False) if make is not None else [0.0] * (_SLOT * workers)
 
 
+def _wave_off_array(ctx, jobs: int):
+    """One flag per job, set by the parent and read by the workers, so no lock; as :func:`_progress_array`."""
+    make = getattr(ctx, "Array", None)
+    return make("b", jobs, lock=False) if make is not None else [0] * jobs
+
+
 class _Watcher:
     """The parent's half of the :class:`Watchdog`: read the stamps, kill the silent, re-run their units.
 
@@ -433,7 +503,9 @@ class _Watcher:
     a gap, and the replacement goes on with the queue.
     """
 
-    def __init__(self, watchdog: Watchdog, jobs, units, progress, spawn, start, *, devices, verbose: bool) -> None:
+    def __init__(
+        self, watchdog: Watchdog, jobs, units, progress, spawn, start, *, devices, verbose: bool, wave_off: Any = None
+    ) -> None:
         self.watchdog = watchdog
         self.jobs = list(jobs)
         self.units = units
@@ -447,6 +519,11 @@ class _Watcher:
         self.kills: list[dict[str, Any]] = []
         self.rerun: set[tuple[int, str, int]] = set()
         """``(job index, task, episode id)`` of every unit handed to a replacement."""
+        self.wave_off = wave_off if wave_off is not None else [0] * len(self.jobs)
+        self.wave_retries: dict[int, list[dict[str, Any]]] = {}
+        """Job index -> what :meth:`wave` did about each wave it ran twice, for the provenance."""
+        self.held: dict[int, dict[str, Any]] = {}
+        """Unit -> the first attempt of a wave being re-run: its rows, its walls and its provenance record."""
         self._next = 0.0
 
     def slot(self, index: int) -> tuple[float, int, int]:
@@ -514,13 +591,134 @@ class _Watcher:
                     self.rerun.update((held[0], name or job.task, int(ep)) for name, ep in held[1])
                 else:
                     kill["action"] = "error rows"
-                    rows.extend((held[0], self._error_row(job, index, name, ep, kill)) for name, ep in held[1])
+                    if uid in self.held:
+                        # The re-run of a wave hung for good. Its first attempt
+                        # is still the only result that wave has.
+                        kill["action"] = "first attempt stands"
+                        rows.extend((held[0], row) for row in self._settle(uid, "re-run hung"))
+                    else:
+                        rows.extend((held[0], self._error_row(job, index, name, ep, kill)) for name, ep in held[1])
             self.kills.append(kill)
             self._say(index, kill, job)
-            self.generation[index] = self.generation.get(index, 0) + 1
-            procs[index] = self.spawn(index, generation=self.generation[index], first=first)
-            self.start([procs[index]])
+            self._replace(procs, index, first)
         return rows, gone
+
+    def _replace(self, procs: list, index: int, first: Any) -> None:
+        self.generation[index] = self.generation.get(index, 0) + 1
+        procs[index] = self.spawn(index, generation=self.generation[index], first=first)
+        self.start([procs[index]])
+
+    def wave(
+        self,
+        procs: list,
+        index: int,
+        job_index: int,
+        uid: int,
+        rows: list[dict[str, Any]],
+        walls: list[float],
+        *,
+        leaving: int = 0,
+    ) -> tuple[list[dict[str, Any]], list[float]]:
+        """Decide what a finished wave's rows come to; returns the rows and wave times that count.
+
+        **A wave that looks like its worker's fault is run once more, on a new
+        process, and the two runs together decide.** A healthy wave passes
+        straight through, and costs nothing but the check.
+
+        **What the re-run must not do is flatter a graph that really fails.** So
+        its rows only replace the first attempt's if it came back mostly clean
+        -- fewer than half its worlds aborted early, which a broken graph does
+        not manage and a fresh renderer does. Otherwise the first attempt's rows
+        stand, exactly as if this rule did not exist, and the job stops asking:
+        a graph that aborts everywhere scores what it scored before this was
+        written, for the price of one extra build and wave per worker that got
+        there before the first verdict came back.
+
+        The worst it can flatter is a graph whose worlds abort independently,
+        which needs every world to abort in the first attempt and most not to
+        in the second. Whatever the abort rate, that replaces at most 1 wave in
+        4,000 at a width of 15 and 1 in 110 at a width of 6, the narrowest
+        :attr:`Watchdog.wave_worlds` lets through (the worst case is a rate
+        near 70%, and no graph on disk aborts part of a wave that early: see
+        :func:`_wave_aborted`).
+
+        Args:
+            procs: The workers, updated in place when ``index`` is replaced.
+            index: The worker that ran the wave.
+            job_index: Its job.
+            uid: Its unit; below 0 for a caller's own, never re-run.
+            rows: A row per world scored.
+            walls: The wall times of the fleet waves that scored them.
+            leaving: The pid of a worker that judged its wave by
+                :func:`_wave_aborted` and left (see
+                :meth:`_FleetWorker.send_wave`), 0 if it did not. It needs a
+                replacement whatever is decided here, unless the watchdog
+                already gave it one.
+        """
+        steps = self.watchdog.wave_steps
+        job = self.jobs[job_index]
+        unit = self.units[uid] if 0 <= uid < len(self.units) else None
+        width = len(unit[1]) if unit is not None else len(rows)
+        gone = bool(leaving) and getattr(procs[index], "pid", None) == leaving
+        first = None
+        if uid in self.held:
+            early = sum(_aborted_early(row, steps) for row in rows)
+            self.held[uid]["record"]["rerun"] = _wave_digest(rows, steps, width)
+            # Added so a row that arrives later for this wave (the error rows of
+            # a re-run that raised) cannot sit beside the one that stood.
+            self.rerun.update((job_index, str(row.get("task", "")), int(row.get("episode_id", -1))) for row in rows)
+            if len(rows) >= width and early * 2 < len(rows):
+                self.held[uid]["record"].update(outcome="cleared", stood="rerun")
+                self.held.pop(uid)
+                self._say_wave(index, f"re-run of unit {uid} came back clean ({early} of {len(rows)} aborted early)")
+            else:
+                self.wave_off[job_index] = 1
+                walls = list(self.held[uid]["walls"])
+                rows = self._settle(uid, "failed again")
+                self._say_wave(
+                    index, f"re-run of unit {uid} failed too: its first attempt stands, and this job re-runs no more"
+                )
+        elif gone and unit is not None and not self.wave_off[job_index]:
+            record = {
+                "worker": index,
+                "unit": uid,
+                "shard": _shard_root(Path(), job, index, self.generation.get(index, 0)).name,
+                "episodes": [[name or job.task, int(ep)] for name, ep in unit[1]],
+                "first": _wave_digest(rows, steps, width),
+            }
+            self.wave_retries.setdefault(job_index, []).append(record)
+            self.held[uid] = {"rows": list(rows), "walls": list(walls), "record": record, "job": job_index}
+            self.rerun.update((job_index, str(row.get("task", "")), int(row.get("episode_id", -1))) for row in rows)
+            first = (job_index, unit[1], uid)
+            self._say_wave(
+                index, f"every world of unit {uid} aborted early, {record['first']['error']!r}; re-running it"
+            )
+            rows, walls = [], []
+        if gone:
+            # The same replacement a kill gets; the slot goes to the replacement
+            # now, so nothing of this worker may still be stamping it.
+            procs[index].kill()
+            procs[index].join(timeout=30.0)
+            base = _SLOT * index
+            self.progress[base + 1] = _IDLE
+            self.progress[base] = 0.0
+            self._replace(procs, index, first)
+        return rows, walls
+
+    def _settle(self, uid: int, outcome: str) -> list[dict[str, Any]]:
+        """Let a wave's first attempt stand; returns its rows."""
+        held = self.held.pop(uid)
+        held["record"].update(outcome=outcome, stood="first")
+        return held["rows"]
+
+    def unsettled(self) -> list[tuple[int, dict[str, Any]]]:
+        """The first attempts of waves whose re-run never reported: the worker died, and these are still results."""
+        rows = [(held["job"], row) for uid, held in list(self.held.items()) for row in self._settle(uid, "re-run died")]
+        return rows
+
+    def _say_wave(self, index: int, what: str) -> None:
+        if self.verbose:
+            print(f"[pool] wave guard: w{index}: {what}", flush=True)
 
     def _error_row(self, job: JobSpec, index: int, name: str, episode_id: int, kill: dict[str, Any]) -> dict[str, Any]:
         return {
@@ -547,6 +745,7 @@ class _Watcher:
         then = {
             "retried": "re-running the unit on a fresh worker",
             "error rows": "out of retries; writing its episodes as watchdog errors",
+            "first attempt stands": "out of retries; the wave's first attempt stands",
             "replaced": "replacing it",
             "closed": "it was closing down",
         }[kill["action"]]
@@ -555,6 +754,20 @@ class _Watcher:
             f"({what}; budget {kill['budget_s']:.0f} s); killed it, {then}",
             flush=True,
         )
+
+
+def _wave_digest(rows: Sequence[dict[str, Any]], steps: int, width: int) -> dict[str, Any]:
+    """What the provenance keeps of one attempt at a wave; the rows themselves stay in its shard."""
+    errors = [str(row.get("graph_error", "")) for row in rows if row.get("graph_error")]
+    lengths = [int(row.get("episode_length", 0)) for row in rows]
+    return {
+        "worlds": width,
+        "rows": len(rows),
+        "aborted_early": sum(_aborted_early(row, steps) for row in rows),
+        "successes": sum(bool(row.get("success")) for row in rows),
+        "steps": [min(lengths), max(lengths)] if lengths else [],
+        "error": errors[0][:400] if errors else "",
+    }
 
 
 def _collect(procs, results, *, total: int, wall0: float, verbose: bool, watcher: _Watcher | None = None):
@@ -578,6 +791,26 @@ def _collect(procs, results, *, total: int, wall0: float, verbose: bool, watcher
     waves: dict[int, list[float]] = {}
     seen: set[tuple[int, str, int]] = set()
     live = len(procs)
+
+    def take(worker: int, job_index: int, row: dict[str, Any]) -> None:
+        key = (job_index, str(row.get("task", "")), int(row.get("episode_id", -1)))
+        if watcher is not None and key in watcher.rerun and key in seen:
+            # A worker killed just as it sent its row, and the re-run sent
+            # another: the episode is counted once.
+            return
+        seen.add(key)
+        rows.append((job_index, row))
+        # A job's span runs from the moment its first episode started to the
+        # moment its last one finished. Timed on arrival here rather than in
+        # the row, because the row is the results file's schema and this is
+        # bookkeeping about the schedule.
+        done_at = time.perf_counter() - wall0
+        began_at = done_at - float(row.get("wall_s", 0.0))
+        first, last = spans.get(job_index, (began_at, done_at))
+        spans[job_index] = (min(first, began_at), max(last, done_at))
+        if verbose:
+            _print_row(worker, row, done=len(rows), total=total, wall0=wall0)
+
     while live > 0:
         if watcher is not None:
             failed, gone = watcher.check(procs)
@@ -598,23 +831,15 @@ def _collect(procs, results, *, total: int, wall0: float, verbose: bool, watcher
         kind = message[0]
         if kind == "row":
             _, worker, job_index, row = message
-            key = (job_index, str(row.get("task", "")), int(row.get("episode_id", -1)))
-            if watcher is not None and key in watcher.rerun and key in seen:
-                # A worker killed just as it sent its row, and the re-run sent
-                # another: the episode is counted once.
-                continue
-            seen.add(key)
-            rows.append((job_index, row))
-            # A job's span runs from the moment its first episode started to the
-            # moment its last one finished. Timed on arrival here rather than in
-            # the row, because the row is the results file's schema and this is
-            # bookkeeping about the schedule.
-            done_at = time.perf_counter() - wall0
-            began_at = done_at - float(row.get("wall_s", 0.0))
-            first, last = spans.get(job_index, (began_at, done_at))
-            spans[job_index] = (min(first, began_at), max(last, done_at))
-            if verbose:
-                _print_row(worker, row, done=len(rows), total=total, wall0=wall0)
+            take(worker, job_index, row)
+        elif kind == "wave":
+            _, worker, job_index, uid, wave_rows, walls, leaving = message
+            if watcher is not None:
+                wave_rows, walls = watcher.wave(procs, worker, job_index, uid, wave_rows, walls, leaving=leaving)
+            for row in wave_rows:
+                take(worker, job_index, row)
+            if walls:
+                waves.setdefault(job_index, []).extend(float(wall) for wall in walls)
         elif kind == "ready":
             _, worker, job_index, build = message
             builds.append((job_index, {**build, "worker": worker}))
@@ -624,13 +849,13 @@ def _collect(procs, results, *, total: int, wall0: float, verbose: bool, watcher
                     f"{build['device']}, {'cuda graph captured' if build['captured'] else 'EAGER (no capture)'}, "
                     f"{build['control_hz']:.0f} Hz x {build['substeps']} substeps"
                 )
-        elif kind == "waves":
-            _, _worker_index, job_index, walls = message
-            waves.setdefault(job_index, []).extend(float(wall) for wall in walls)
         elif kind == "done":
             live -= 1
         elif kind == "error":
             print(f"[pool] worker {message[1]} stopped: {message[2]}")
+    if watcher is not None:
+        for job_index, row in watcher.unsettled():
+            take(-1, job_index, row)
     return rows, builds, spans, waves
 
 
@@ -712,6 +937,7 @@ def _link_episodes(result: PoolResult) -> None:
     shards = result.root / "shards"
     if not shards.is_dir():
         return
+    _set_aside_attempts(result)
     # Every episode is tried, so one failed link does not drop the rest from
     # the run directory; the failures are reported once, at the end.
     failed: list[str] = []
@@ -728,6 +954,24 @@ def _link_episodes(result: PoolResult) -> None:
                 failed.append(f"{episode}: {exc}")
     if failed:
         print(f"[pool] could not link {len(failed)} of {total} episodes; first: {failed[0]}")
+
+
+def _set_aside_attempts(result: PoolResult) -> None:
+    """Move the recorded episodes of each wave's discarded first attempt out of :func:`_link_episodes`'s way.
+
+    The first shard to hold an episode wins its link, and that is the discarded
+    attempt's whenever the re-run's rows stood. Moved rather than deleted: it is
+    the evidence of what went wrong with that worker.
+    """
+    for record in result.watchdog.get("wave_retries", []):
+        if record.get("stood") != "rerun":
+            continue
+        shard = result.root / "shards" / str(record.get("shard", ""))
+        for _task, episode_id in record.get("episodes", []):
+            episode = shard / f"{int(episode_id):04d}"
+            if (episode / "meta.json").exists():
+                (shard / "discarded").mkdir(exist_ok=True)
+                episode.rename(shard / "discarded" / episode.name)
 
 
 # --------------------------------------------------------------------- worker
@@ -833,6 +1077,7 @@ def _worker(
     progress: Any = None,
     generation: int = 0,
     first: Any = None,
+    wave_guard: Any = None,
 ) -> None:
     """One process: build an environment, then pull episodes until the queue dries.
 
@@ -844,7 +1089,8 @@ def _worker(
     replacement the :class:`Watchdog` started runs ``first`` -- the unit its
     killed predecessor held -- before it pulls from the queue, into a shard of
     its own (``generation``) so a half-written episode of the dead one is never
-    mixed with the re-run.
+    mixed with the re-run. ``wave_guard`` says when a batched worker should stop
+    trusting itself; see :meth:`_FleetWorker.send_wave`.
     """
     from .jobs import load_jobs
     from .runner import rollout
@@ -865,6 +1111,7 @@ def _worker(
     fleet_worker = _FleetWorker()
     fleet_worker.mark = mark
     fleet_worker.generation = generation
+    fleet_worker.wave_guard = wave_guard
     steps = [0]
 
     def stepped(*_args, **_kwargs) -> None:
@@ -901,6 +1148,7 @@ def _worker(
                 job = replace(job, device=device)
             if job.num_worlds > 1:
                 try:
+                    fleet_worker.uid = uid[0] if uid else -1
                     episodes += fleet_worker.run(job, assigned, Path(root), index, results, job_index)
                 except Exception as exc:
                     # As the serial path below: a wave that raised is rebuilt
@@ -1012,6 +1260,8 @@ class _FleetWorker:
         # The worker's progress slot and its watchdog generation; see ``_worker``.
         self.mark: _Progress = _Progress(None, 0)
         self.generation = 0
+        self.uid = -1
+        self.wave_guard: Any = None
 
     def _tick(self, _fleet: Any, _slots: Any, _step: int) -> None:
         """``RunnerFleet.on_wave_tick``: a wave that scores a step is making progress."""
@@ -1090,14 +1340,43 @@ class _FleetWorker:
             # moment its world is scored, so one an earlier wave (or an earlier
             # world of the failing one) produced is a result and is sent.
             self.sent = self.runner.rows[first:]
-            for row in self.sent:
-                results.put(("row", index, job_index, {**row, "worker": index, "device": self._device(job)}))
             # The waves' own wall time, for ``PoolResult.steps_per_s_stepping``:
             # the rows' ``wall_s`` overlap within a wave and cannot be summed.
             walls = [float(wave.get("wall_s", 0.0)) for wave in self.runner.summary.waves[waves0:]]
-            if walls:
-                results.put(("waves", index, job_index, walls))
+            self.send_wave(results, index, job_index, work, walls, device=self._device(job))
         return len(self.sent)
+
+    def send_wave(
+        self, results, index: int, job_index: int, work: tuple[tuple[str, int], ...], walls: list[float], *, device: str
+    ) -> None:
+        """Send the parent a finished unit's rows, and leave if they say this worker cannot be trusted.
+
+        Whole and in one message, because :meth:`_Watcher.wave` decides whether
+        they count, and they must not be counted a row at a time before it has.
+
+        **A worker whose wave aborted everywhere leaves at once, without closing
+        anything**, exactly as a killed one does and for the same reasons: a
+        renderer's teardown can hang, the parent gives its progress slot to a
+        replacement straight away, and the renderer it would be reusing is the
+        suspect. Rebuilding one in this process is not an option: "repeated
+        builds in one process are what make the physics capture fail" (above).
+        """
+        rows = [{**row, "worker": index, "device": device} for row in self.sent]
+        guard = self.wave_guard
+        leaving = (
+            guard is not None
+            and self.uid >= 0
+            and not guard[2][job_index]
+            and _wave_aborted(rows, len(work), guard[0], guard[1])
+        )
+        results.put(("wave", index, job_index, self.uid, rows, walls, os.getpid() if leaving else 0))
+        if leaving:
+            self.mark(_IDLE, -1)
+            # The queue's feeder thread holds the message until the pipe takes
+            # it, and it is what ``os._exit`` would otherwise lose.
+            results.close()
+            results.join_thread()
+            os._exit(0)
 
     def error_rows(
         self, job: JobSpec, work: tuple[tuple[str, int], ...], exc: Exception, *, worker: int

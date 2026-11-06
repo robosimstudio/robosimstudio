@@ -169,7 +169,7 @@ class TestABatchedUnitThatRaises(unittest.TestCase):
             messages.append(results.get())
         kinds = [m[0] for m in messages]
         self.assertNotIn("error", kinds)
-        rows = [m[3] for m in messages if m[0] == "row"]
+        rows = [m[3] for m in messages if m[0] == "row"] + [row for m in messages if m[0] == "wave" for row in m[4]]
         # Both units ran (the worker went on after the first raised), each
         # sending its scored row and an error row for the episode it lost.
         self.assertEqual(len(built), 2)
