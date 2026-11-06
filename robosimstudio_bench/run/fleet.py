@@ -43,6 +43,7 @@ from robosimstudio.specs import Episode, TaskSpec, replace
 from robosimstudio_bench.goals.context import diverged_result, finite_reward
 from robosimstudio_bench.taskbuild.episodes import make_episode, model_key_for
 
+from .jobs import FLEET_RUNTIME
 from .summary import RunSummary
 
 __all__ = [
@@ -1109,6 +1110,10 @@ class RunnerFleet:
                     "utilization": round(self.summary.utilization, 4),
                     "waves": self.summary.waves,
                     "policy_provenance": dict(policy.provenance()),
+                    # ``--clock`` and ``--obs-render`` are no-ops here: the
+                    # barrier is lockstep for every world, and a world renders
+                    # only when its graph looks. What ran, not what was asked.
+                    **FLEET_RUNTIME,
                 },
             )
         )

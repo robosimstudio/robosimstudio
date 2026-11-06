@@ -137,6 +137,25 @@ class JobSpec:
             serial baseline wants. Higher trades up to that many steps of latency
             in noticing an episode ended for proportionally less host work.
             Ignored when ``num_worlds`` is 1.
+        clock: How a graph policy's thinking relates to simulated time, in a
+            serial run. ``free`` (the default) steps the rollout every iteration
+            whatever the graph is doing, so the seconds a perception model or a
+            planner takes are spent as control steps and their number depends
+            on the host. ``lockstep`` steps only while the graph thread is parked
+            on the simulator -- a queued request or a step wait -- or has
+            finished, so a deterministic graph takes the same steps on any
+            machine. A policy computing inside ``get_action`` is in lockstep
+            either way. A batched run (``num_worlds`` above 1) always holds its
+            barrier, which is lockstep for every world, and ignores this.
+        obs_render: When observation cameras render, in a serial run.
+            ``per-step`` (the default) renders every ``render_every`` control
+            steps whatever the policy is doing; ``on-demand`` renders only when
+            a graph asks (``get_observation``), as a workflow declaring
+            ``meta.observation_mode: on_demand`` already does, and a recording
+            still gets its video frames at the video's own cadence. Refused for
+            a policy that cannot ask. A batched run renders on demand already.
+        render_every: With ``per-step`` observations, render one control step
+            in this many. Ignored by a batched run.
     """
 
     name: str
@@ -159,6 +178,9 @@ class JobSpec:
     """``auto``, ``cpu``, ``cuda`` or ``cuda:N``; see :mod:`robosimstudio.machine`."""
     num_worlds: int = 1
     eval_every: int = 1
+    clock: str = "free"
+    obs_render: str = "per-step"
+    render_every: int = 1
     documents: tuple[str, ...] = ()
     """Several ``"<suite>/<variant>"`` documents to run in one job, or empty for ``task`` alone.
 
@@ -185,6 +207,14 @@ class JobSpec:
     wanted. ``episodes`` still brackets the list, so everything that reads the
     span for a name or a size keeps working; ``episode_ids`` is what the
     runners iterate and it prefers the list when there is one."""
+
+    def __post_init__(self) -> None:
+        if self.clock not in ("free", "lockstep"):
+            raise ValueError(f"clock must be 'free' or 'lockstep', got {self.clock!r}")
+        if self.obs_render not in ("per-step", "on-demand"):
+            raise ValueError(f"obs_render must be 'per-step' or 'on-demand', got {self.obs_render!r}")
+        if int(self.render_every) < 1:
+            raise ValueError(f"render_every must be >= 1, got {self.render_every}")
 
     @property
     def episode_ids(self) -> range | tuple[int, ...]:

@@ -15,6 +15,15 @@ When it is, the policy asks for termination -- and only for termination. A graph
 reporting success is a *claim*; the evaluator's verdict is the measurement, and
 the settle countdown between the two exists because a graph typically declares
 done at the moment it releases an object, before that object has landed.
+
+**Two clocks.** ``free`` (the default) is the loop above taken literally: the
+rollout steps once per iteration whatever the graph is doing, so the seconds a
+perception model, a VLM or a planner takes are spent as control steps, and how
+many depends on the host. ``lockstep`` gives the graph and the simulation strict
+turns: :meth:`SolutionGraph.get_action` blocks until the graph thread is parked
+on the simulator -- a queued bus request, or a ``wait_for_step`` -- or has
+finished, so nothing steps while a node runs host code and a deterministic graph
+takes the same number of steps on any machine. See :meth:`SolutionGraph._lockstep_turn`.
 """
 
 from __future__ import annotations
@@ -23,6 +32,7 @@ import json
 import shutil
 import tempfile
 import threading
+import time
 import traceback
 from pathlib import Path
 from typing import Any
@@ -34,7 +44,7 @@ from robosimstudio.record.capture import ToolSpanRecorder
 from robosimstudio_bench.solutions.base import SolutionBase, solution_param
 
 from .facade import GapEnvFacade
-from .graphs import stage_graph, subgraph_skills
+from .graphs import forget_graph_modules, stage_graph, subgraph_skills
 from .skills import pinned_registries
 
 
@@ -81,7 +91,12 @@ def _accepts_node_callbacks(execute: Any) -> bool:
     return "on_node_start" in params and "on_node_end" in params
 
 
-__all__ = ["SolutionGraph", "trace_at_episode_end"]
+__all__ = ["CLOCKS", "OBS_RENDERS", "SolutionGraph", "trace_at_episode_end"]
+
+CLOCKS = ("free", "lockstep")
+"""How the rollout's clock relates to the graph thread. See :meth:`SolutionGraph.configure_runtime`."""
+OBS_RENDERS = ("per-step", "on-demand")
+"""When observation cameras are rendered. See :meth:`SolutionGraph.configure_runtime`."""
 
 
 class SolutionGraph(SolutionBase):
@@ -114,6 +129,16 @@ class SolutionGraph(SolutionBase):
             :func:`~robosimstudio_policy_agent.connector.make_connector`. A graph
             moving the reference's way by default is what makes its number
             comparable with the scripted routine's on the same scene.
+        hold_between_requests: Under the ``lockstep`` clock, whether the
+            rollout's own hold step follows each request of the graph's that it
+            services. True (the default) keeps a motion's timing what a free
+            run's typically is -- one waypoint step and one hold step per
+            streamed waypoint -- and False steps only inside the graph's own
+            requests and waits, as a fleet does. See :meth:`_lockstep_turn`.
+
+    The clock and the observation render are run-level choices rather than
+    constructor arguments, set by the runner from the job through
+    :meth:`configure_runtime`.
     """
 
     def __init__(
@@ -132,9 +157,15 @@ class SolutionGraph(SolutionBase):
         trace_dir: str = "",
         roll: str = "auto",
         motion: str = "",
+        hold_between_requests: bool = True,
         **kwargs: Any,
     ) -> None:
         super().__init__(env, **kwargs)
+        self.clock = "free"
+        """``free`` or ``lockstep``; see :meth:`configure_runtime`."""
+        self.obs_render = "per-step"
+        """``per-step`` or ``on-demand``; see :meth:`configure_runtime`."""
+        self.hold_between_requests = bool(hold_between_requests)
         # The registry set this run executes with, resolved from the checkout
         # rather than the cwd (robosimstudio_policy_agent.skills): the same list stages
         # the graph, decides which in-process stand-ins stand down, and goes to
@@ -149,11 +180,12 @@ class SolutionGraph(SolutionBase):
         workflow_path = Path(self.graph_path) / "workflow.json"
         try:
             workflow_doc = json.loads(workflow_path.read_text())
-            self._on_demand_observations = workflow_doc.get("meta", {}).get("observation_mode") == "on_demand"
+            self._declares_on_demand = workflow_doc.get("meta", {}).get("observation_mode") == "on_demand"
             self._recording_skills = subgraph_skills(workflow_doc)
         except (OSError, ValueError, TypeError):
             self._recording_skills = {}
-            self._on_demand_observations = False
+            self._declares_on_demand = False
+        self._on_demand_observations = self._declares_on_demand
         # A GRAPH THAT SAYS IT READS ON DEMAND STOPS PAYING FOR PER-STEP FRAMES.
         # Such a graph moves through blocking tools for hundreds of control
         # ticks between visual reads, and path tracing those intermediate states
@@ -169,13 +201,12 @@ class SolutionGraph(SolutionBase):
         # graph policy in the tree, and every recorded video with it -- a change
         # to eight other contributors' evidence, made from inside a cable
         # commit. The two graphs that want it declare it, and the same flag
-        # already gates ``_OnDemandConnector`` below.
+        # already gates ``_OnDemandConnector`` below. A run can also ask for it
+        # for any graph (``--obs-render on-demand``; :meth:`configure_runtime`).
         self._restore_obs_render: bool | None = None
         """The env's own ``obs_render_enabled``, put back at close: the env
         outlives this policy for any caller that reuses it."""
-        if self._on_demand_observations and env.renderer is not None:
-            self._restore_obs_render = env.obs_render_enabled
-            env.obs_render_enabled = False
+        self._apply_observation_mode()
         self.privileged = bool(privileged)
         self.perception = str(perception)
         """Which body a graph's perception subgraphs should run.
@@ -362,11 +393,33 @@ class SolutionGraph(SolutionBase):
         # (``SimTools._compute_home_ee_quat`` -- "constructed on the main
         # thread before the graph starts").
         _ = self.connector.tool_registry
+        # A fresh import of the graph's helpers each episode: module-level
+        # episode state must not leak between episodes run by one process.
+        forget_graph_modules(self.graph_path, self.source_graph)
         self._thread = threading.Thread(target=self._run_graph, args=(self._generation,), name="gap-graph", daemon=True)
         self._thread.start()
 
     def _run_graph(self, generation: int) -> None:
         """Run the graph; what it leaves behind is kept only while *generation* is current."""
+        # This thread is the graph as far as a lockstep clock is concerned. Said
+        # from the thread itself and before anything runs on it, because the
+        # runtime starts helper threads of its own once it is going (an
+        # observation poller) and those must neither hold the clock nor release
+        # it -- the fleet's ``ParkTable.adopt``, for the same reason. The bus is
+        # this episode's: a reset replaces ``self.bus`` before starting the next
+        # thread, and this one must depart from the bus it adopted.
+        bus = getattr(self, "bus", None)
+        adopt, depart = getattr(bus, "adopt", None), getattr(bus, "depart", None)
+        if adopt is not None:
+            adopt()
+        try:
+            self._execute_graph(generation)
+        finally:
+            if depart is not None:
+                depart()
+
+    def _execute_graph(self, generation: int) -> None:
+        """``gap.execute`` on this thread, its result or error kept for *generation* only."""
         try:
             from gap import execute
 
@@ -430,6 +483,112 @@ class SolutionGraph(SolutionBase):
             lines.append(f"Node: {inner}")
         return "\n".join(lines)
 
+    # ----------------------------------------------------------------- runtime
+    def configure_runtime(self, *, clock: str = "free", obs_render: str = "per-step") -> None:
+        """Set the run-level clock and observation render. Called by the runner, from the job.
+
+        Args:
+            clock: ``free`` -- the rollout steps every iteration whatever the
+                graph is doing (upstream's behaviour) -- or ``lockstep`` -- it
+                steps only while the graph thread is parked on the simulator or
+                has finished. See :meth:`_lockstep_turn`.
+            obs_render: ``per-step`` -- cameras render on the environment's own
+                ``render_every`` cadence, whatever the graph wants -- or
+                ``on-demand``: per-step observation rendering is off and the
+                facade renders inside ``get_observation``, exactly as for a
+                workflow declaring ``meta.observation_mode: on_demand``. Such a
+                workflow is on demand either way; ``per-step`` does not override
+                its declaration.
+        """
+        if clock not in CLOCKS:
+            raise ValueError(f"clock must be one of {CLOCKS}, got {clock!r}")
+        if obs_render not in OBS_RENDERS:
+            raise ValueError(f"obs_render must be one of {OBS_RENDERS}, got {obs_render!r}")
+        self.clock = clock
+        self.obs_render = obs_render
+        self._on_demand_observations = self._declares_on_demand or obs_render == "on-demand"
+        self._apply_observation_mode()
+
+    def _apply_observation_mode(self) -> None:
+        """Turn the env's per-step observation render off for an on-demand graph, or back on."""
+        env = self.env
+        has_rig = env.renderer is not None or getattr(env, "obs_renderer", None) is not None
+        if self._on_demand_observations and has_rig:
+            if self._restore_obs_render is None:
+                self._restore_obs_render = env.obs_render_enabled
+            env.obs_render_enabled = False
+        elif self._restore_obs_render is not None:
+            env.obs_render_enabled = self._restore_obs_render
+            self._restore_obs_render = None
+
+    def _lockstep_turn(self) -> None:
+        """Block until this iteration's hold step may be taken. The ``lockstep`` clock.
+
+        The rule is the fleet's barrier for one world: **the simulation advances
+        only while the graph thread is parked on it** -- inside a bus request
+        (which may step it itself: a waypoint, a blocking move's turn), blocked
+        in ``wait_for_step`` (which the hold step returned from here satisfies),
+        or finished (the settle steps). While a node runs host code -- a script,
+        a segmentation model, a VLM, cuRobo -- nothing steps, so a deterministic
+        graph takes the same steps on any machine.
+
+        **One hold step follows each request serviced** (``hold_between_requests``,
+        the default), taken once the graph has parked again. That is the
+        decision this clock had to make, and it is made for parity with the free
+        clock as it typically runs: the rollout services a request and then
+        steps once while the graph computes its next, so a streamed trajectory
+        costs two steps a waypoint (the waypoint's, then a hold of it) and a
+        servo turn two steps (with its law advanced twice). Free makes that
+        typical rather than certain -- a slow turn holds more, a fast one
+        services two requests in one pump -- and lockstep makes it exact. The
+        alternative, stepping only inside the graph's own requests and waits,
+        halves a stream's duration in simulated time and changes how the
+        authored motions land, so it is the opt-in.
+
+        ``--bus-timeout`` stays a wall-clock watchdog: a graph that runs host
+        code for longer than the bus timeout without parking ends the episode,
+        with that as its reason, rather than holding the run for ever. Note what
+        that bounds -- the longest a single node may think, a model load or a
+        first cuRobo warm-up included -- so a vision graph wants it generous.
+        """
+        bus = self.bus
+        watchdog = float(bus.timeout)
+        owed = False  # a request was serviced this turn, and its hold step is due
+        held_since = time.monotonic()
+        while True:
+            state = bus.await_parked(max(0.0, held_since + watchdog - time.monotonic()))
+            if state == "request":
+                if owed and self.hold_between_requests:
+                    return
+                bus.service_principal()
+                owed = True
+                held_since = time.monotonic()
+                if not self.hold_between_requests and self.connector.facade._current_done:
+                    # Stepping only inside requests, the rollout never sees a
+                    # termination or a truncation the graph's own steps reached
+                    # unless it is handed the turn.
+                    return
+                continue
+            if state == "departed":
+                # The thread is past its last line: join it, so ``finished``
+                # reads true on this very turn rather than one or two later.
+                if self._thread is not None:
+                    self._thread.join(timeout=5.0)
+                return
+            if state in ("wait", "closed"):
+                return
+            # Still running host code at the deadline: the watchdog.
+            held = time.monotonic() - held_since
+            reason = (
+                f"graph held the lockstep clock for {held:.1f} s without parking on the simulator "
+                f"(--bus-timeout {watchdog:g} s)"
+            )
+            if "lockstep_stall" not in self.trace:
+                self.trace["lockstep_stall"] = reason
+                print(f"[graph] {reason}; ending the episode")
+            self.env.request_termination(reason)
+            return
+
     # -------------------------------------------------------------------- step
     @property
     def control_mode(self) -> str:
@@ -455,9 +614,16 @@ class SolutionGraph(SolutionBase):
         the graph is doing, so an idle action here lands between the waypoints a
         node is streaming and relaxes the servo on every other step -- see
         :meth:`~robosimstudio_policy_agent.facade.GapEnvFacade.hold_action`.
+
+        Under the ``lockstep`` clock the pump is :meth:`_lockstep_turn`, which
+        blocks until the graph is parked, so the hold is only ever taken while it
+        is.
         """
         del obs
-        self.bus.pump(budget=self.pump_budget)
+        if self.clock == "lockstep":
+            self._lockstep_turn()
+        else:
+            self.bus.pump(budget=self.pump_budget)
 
         if self.finished and self._settle_left < 0:
             self._settle_left = self.settle_steps
