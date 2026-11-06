@@ -212,6 +212,95 @@ def usd_film_back(spec: CameraSpec) -> dict[str, float]:
     }
 
 
+SHADER_CACHE_SKIP_CLEANUP_ENV = "__GL_SHADER_DISK_CACHE_SKIP_CLEANUP"
+"""The NVIDIA driver's switch that stops it trimming its shader disk cache.
+
+**OVRTX caps the driver's cache at 4,000 MB, and a benchmark's scenes do not fit.**
+The first render of a scene builds its ray-tracing pipelines, several minutes of
+CPU (measured: 250-500 s for a tool-sorting scene, 19 s once cached), and the
+driver keeps the result in ``ovrtx/bin/cache/nv_shadercache`` in 128 MB chunks.
+OVRTX's ``gpu.foundation`` sets ``__GL_SHADER_DISK_CACHE_SIZE`` to 4,194,304,000
+bytes when the renderer starts, overwriting any value in the environment, and has
+no config key for it. A tool-sorting scene's pipelines are about 130-230 MB, so
+the thirty scenes of one cell alone overflow the cap. The driver then evicts the
+oldest chunks, and a scene warmed an hour earlier compiles again inside a run.
+Measured on 2026-11-05: after warming every scene of VABAR's cells, the cache
+held 34 chunks, 26 of them written in the next hour's runs, and a 15-worker
+tool-sorting cell spent 12 of its first 15 builds compiling for 410-500 s.
+
+The driver honours this variable and OVRTX leaves it alone, so it is set here,
+unless the caller already set it, before the renderer starts. The cache then grows
+past the cap instead of rotating. Delete ``nv_shadercache`` to reclaim the space,
+or export ``__GL_SHADER_DISK_CACHE_SKIP_CLEANUP=0`` to keep the driver's trimming."""
+
+
+def keep_driver_shader_cache() -> None:
+    """Stop the driver evicting compiled pipelines (:data:`SHADER_CACHE_SKIP_CLEANUP_ENV`), unless the caller chose."""
+    os.environ.setdefault(SHADER_CACHE_SKIP_CLEANUP_ENV, "1")
+
+
+STREAMING_TIMEOUT_ENV = "OVRTX_rtx-transient_gpu_streamingStatusManager_timeoutS"
+"""OVRTX's bound on how long a scene's first frame waits for one streaming client [s].
+
+**A scene's first frame waits until every streaming client of OVRTX's
+``StreamingStatusManager`` reports idle, and now and then one never does.** The
+clients are the loaders behind a frame -- ``gpu.resourceManager`` (texture files),
+``gpu.foundation.TextureStreaming`` (mips), ``omni.rtx.MaterialDb``,
+``omni.rtx.PSORaytracing`` and a few more -- and a healthy one is busy for
+seconds at most: on a tool-sorting build the longest busy spell of any of them
+was 2.0 s on an idle GPU and 25 s with 12 builds sharing it
+(``gpu.resourceManager``: 0.1 s and 2.1 s). On 2026-11-05 about one build in 120
+instead blocked its first ``step`` until the manager gave up on
+``gpu.resourceManager``, after OVRTX's default of 1,800 s:
+
+    [Error] [omni.rtx] StreamingStatusManager : Streaming client gpu.resourceManager timed out
+
+and then rendered and ran normally. Thirty minutes is a whole cell's budget, held
+by one worker that nothing restarts.
+
+The bound is a Carbonite setting, ``/rtx-transient/gpu/streamingStatusManager/
+timeoutS``, that :class:`ovrtx.RendererConfig` has no field for. OVRTX reads
+settings from the environment under the prefix ``OVRTX_``, a ``_`` standing for
+each ``/`` -- this variable -- and from an ``ovrtx.config.json.override`` in the
+working directory; the environment wins over the file. Measured on a stress rig
+building VABAR's tool-sorting scenes 12-16 at a time on one GPU, with the bound at
+60 s: 9 of 903 builds stalled, and each cost its build 60 s (first frames of
+108-185 s against medians of 60-88 s) instead of 30 minutes.
+
+It is set here, unless the caller already set it, before the first renderer starts,
+which is when OVRTX reads its settings. See :data:`STREAMING_TIMEOUT_S` for the value."""
+
+STREAMING_TIMEOUT_S = 120
+"""The bound :func:`bound_first_frame_wait` sets [s]: five times the longest healthy busy spell.
+
+A client times out when it has been busy longer than this while a frame waits on
+it, and the frame then renders with whatever that client has loaded. Measured on
+VABAR's tool-sorting scenes, built 12-16 at a time on one GPU, three cases cover it:
+
+* **A warm scene.** The longest busy spell of any client was 25 s
+  (``rtx.RenderContext``; ``gpu.resourceManager`` 2 s), and with the bound at
+  60 s nothing timed out in 866 builds.
+* **A stuck ``gpu.resourceManager``.** It timed out at 60 s, and the frame that
+  followed matched the same scene's ordinary first frames to the render-to-render
+  noise: a median of 0.87 8-bit levels off per camera (at most 1.32), against 0.74
+  (at most 1.31) between two ordinary builds. It had loaded everything and only
+  failed to say so.
+* **A cold shader cache.** ``gpu.foundation.TextureStreaming`` stays busy through
+  the 330-550 s pipeline compile, so any bound below that times it out when the
+  compile ends, and the first frame shows mips not yet streamed. 0.2-0.4% of pixels
+  were more than 8 levels off a full-wait cold build, against 0.02-0.13% between
+  two warm builds, and by the tenth frame the difference was back to that noise.
+  ``vabar warmup`` exists so that a timed run never compiles.
+
+So a stall costs two minutes instead of thirty, and a false alarm costs one
+first frame a little texture detail."""
+
+
+def bound_first_frame_wait() -> None:
+    """Bound a first frame's wait on a stuck streaming client (:data:`STREAMING_TIMEOUT_ENV`), unless the caller chose."""
+    os.environ.setdefault(STREAMING_TIMEOUT_ENV, str(STREAMING_TIMEOUT_S))
+
+
 def _usd_camera_matrix(world: np.ndarray) -> np.ndarray:
     """A camera-to-world pose as the row-vector 4x4 a USD camera prim wants.
 
@@ -363,6 +452,8 @@ def _viewer_class():
             # GPU when it is set.
             import ovrtx
 
+            keep_driver_shader_cache()  # before the device exists: the driver reads it then
+            bound_first_frame_wait()  # before the first renderer: OVRTX reads its settings then
             ordinal = self.device.ordinal if getattr(self.device, "is_cuda", False) else None
             original = ovrtx.Renderer
             if ordinal is None:
