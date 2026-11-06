@@ -66,10 +66,13 @@ class _Program:
     __slots__ = (
         "best_dist",
         "deadline",
+        "due",
         "goal",
         "honours_roll",
         "kind",
         "lead",
+        "pending",
+        "pending_in",
         "reach_judged_at",
         "requested_quat",
         "rot_tolerance",
@@ -81,6 +84,8 @@ class _Program:
         "steps",
         "stop_on_stall",
         "tolerance",
+        "turn",
+        "turn_ticks",
     )
 
     def __init__(
@@ -99,8 +104,20 @@ class _Program:
         stall_steps: int = 12,
         stall_epsilon: float = 0.0002,
         solver_quat: Any = None,
+        turn: int = 1,
     ) -> None:
         self.kind = kind
+        self.turn = max(1, int(turn))
+        """Control steps per servo turn (:attr:`ServoToPose.steps_per_turn`):
+        the setpoint is re-aimed, and arrival judged, once per turn."""
+        self.due = 0
+        """Steps of the current turn taken so far."""
+        self.turn_ticks = 0
+        """How many steps the turn that completed on this tick spans; 0 mid-turn."""
+        self.pending: tuple[Any, Any] | None = None
+        """A turn's setpoint, computed at its end and not yet commanded."""
+        self.pending_in = 0
+        """Steps until :attr:`pending` is commanded."""
         self.solver_quat = None if solver_quat is None else np.asarray(solver_quat, dtype=np.float64)
         """The one orientation the lead is driven toward for the whole motion:
         ``requested_quat`` restated by :func:`~robosimstudio_policy_agent.servo.solver_goal`
@@ -120,8 +137,8 @@ class _Program:
         self.stall_steps = int(stall_steps)
         self.stall_epsilon = float(stall_epsilon)
         # The single-world servo's own progress bookkeeping, per motion: the
-        # closest the tool has come, how many turns since it last came closer,
-        # and how many turns it has had. One turn is one control step.
+        # closest the tool has come, and how many steps since it last came
+        # closer and in all -- counted a turn (``turn`` control steps) at a time.
         self.best_dist = float("inf")
         self.stalled = 0
         self.steps = 0
@@ -388,6 +405,10 @@ class StepService:
                 stall_steps=intent.stall_steps,
                 stall_epsilon=intent.stall_epsilon,
                 solver_quat=solver_quat,
+                # The serial turn: re-aimed and judged once per this many steps.
+                # The first target above is the turn-one advance from the
+                # install measurement, as the serial servo's first turn is.
+                turn=int(getattr(intent, "steps_per_turn", 1) or 1),
             )
         return f"{type(intent).__name__} is not a motion this fleet knows how to install"
 
@@ -513,19 +534,49 @@ class StepService:
         for world, arm, intent, program, _started in self.intents.active():
             if program is None:
                 continue
+            self._count_turn(program)
             self._advance_lead(world, program, snapshot)
             done, error, result = self._finished(world, arm, program, snapshot)
             if done:
                 self.intents.finish(world, arm, kind=slot_kind(intent), error=error, result=result, step=self.step)
 
-    def _advance_lead(self, world: int, program: _Program, snapshot) -> None:
-        """Move a capped servo's setpoint one tick closer, and re-aim at it.
+    def _count_turn(self, program: _Program) -> None:
+        """Count this tick's steps into the servo's turn; note when the turn completes.
 
-        Once per *control step*, not once per readback: the law integrates at the
-        control period, so advancing it once per cadence tick would let a wave at
-        ``eval_every=4`` travel a quarter as fast as the same move run serially.
-        The clamp is nonlinear, so the ticks are taken one at a time rather than
-        by scaling ``dt`` -- which would also let a blocked arm creep.
+        A servo is re-aimed and judged once per turn of
+        :attr:`ServoToPose.steps_per_turn` steps -- the serial servo's turn, a
+        waypoint step and the rollout's hold -- and each completed turn stands
+        for every step it spans, as a serial turn does. A turn of one step is
+        every tick, which is what this stepper did before turns existed.
+        """
+        if program.kind != "servo":
+            return
+        program.due += self.cadence
+        if program.due >= program.turn:
+            program.turn_ticks, program.due = program.due, 0
+        else:
+            program.turn_ticks = 0
+
+    def _advance_lead(self, world: int, program: _Program, snapshot) -> None:
+        """Move a capped servo's setpoint one turn closer, and re-aim at it.
+
+        Once per *control step* of the turn, not once per readback: the law
+        integrates at the control period, so advancing it once per cadence tick
+        would let a wave at ``eval_every=4`` travel a quarter as fast as the same
+        move run serially. The clamp is nonlinear, so the ticks are taken one at
+        a time rather than by scaling ``dt`` -- which would also let a blocked
+        arm creep. All of a turn's ticks are advanced from the one measurement
+        that ends it, as the serial servo advances ``k`` control periods from one
+        measurement (:attr:`ServoToPose.steps_per_turn`); mid-turn the target is
+        left where it is.
+
+        **And the setpoint reaches the arm a hold later, as it does serially.**
+        A serial turn measures right after its own step, and its command is
+        serviced only after the rollout's hold step -- so every command is one
+        step older than the measurement it came from, and the lead clamp is
+        taken against a hand that has since moved on. Commanded at once instead,
+        the fleet's lead ran that step ahead. With a turn of ``k`` the setpoint
+        computed at a turn's end is commanded ``k - 1`` steps later.
         """
         if program.lead is None or program.kind != "servo":
             return
@@ -533,6 +584,14 @@ class StepService:
         rig = self.fleet.ik
         solver = rig.arms.get(name) if rig is not None else None
         if solver is None:
+            return
+        if program.pending is not None:
+            program.pending_in -= self.cadence
+            if program.pending_in <= 0:
+                solver.set_target(world, *program.pending)
+                program.pending = None
+        ticks = program.turn_ticks if program.turn > 1 else self.cadence
+        if ticks <= 0:
             return
         index = self.fleet.scene.embodiment.arms[name]
         measured_pos, measured_quat = tcp_pose(snapshot.body(world), index.ee_body, *self._offsets(name))
@@ -542,7 +601,7 @@ class StepService:
         if program.solver_quat is None:
             program.solver_quat = solver_goal(measured_quat, program.requested_quat, program.honours_roll)
         quat = program.solver_quat
-        for _ in range(self.cadence):
+        for _ in range(ticks):
             set_pos, set_quat = program.lead.advance(measured_pos, measured_quat, goal[:3], quat)
         # Both halves of the law's setpoint, as the single-world servo solves
         # them: the rate-capped position AND the slerped orientation. Handing
@@ -550,6 +609,9 @@ class StepService:
         # lead made every per-step solve trade a ninety-degree rotation error
         # against that millimetre, and the wrist rolled 42 degrees along
         # tool_hanging's carry arc where the serial servo drifts 13.
+        if program.turn > 1:
+            program.pending, program.pending_in = (set_pos, set_quat), program.turn - 1
+            return
         solver.set_target(world, set_pos, set_quat)
 
     def _finished(self, world: int, arm: int, program: _Program, snapshot) -> tuple[bool, BaseException | None, Any]:
@@ -601,8 +663,8 @@ class StepService:
             return False, None, None
 
         if program.kind == "servo":
-            # The single-world servo's loop body, one turn per control step,
-            # over the published snapshot. The same three exits, in the same
+            # The single-world servo's loop body, one turn per ``turn`` control
+            # steps, over the published snapshot. The same three exits, in the same
             # order, with the same words: ``reached`` when both the position
             # ball and the orientation tolerance close; ``contact`` when a
             # stall-stopping move has made no progress for ``stall_steps``
@@ -615,6 +677,14 @@ class StepService:
             # Cartesian move to the graph's abort recovery, whose first act is
             # to open the gripper.
             target, arm_name, _quat = program.goal
+            # Judged once per turn (:attr:`ServoToPose.steps_per_turn`), as the
+            # serial loop judges at the top of each turn -- except at the
+            # budget, which ends a move whatever the turn.
+            span = program.turn_ticks if program.turn > 1 else self.cadence
+            if span <= 0:
+                if self.step < program.deadline:
+                    return False, None, None
+                span = program.due
             tcp, tcp_quat = tcp_pose(snapshot.body(world), index.ee_body, *self._offsets(arm_name))
             dist = float(np.linalg.norm(tcp - target[:3]))
             ang = (
@@ -622,9 +692,10 @@ class StepService:
                 if program.requested_quat is not None
                 else 0.0
             )
-            # A readback every ``cadence`` steps stands for that many turns, so a
-            # stall window and a step count mean the same thing at any cadence.
-            program.steps += self.cadence
+            # A readback every ``cadence`` steps -- a turn of ``span`` -- stands
+            # for that many steps, so a stall window and a step count mean the
+            # same thing at any cadence and any turn.
+            program.steps += span
             outcome = ""
             if dist < program.tolerance and ang < program.rot_tolerance:
                 outcome = "reached"
@@ -634,7 +705,7 @@ class StepService:
                     program.stalled = 0
                     program.reach_judged_at = 0
                 else:
-                    program.stalled += self.cadence
+                    program.stalled += span
                 stalled = program.steps >= program.stall_steps and program.stalled >= program.stall_steps
                 if (
                     stalled
