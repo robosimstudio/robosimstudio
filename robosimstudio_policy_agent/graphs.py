@@ -394,3 +394,44 @@ def check_graph(
     errors = [str(issue) for issue in issues if issue.severity == "error"]
     warnings = [str(issue) for issue in issues if issue.severity != "error"]
     return errors, warnings, provenance
+
+
+def forget_graph_modules(*graph_dirs: str | Path | None) -> list[str]:
+    """Drop every module imported from these graph directories, so the next episode imports it fresh.
+
+    A graph's scripts put their own directory on ``sys.path`` and import their
+    helpers by bare name (``import sight``), and Python keeps a module for the
+    life of the process. So module-level state a helper keeps *for the episode*
+    -- gear_mesh's ``sight._CACHE`` locks the board geometry, button included,
+    from its first frame -- survives into the next episode run by the same
+    process, and the graph presses the previous board's button. One process per
+    episode never showed it; a cell run in one process lost 2 of 3 gear
+    instances to it (the train "stalled": the press landed on the last board's
+    button). Called at the start of every episode, before the graph thread
+    exists, which restores the one-episode-per-process semantics the graphs
+    were written against.
+
+    Returns:
+        The names dropped.
+    """
+    import os
+    import sys
+
+    roots: list[str] = []
+    for d in graph_dirs:
+        if not d:
+            continue
+        for form in (os.path.abspath(str(d)), os.path.realpath(str(d))):
+            roots.append(form.rstrip(os.sep) + os.sep)
+    if not roots:
+        return []
+    dropped = []
+    for name, module in list(sys.modules.items()):
+        path = getattr(module, "__file__", None)
+        if not path:
+            continue
+        forms = {os.path.abspath(path), os.path.realpath(path)}
+        if any(f.startswith(root) for f in forms for root in roots):
+            del sys.modules[name]
+            dropped.append(name)
+    return dropped
