@@ -57,13 +57,131 @@ from typing import Any
 from robosimstudio.record import EpisodeStore, RunMeta
 from robosimstudio.specs import JobSpec
 
-from .jobs import job_task
+from .jobs import FLEET_RUNTIME, apply_runtime, job_task, runtime_provenance
 from .summary import RunSummary, wilson_interval
 
-__all__ = ["PoolResult", "run_pooled", "wilson_interval"]
+__all__ = ["PoolResult", "Watchdog", "run_pooled", "wilson_interval"]
 
 _POLL_S = 1.0
 """How often the parent checks whether a silent worker is still alive."""
+
+WATCHDOG_ENV = "ROBOSIMSTUDIO_POOL_WATCHDOG"
+"""The watchdog for callers that do not pass one: ``off``, or ``build=900,step=300,retries=1``.
+
+What a run started through a vendored runner (VABAR's ``vabar bench``, which
+calls :func:`run_pooled` without the ``--watchdog-*`` flags) is tuned with."""
+
+TEST_HANG_ENV = "ROBOSIMSTUDIO_POOL_TEST_HANG"
+"""Test seam: ``build:<worker>`` or ``step:<worker>``, with ``:always`` to hang every attempt.
+
+Makes that worker sleep forever as it starts building its first unit, or at the
+third control step of its first episode -- the two places a real hang has been
+seen -- so the watchdog can be shown end to end through a real run. Only the
+first process to hold that worker index hangs unless ``:always`` is given, so the
+replacement finishes the unit. Nothing reads it but :func:`_worker`."""
+
+
+@dataclass(frozen=True)
+class Watchdog:
+    """How long a pool worker may make no progress before it is killed and its unit retried.
+
+    **A worker that hangs holds its unit forever, and the pool waits for it.**
+    Nothing else ever re-queues work a worker took off the queue, and
+    :func:`_collect` waits for a ``done`` that a hung process never sends. The
+    case that made this concrete is the RTX first frame: a scene's first
+    ``step`` waited 1,800 s for an OVRTX streaming client that never reported
+    idle (bounded since by
+    :data:`~robosimstudio.solvers.render.rtx.STREAMING_TIMEOUT_S`), and on a
+    stress rig building VABAR's tool-sorting scenes 16 at a time one build in
+    904 never produced its first frame at all -- 40 minutes at 9 cores, nothing
+    logged, until it was killed.
+
+    **Progress, not CPU.** Each worker stamps a shared clock when it takes a
+    unit, after every control step (a step observer on the environment, a wave
+    tick on a fleet) and when it sends a row. CPU cannot tell a hang from the
+    longest legitimate silence, a cold shader compile: both burned 3-9 cores on
+    that rig. So the budgets are wall time without a stamp:
+
+    Attributes:
+        build_s: From taking a unit to its first control step -- the scene
+            build, the warming reset and the first frame, or an episode's own
+            reset. 900 s: a cold RTX compile took 330-550 s to a first frame on
+            that rig (warm builds 83-126 s at the median), and a retried unit
+            gets twice as long, so a compile slower than anyone measured is
+            killed at most once. 0 turns this phase off.
+        step_s: Between control steps. 300 s, raised for a job to its graph's
+            ``bus_timeout`` plus 120 s: under ``--clock lockstep`` the
+            simulation stands still while a node thinks, for up to that long,
+            and the graph's own watchdog ends the episode after it. 0 turns this
+            phase off.
+        retries: How many times a killed unit runs again on a fresh worker
+            before its episodes are written as ``close_kind="watchdog"``
+            error rows.
+
+    A batched (fleet) unit is one wave, so a kill re-runs every world in it, and
+    a wave's reset or mid-unit rebuild has no stamp of its own: a fleet unit gets
+    the larger of the two budgets throughout.
+    """
+
+    build_s: float = 900.0
+    step_s: float = 300.0
+    retries: int = 1
+
+    @property
+    def enabled(self) -> bool:
+        return self.build_s > 0 or self.step_s > 0
+
+    @classmethod
+    def from_env(cls, value: str | None = None) -> Watchdog:
+        """The watchdog :data:`WATCHDOG_ENV` describes, or the default when it is unset.
+
+        Raises:
+            ValueError: A value that names nothing, so a typo does not silently
+                run with the defaults.
+        """
+        text = (os.environ.get(WATCHDOG_ENV, "") if value is None else value).strip().lower()
+        if not text:
+            return cls()
+        if text in ("off", "0", "false", "no"):
+            return cls(build_s=0.0, step_s=0.0)
+        fields_: dict[str, float] = {}
+        for part in text.split(","):
+            key, sep, number = part.partition("=")
+            key = key.strip()
+            if not sep or key not in ("build", "step", "retries"):
+                raise ValueError(f"{WATCHDOG_ENV}={text!r}: expected 'off' or 'build=S,step=S,retries=N'")
+            fields_[key] = float(number)
+        return cls(
+            build_s=fields_.get("build", cls.build_s),
+            step_s=fields_.get("step", cls.step_s),
+            retries=int(fields_.get("retries", cls.retries)),
+        )
+
+    def budget(self, job: JobSpec, phase: int, attempt: int) -> float:
+        """Seconds a worker on ``job`` may stay silent in ``phase``, on its ``attempt``-th try (0 first); 0 is unwatched."""
+        build = float(self.build_s) * (1 + max(0, attempt))
+        bus = float(dict(job.solution_kwargs).get("bus_timeout", 0.0) or 0.0)
+        step = float(self.step_s)
+        if step > 0 and bus > 0:
+            step = max(step, bus + 120.0)
+        if int(getattr(job, "num_worlds", 1)) > 1:
+            return max(build if self.build_s > 0 else 0.0, step)
+        if phase == _STEPPING:
+            return step
+        if phase in (_BUILDING, _CLOSING):
+            return build if self.build_s > 0 else 0.0
+        return 0.0
+
+    def provenance(self) -> dict[str, Any]:
+        return {"build_s": self.build_s, "step_s": self.step_s, "retries": self.retries}
+
+
+# What a worker is doing, as its progress slot says. Idle is never watched: it
+# covers the start-up stagger and the wait on the queue.
+_IDLE, _BUILDING, _STEPPING, _CLOSING = 0, 1, 2, 3
+_PHASES = {_IDLE: "idle", _BUILDING: "building", _STEPPING: "stepping", _CLOSING: "closing"}
+_SLOT = 3
+"""Doubles per worker in the shared progress array: last stamp (monotonic s), phase, unit index."""
 
 
 @dataclass(kw_only=True)
@@ -79,10 +197,13 @@ class PoolResult(RunSummary):
             what the run actually cost, whatever it was spent on.
         wave_wall_s: For a batched job, every wave's wall time, from every
             worker that ran one. Empty for a serial job.
+        watchdog: The pool's :class:`Watchdog` settings and every worker it
+            killed on this job's units (``kills``), for the run's provenance.
     """
 
     pool_wall_s: float = 0.0
     wave_wall_s: list[float] = field(default_factory=list)
+    watchdog: dict[str, Any] = field(default_factory=dict)
 
     @property
     def steps_per_s_stepping(self) -> float:
@@ -111,6 +232,7 @@ def run_pooled(
     threads_per_worker: int = 0,
     preload: str = "",
     verbose: bool = True,
+    watchdog: Watchdog | None = None,
 ) -> dict[str, PoolResult]:
     """Run every job's episodes across ``workers`` processes.
 
@@ -134,6 +256,10 @@ def run_pooled(
             name a task the *job file itself* registered: a worker is a fresh
             interpreter and only has the suites the package ships.
         verbose: Print a line per finished episode, then a summary per job.
+        watchdog: When to kill a worker that has stopped making progress, and
+            how often to retry its unit; see :class:`Watchdog`. ``None`` reads
+            :data:`WATCHDOG_ENV`, and without it uses the defaults; a
+            ``Watchdog(build_s=0, step_s=0)`` turns it off.
 
     Returns:
         ``job.name -> PoolResult``.
@@ -173,55 +299,81 @@ def run_pooled(
     ctx = multiprocessing.get_context("spawn")
     work: Any = ctx.Queue()
     results: Any = ctx.Queue()
-    for unit in units:
-        work.put(unit)
+    # Each unit carries its index, which is how a worker's progress slot names
+    # the unit it holds -- and so what the watchdog re-runs if it is killed.
+    for uid, (job_index, assigned) in enumerate(units):
+        work.put((job_index, assigned, uid))
     for _ in range(workers):
         work.put(None)
 
+    watch = watchdog if watchdog is not None else Watchdog.from_env()
+    progress = _progress_array(ctx, workers)
+    threads = threads_per_worker or max(1, (os.cpu_count() or workers) // workers)
+
+    def spawn(index: int, *, stagger_s: float = 0.0, generation: int = 0, first: Any = None):
+        """A worker process, not yet started; a replacement passes the unit it inherits as ``first``."""
+        return ctx.Process(
+            target=_worker,
+            args=(index, job_list, str(root), work, results),
+            kwargs={
+                "device": worker_devices[index],
+                "stagger": stagger_s,
+                "preload": preload,
+                "progress": progress,
+                "generation": generation,
+                "first": first,
+            },
+            name=f"pool-{index}" if not generation else f"pool-{index}r{generation}",
+        )
+
+    def start(processes) -> None:
+        # Set on the parent's environ so the spawned children inherit it at
+        # interpreter start, which is the only point early enough to matter: a
+        # thread pool sized at import time cannot be resized afterwards. Put back
+        # once they have started, so a later pool sizes itself afresh and nothing
+        # else this process starts inherits a cap meant for these workers. A
+        # replacement the watchdog starts later gets the same cap the same way.
+        saved_threads = _limit_threads(threads, override=bool(threads_per_worker))
+        try:
+            for proc in processes:
+                proc.start()
+        finally:
+            # A spawned child copies the environment at ``start``, so it is safe
+            # to restore now.
+            _restore_env(saved_threads)
+
     started = datetime.now(UTC).isoformat()
     wall0 = time.perf_counter()
-    # Set on the parent's environ so the spawned children inherit it at
-    # interpreter start, which is the only point early enough to matter: a
-    # thread pool sized at import time cannot be resized afterwards. Put back
-    # once they have started, so a later pool sizes itself afresh and nothing
-    # else this process starts inherits a cap meant for these workers.
-    saved_threads = _limit_threads(
-        threads_per_worker or max(1, (os.cpu_count() or workers) // workers),
-        override=bool(threads_per_worker),
+    procs = [spawn(index, stagger_s=stagger * index) for index in range(workers)]
+    start(procs)
+    watcher = (
+        _Watcher(watch, job_list, units, progress, spawn, start, devices=worker_devices, verbose=verbose)
+        if watch.enabled
+        else None
     )
-    try:
-        procs = [
-            ctx.Process(
-                target=_worker,
-                args=(index, job_list, str(root), work, results),
-                kwargs={
-                    "device": worker_devices[index],
-                    "stagger": stagger * index,
-                    "preload": preload,
-                },
-                name=f"pool-{index}",
-            )
-            for index in range(workers)
-        ]
-        for proc in procs:
-            proc.start()
-    finally:
-        # A spawned child copies the environment at ``start``, so it is safe
-        # to restore now.
-        _restore_env(saved_threads)
 
     episode_total = sum(_job_work_total(job) for job in job_list)
-    rows, builds, spans, waves = _collect(procs, results, total=episode_total, wall0=wall0, verbose=verbose)
+    try:
+        rows, builds, spans, waves = _collect(
+            procs, results, total=episode_total, wall0=wall0, verbose=verbose, watcher=watcher
+        )
+    except BaseException:
+        # Ctrl-C, or anything else that ends the pool early: no worker outlives
+        # it. Otherwise one hung in native code survives the parent's unwinding
+        # -- an MPS daemon's ``quit`` waits on it as a client, and the
+        # interpreter's exit joins it for ever. Seen: SIGINT to ``vabar bench``
+        # with one worker hung did nothing until that worker was SIGKILLed, and
+        # the run's private MPS daemon was left behind.
+        _stop(procs, grace=5.0)
+        raise
     wall = time.perf_counter() - wall0
-    for proc in procs:
-        proc.join(timeout=30.0)
-        if proc.is_alive():
-            proc.terminate()
+    _stop(procs, grace=30.0)
 
     out: dict[str, PoolResult] = {}
     for index, job in enumerate(job_list):
         job_rows = [row for job_index, row in rows if job_index == index]
         first, last = spans.get(index, (0.0, 0.0))
+        kills = [kill for kill in (watcher.kills if watcher else []) if kill["job"] == index]
         result = PoolResult(
             job=job,
             root=root / job.name,
@@ -231,18 +383,188 @@ def run_pooled(
             workers=workers,
             builds=[build for job_index, build in builds if job_index == index],
             wave_wall_s=list(waves.get(index, [])),
+            watchdog={**watch.provenance(), "kills": kills} if watch.enabled else {"off": True},
         )
         _write_pooled(result, started=started)
         out[job.name] = result
     return out
 
 
-def _collect(procs, results, *, total: int, wall0: float, verbose: bool):
+def _stop(procs, *, grace: float) -> None:
+    """Join every worker, then TERM what is left, then KILL what ignores that.
+
+    TERM alone was the old end of a pool, and a process blocked in a native wait
+    can outlive it; KILL cannot be ignored. Never SIGUSR1 or a faulthandler
+    dump, which have crashed workers before.
+    """
+    deadline = time.monotonic() + grace
+    for proc in procs:
+        proc.join(timeout=max(0.0, deadline - time.monotonic()))
+    for proc in procs:
+        if proc.is_alive():
+            proc.terminate()
+    for proc in procs:
+        proc.join(timeout=5.0)
+        if proc.is_alive():
+            proc.kill()
+            proc.join(timeout=5.0)
+
+
+def _progress_array(ctx, workers: int):
+    """``_SLOT`` doubles per worker, shared with the workers: last stamp, phase, unit.
+
+    Without a lock: each slot has one writer, a stamp only moves forward, and a
+    stale read costs the watchdog one poll. A context without shared arrays (a
+    test's stand-in) gets a plain list, which an in-process worker can still write.
+    """
+    make = getattr(ctx, "Array", None)
+    return make("d", _SLOT * workers, lock=False) if make is not None else [0.0] * (_SLOT * workers)
+
+
+class _Watcher:
+    """The parent's half of the :class:`Watchdog`: read the stamps, kill the silent, re-run their units.
+
+    A killed worker is replaced at once, at the same index and device, so the
+    pool keeps its width and the replacement takes the ``None`` the dead one
+    never reached. The unit the dead one held goes to the replacement as its
+    first unit, directly, rather than back on the queue, where it would sit
+    behind the ``None``s every worker stops at. A unit out of retries is written
+    as ``close_kind="watchdog"`` error rows, so it reads as a result and not as
+    a gap, and the replacement goes on with the queue.
+    """
+
+    def __init__(self, watchdog: Watchdog, jobs, units, progress, spawn, start, *, devices, verbose: bool) -> None:
+        self.watchdog = watchdog
+        self.jobs = list(jobs)
+        self.units = units
+        self.progress = progress
+        self.spawn = spawn
+        self.start = start
+        self.devices = list(devices)
+        self.verbose = verbose
+        self.tries: dict[int, int] = {}
+        self.generation: dict[int, int] = {}
+        self.kills: list[dict[str, Any]] = []
+        self.rerun: set[tuple[int, str, int]] = set()
+        """``(job index, task, episode id)`` of every unit handed to a replacement."""
+        self._next = 0.0
+
+    def slot(self, index: int) -> tuple[float, int, int]:
+        base = _SLOT * index
+        return float(self.progress[base]), int(self.progress[base + 1]), int(self.progress[base + 2])
+
+    def check(self, procs: list) -> tuple[list[tuple[int, dict[str, Any]]], int]:
+        """Kill and replace every worker silent past its budget.
+
+        Returns:
+            ``(rows, gone)``: error rows for units out of retries, paired with
+            their job index, and how many killed workers will never send the
+            ``done`` the pool counts (one that hung while closing down).
+        """
+        now = time.monotonic()
+        if now < self._next:
+            return [], 0
+        self._next = now + _POLL_S
+        rows: list[tuple[int, dict[str, Any]]] = []
+        gone = 0
+        for index, proc in enumerate(procs):
+            stamp, phase, uid = self.slot(index)
+            if phase == _IDLE or stamp <= 0.0 or not proc.is_alive():
+                continue
+            held = self.units[uid] if 0 <= uid < len(self.units) else None
+            job = self.jobs[held[0]] if held is not None else self.jobs[0]
+            attempt = self.tries.get(uid, 0)
+            budget = self.watchdog.budget(job, phase, attempt)
+            silent = now - stamp
+            if budget <= 0.0 or silent <= budget:
+                continue
+            # Read again: a worker that finished at the deadline has moved on.
+            stamp, phase, uid = self.slot(index)
+            if phase == _IDLE or now - stamp <= budget:
+                continue
+            proc.kill()
+            proc.join(timeout=30.0)
+            base = _SLOT * index
+            self.progress[base + 1] = _IDLE
+            self.progress[base] = 0.0
+            kill: dict[str, Any] = {
+                "worker": index,
+                "job": held[0] if held is not None else -1,
+                "unit": uid,
+                "phase": _PHASES.get(phase, str(phase)),
+                "silent_s": round(silent, 1),
+                "budget_s": round(budget, 1),
+                "episodes": [[name or job.task, int(ep)] for name, ep in held[1]] if held is not None else [],
+            }
+            first = None
+            if held is None:
+                kill["action"] = "closed" if phase == _CLOSING else "replaced"
+                if phase == _CLOSING:
+                    # It had taken its ``None`` and was shutting down: nothing to
+                    # re-run, nothing to replace, and no ``done`` to wait for.
+                    self.kills.append(kill)
+                    gone += 1
+                    self._say(index, kill, job)
+                    continue
+            else:
+                self.tries[uid] = attempt + 1
+                if attempt < self.watchdog.retries:
+                    kill["action"] = "retried"
+                    first = (held[0], held[1], uid)
+                    self.rerun.update((held[0], name or job.task, int(ep)) for name, ep in held[1])
+                else:
+                    kill["action"] = "error rows"
+                    rows.extend((held[0], self._error_row(job, index, name, ep, kill)) for name, ep in held[1])
+            self.kills.append(kill)
+            self._say(index, kill, job)
+            self.generation[index] = self.generation.get(index, 0) + 1
+            procs[index] = self.spawn(index, generation=self.generation[index], first=first)
+            self.start([procs[index]])
+        return rows, gone
+
+    def _error_row(self, job: JobSpec, index: int, name: str, episode_id: int, kill: dict[str, Any]) -> dict[str, Any]:
+        return {
+            "task": name or job.task,
+            "episode_id": int(episode_id),
+            "success": False,
+            "reward": 0.0,
+            "episode_length": 0,
+            "close_kind": "watchdog",
+            "error": (
+                f"watchdog: no progress for {kill['silent_s']:.0f} s while {kill['phase']} "
+                f"(budget {kill['budget_s']:.0f} s), {self.tries.get(kill['unit'], 1)} attempt(s)"
+            ),
+            "solution": job.solution,
+            "renderer": job.renderer,
+            "worker": index,
+            "device": self.devices[index] if index < len(self.devices) and self.devices[index] else job.device,
+        }
+
+    def _say(self, index: int, kill: dict[str, Any], job: JobSpec) -> None:
+        if not self.verbose:
+            return
+        what = ", ".join(f"{task.rpartition('/')[2]} ep {ep}" for task, ep in kill["episodes"]) or "no unit"
+        then = {
+            "retried": "re-running the unit on a fresh worker",
+            "error rows": "out of retries; writing its episodes as watchdog errors",
+            "replaced": "replacing it",
+            "closed": "it was closing down",
+        }[kill["action"]]
+        print(
+            f"[pool] watchdog: w{index} made no progress for {kill['silent_s']:.0f} s while {kill['phase']} "
+            f"({what}; budget {kill['budget_s']:.0f} s); killed it, {then}",
+            flush=True,
+        )
+
+
+def _collect(procs, results, *, total: int, wall0: float, verbose: bool, watcher: _Watcher | None = None):
     """Read rows until every worker has reported done or died.
 
     Liveness is polled rather than trusted: a worker killed by the driver (an
     illegal access, an OOM) never sends its ``done``, and a pool that waits for
-    one hangs a run that has already produced most of its data.
+    one hangs a run that has already produced most of its data. A worker that
+    is alive and hung is the ``watcher``'s (:class:`_Watcher`): ``procs`` is
+    updated in place as it replaces them.
 
     Returns:
         ``(rows, builds, spans, waves)`` -- rows and builds each paired with the
@@ -254,8 +576,19 @@ def _collect(procs, results, *, total: int, wall0: float, verbose: bool):
     builds: list[tuple[int, dict[str, Any]]] = []
     spans: dict[int, tuple[float, float]] = {}
     waves: dict[int, list[float]] = {}
+    seen: set[tuple[int, str, int]] = set()
     live = len(procs)
     while live > 0:
+        if watcher is not None:
+            failed, gone = watcher.check(procs)
+            live -= gone
+            for job_index, row in failed:
+                rows.append((job_index, row))
+                seen.add((job_index, str(row.get("task", "")), int(row.get("episode_id", -1))))
+                if verbose:
+                    _print_row(int(row["worker"]), row, done=len(rows), total=total, wall0=wall0)
+            if live <= 0:
+                break
         try:
             message = results.get(timeout=_POLL_S)
         except queue.Empty:
@@ -265,6 +598,12 @@ def _collect(procs, results, *, total: int, wall0: float, verbose: bool):
         kind = message[0]
         if kind == "row":
             _, worker, job_index, row = message
+            key = (job_index, str(row.get("task", "")), int(row.get("episode_id", -1)))
+            if watcher is not None and key in watcher.rerun and key in seen:
+                # A worker killed just as it sent its row, and the re-run sent
+                # another: the episode is counted once.
+                continue
+            seen.add(key)
             rows.append((job_index, row))
             # A job's span runs from the moment its first episode started to the
             # moment its last one finished. Timed on arrival here rather than in
@@ -358,6 +697,12 @@ def _write_pooled(result: PoolResult, *, started: str) -> None:
                 "steps_per_s_stepping": round(result.steps_per_s_stepping, 1),
                 "cuda_graph": result.captured,
                 "builds": result.builds,
+                # The settings, and every worker it killed on this job's units:
+                # a re-run episode's row is otherwise indistinguishable.
+                "watchdog": result.watchdog,
+                # What a batched job ran under is the fleet's barrier, whatever
+                # the job asked for; see RunnerFleet._write_meta.
+                **(FLEET_RUNTIME if result.job.num_worlds > 1 else runtime_provenance(result.job)),
             },
         )
     )
@@ -466,6 +811,12 @@ def _env_key(job: JobSpec) -> tuple:
         job.record,
         job.capture,
         job.num_worlds,
+        # ``render_every`` reaches ``Env`` in ``_build``; the clock and the
+        # observation mode reach the policy there, and a reused policy would
+        # keep the previous job's.
+        job.render_every,
+        job.clock,
+        job.obs_render,
     )
 
 
@@ -479,16 +830,27 @@ def _worker(
     device: str,
     stagger: float,
     preload: str,
+    progress: Any = None,
+    generation: int = 0,
+    first: Any = None,
 ) -> None:
     """One process: build an environment, then pull episodes until the queue dries.
 
     Every import that touches Warp happens inside a function rather than at
     module scope, so the parent never initialises CUDA and the whole device stays
     available to the workers.
+
+    ``progress`` is the pool's shared stamp array (:class:`_Progress`), and a
+    replacement the :class:`Watchdog` started runs ``first`` -- the unit its
+    killed predecessor held -- before it pulls from the queue, into a shard of
+    its own (``generation``) so a half-written episode of the dead one is never
+    mixed with the re-run.
     """
     from .jobs import load_jobs
     from .runner import rollout
 
+    mark = _Progress(progress, index)
+    hang = _test_hang(index, generation)
     if preload:
         load_jobs(preload)
     if stagger > 0:
@@ -501,10 +863,21 @@ def _worker(
     # The device the build resolved -- ``job.device`` may be "auto" -- for the rows.
     built_device = ""
     fleet_worker = _FleetWorker()
+    fleet_worker.mark = mark
+    fleet_worker.generation = generation
+    steps = [0]
+
+    def stepped(*_args, **_kwargs) -> None:
+        # A completed control step, tool-internal ones included: progress.
+        mark(_STEPPING)
+        steps[0] += 1
+        if hang == "step" and steps[0] == 3:
+            _hang_forever()
+
     wall0 = time.perf_counter()
     try:
         while True:
-            unit = work.get()
+            unit, first = (first, None) if first is not None else (work.get(), None)
             if unit is None:
                 break
             # NOT ``work``: that name is the queue this worker pulls from, two
@@ -513,7 +886,16 @@ def _worker(
             # unit and then died with ``'tuple' object has no attribute 'get'``
             # -- after its rows were already written, which is what made it look
             # like a teardown problem rather than the loop ending early.
-            job_index, assigned = unit
+            # ``(job index, work, unit index)``; a unit without an index (a
+            # caller that queues its own) is simply never re-run.
+            job_index, assigned, *uid = unit
+            # From here to the first control step is the building phase: the
+            # previous environment's teardown, the build, the warming reset and
+            # the first frame -- where every hang seen so far sat, between
+            # episodes as well as at a cell's start.
+            mark(_BUILDING, uid[0] if uid else -1)
+            if hang == "build":
+                _hang_forever()
             job = jobs[job_index]
             if device:
                 job = replace(job, device=device)
@@ -525,21 +907,29 @@ def _worker(
                     # rather than trusted, and every episode of the unit that
                     # scored no row gets an error row instead of reading as a gap.
                     errors = fleet_worker.error_rows(job, assigned, exc, worker=index)
-                    shard = EpisodeStore(_shard_root(Path(root), job, index))
+                    shard = EpisodeStore(_shard_root(Path(root), job, index, generation))
                     for error in errors:
                         shard.append_result(error)
                         results.put(("row", index, job_index, error))
                     episodes += len(fleet_worker.sent) + len(errors)
                     fleet_worker.close()
+                mark(_IDLE, -1)
                 continue
             ((_document, episode_id),) = assigned
             if key != _env_key(job):
                 _teardown(env, policy, recorder)
-                env, policy, recorder, build = _build(job, Path(root), index)
+                env = policy = recorder = None
+                env, policy, recorder, build = _build(job, Path(root), index, generation)
+                observe = getattr(env, "add_step_observer", None)
+                if callable(observe):
+                    observe(stepped)
                 built_device = str(build["device"])
-                store = EpisodeStore(_shard_root(Path(root), job, index))
+                store = EpisodeStore(_shard_root(Path(root), job, index, generation))
                 key = _env_key(job)
                 results.put(("ready", index, job_index, build))
+            # The episode's own reset may rebuild the model and render a first
+            # frame, so it is building time until a control step says otherwise.
+            mark(_BUILDING)
             episode0 = time.perf_counter()
             try:
                 result = rollout(
@@ -578,12 +968,16 @@ def _worker(
             if store is not None:
                 store.append_result(row)
             results.put(("row", index, job_index, row))
+            mark(_IDLE, -1)
             episodes += 1
     except BaseException as exc:
         # A build that fails will fail the same way for the next unit, so the
         # worker reports and exits; the parent names the episodes nobody ran.
         results.put(("error", index, f"{type(exc).__name__}: {exc}"))
     finally:
+        # Closing down is watched too: a renderer that hangs in its teardown
+        # would otherwise keep the pool waiting for this ``done``.
+        mark(_CLOSING, -1)
         fleet_worker.close()
         _teardown(env, policy, recorder)
         results.put(("done", index, episodes, time.perf_counter() - wall0))
@@ -615,6 +1009,13 @@ class _FleetWorker:
         # The rows the last ``run`` put on the results queue, including when it
         # raised part way: what ``error_rows`` leaves out.
         self.sent: list[dict[str, Any]] = []
+        # The worker's progress slot and its watchdog generation; see ``_worker``.
+        self.mark: _Progress = _Progress(None, 0)
+        self.generation = 0
+
+    def _tick(self, _fleet: Any, _slots: Any, _step: int) -> None:
+        """``RunnerFleet.on_wave_tick``: a wave that scores a step is making progress."""
+        self.mark(_STEPPING)
 
     def run(
         self, job: JobSpec, work: tuple[tuple[str, int], ...], root: Path, index: int, results, job_index: int
@@ -626,7 +1027,10 @@ class _FleetWorker:
         if key != self.key:
             build0 = time.perf_counter()
             self.close()
-            self.runner = RunnerFleet(job, verbose=False, run_dir=_shard_root(root, job, index))
+            self.runner = RunnerFleet(job, verbose=False, run_dir=_shard_root(root, job, index, self.generation))
+            # A wave stamps progress on every scoring step. A pool worker never
+            # serves a live view (``--view`` needs one process), so the hook is free.
+            self.runner.on_wave_tick = self._tick
             self.task = job_task(job)
             self.job = job
             # Documents resolve with the job's seed applied, so a cache filled
@@ -752,11 +1156,55 @@ class _FleetWorker:
         self.key = self.runner = self.fleet = self.policy = None
 
 
-def _shard_root(root: Path, job: JobSpec, index: int) -> Path:
-    return root / job.name / "shards" / f"{index:02d}"
+def _shard_root(root: Path, job: JobSpec, index: int, generation: int = 0) -> Path:
+    """A worker's shard; a watchdog replacement (``generation`` above 0) writes beside its predecessor's."""
+    return root / job.name / "shards" / (f"{index:02d}" if not generation else f"{index:02d}r{generation}")
 
 
-def _build(job: JobSpec, root: Path, index: int):
+class _Progress:
+    """A worker's slot in the pool's shared progress array: what the :class:`Watchdog` reads.
+
+    Calling it stamps the slot with now, and optionally sets the phase and the
+    unit held. Stores only -- no lock, no queue, no syscall -- so stamping every
+    control step costs nothing a step would notice. Without an array (a worker
+    run in-process by a test) it does nothing.
+    """
+
+    def __init__(self, array: Any, index: int) -> None:
+        self.array = array
+        self.base = _SLOT * int(index)
+
+    def __call__(self, phase: int | None = None, unit: int | None = None) -> None:
+        array = self.array
+        if array is None:
+            return
+        if phase is not None:
+            array[self.base + 1] = float(phase)
+        if unit is not None:
+            array[self.base + 2] = float(unit)
+        array[self.base] = time.monotonic()
+
+
+def _test_hang(index: int, generation: int) -> str:
+    """``build``, ``step`` or ``""``: where :data:`TEST_HANG_ENV` makes this worker hang."""
+    spec = os.environ.get(TEST_HANG_ENV, "").strip()
+    if not spec:
+        return ""
+    phase, _, rest = spec.partition(":")
+    worker, _, always = rest.partition(":")
+    if phase not in ("build", "step") or not worker.strip().isdigit() or int(worker) != int(index):
+        return ""
+    return phase if (generation == 0 or always.strip() == "always") else ""
+
+
+def _hang_forever() -> None:
+    """What :data:`TEST_HANG_ENV` asks for: block like a native wait that never returns."""
+    print(f"[pool] {TEST_HANG_ENV}: this worker now hangs on purpose", flush=True)
+    while True:
+        time.sleep(3600.0)
+
+
+def _build(job: JobSpec, root: Path, index: int, generation: int = 0):
     """Build one worker's environment, and warm it before the first episode.
 
     The warming reset is not spare work. ``EnvBase.reset`` is where
@@ -793,13 +1241,15 @@ def _build(job: JobSpec, root: Path, index: int):
         device=job.device,
         max_steps=job.max_steps,
         control_mode=job.control_mode,
+        render_every=job.render_every,
     )
     policy = load_solution(job.solution, env, **dict(job.solution_kwargs))
     recorder = (
-        EpisodeRecorder(_shard_root(root, job, index), job.record, task=env.task, capture=job.capture)
+        EpisodeRecorder(_shard_root(root, job, index, generation), job.record, task=env.task, capture=job.capture)
         if job.record.enabled or job.capture.enabled
         else None
     )
+    apply_runtime(job, env, policy)
     env.reset()
     build = {
         "task": job.task,
