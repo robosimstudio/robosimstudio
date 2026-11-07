@@ -252,6 +252,7 @@ def build_scene(
     force_limit: float = arm_gripper.GRASP_LIMIT_N,
     squeeze: float = GRIP_SQUEEZE,
     self_contact: bool = True,
+    rigid_loop: bool = False,
     bore: float = BORE_RADIUS,
     push_cap: float = PUSH_LIMIT_N,
 ):
@@ -408,6 +409,7 @@ def build_scene(
             force_limit=force_limit,
             mu=mu,
             grip_mu=grip_mu,
+            rigid_loop=rigid_loop,
         )
     )
     # The shapes, not the entity ranges: a range ends one past its last shape, and
@@ -614,6 +616,7 @@ def run(
     force_limit: float = arm_gripper.GRASP_LIMIT_N,
     squeeze: float = GRIP_SQUEEZE,
     enable_self_contact: bool = True,
+    rigid_loop: bool = False,
     bore: float = BORE_RADIUS,
     push_cap: float = PUSH_LIMIT_N,
 ) -> dict:
@@ -628,6 +631,7 @@ def run(
         force_limit=force_limit,
         squeeze=squeeze,
         self_contact=enable_self_contact,
+        rigid_loop=rigid_loop,
         bore=bore,
         push_cap=push_cap,
     )

@@ -235,7 +235,9 @@ VBD handoff's: 60 Hz x 20 substeps, contact ke 1e6 / kd 10, soft mu 1.0 and
 shape mu 1.5, the tail at E 0.1 MPa and the loop at 300 kg/m³. The handoff's
 solver settings are matched too: tet damping of 5e-4 s x each tet's shear
 modulus (the loop at the body's level), a 3 mm particle radius, a 6 mm contact
-gap, VBD's tile solve and its 256-entry rigid-particle contact buffer.
+gap, VBD's tile solve and its 256-entry rigid-particle contact buffer. `--rigid-loop`
+snaps the loop to its best rigid fit after every substep, as the handoff does
+(`rigid_projection.py`); it is off by default.
 
 **The bench carries the arm.** The mount is 132 mm above the work surface and
 180 mm behind `bench_075`'s near edge, which is where every route was planned;

@@ -9,7 +9,7 @@ is not the scene's own task:
 3. :func:`toy_spec` places the toy, with the settings' material overrides.
 4. :func:`check_build` checks what Newton built and applies the contact settings.
    ``build_scene(*, claw, coarse, solver_name, iterations, mu, grip_mu,
-   force_limit, squeeze, self_contact, <scene's own>)`` and ``run(out, *, steps,
+   force_limit, squeeze, self_contact, rigid_loop, <scene's own>)`` and ``run(out, *, steps,
    render_every, <the same>)`` take the common arguments in this order.
 5. :func:`add_scene_arguments` / :func:`scene_kwargs` are the common CLI.
 
@@ -28,6 +28,7 @@ from pathlib import Path
 
 import arm_gripper
 import numpy as np
+import rigid_projection
 
 import robosimstudio as rss
 from robosimstudio_materials.heterogeneous import HeterogeneousSoftSpec, load_labelled_tets
@@ -274,10 +275,12 @@ def check_build(
     force_limit: float,
     mu: float | None,
     grip_mu: float | None,
+    rigid_loop: bool = False,
 ) -> dict:
     """Check what Newton built, apply the contact settings, and return the report.
 
-    ``mu`` and ``grip_mu`` fall back to the settings' when None. The VBD solver
+    ``mu`` and ``grip_mu`` fall back to the settings' when None. ``rigid_loop``
+    projects the loop onto a rigid pose after every solver step (:mod:`rigid_projection`). The VBD solver
     is read through the coupler, which every VBD attribute has to come from.
     """
     split = claw != "claw"
@@ -285,6 +288,10 @@ def check_build(
     if not type(solver).__name__.startswith("SolverVBD"):
         raise RuntimeError(f"expected a VBD solver, got {type(solver).__name__}")
     report = {}
+    if rigid_loop:
+        nodes, free = rigid_projection.part_nodes(entity.source_tets, entity.tet_part_labels, 2, attached_to=1)
+        rigid_projection.enable(solver, sim.model, np.asarray(entity.particles)[nodes], free)
+        report["rigid_loop"] = {"nodes": int(len(nodes)), "projected": int(free.sum())}
     if split:
         report["arm"] = arm_gripper.check_arm(sim, limit=force_limit)
     if sim.model.tet_count != len(tets) or len(entity.tet_part_labels) != len(tets):
@@ -337,6 +344,9 @@ def add_scene_arguments(parser: argparse.ArgumentParser, *, out: Path, steps: in
     parser.add_argument(
         "--no-self-contact", dest="self_contact", action="store_false", help="turn the toy's self-contact off"
     )
+    parser.add_argument(
+        "--rigid-loop", action="store_true", help="project the loop onto a rigid pose after every substep"
+    )
 
 
 def scene_kwargs(args: argparse.Namespace) -> dict:
@@ -353,4 +363,5 @@ def scene_kwargs(args: argparse.Namespace) -> dict:
         "force_limit": args.force_limit,
         "squeeze": args.squeeze,
         "enable_self_contact": args.self_contact,
+        "rigid_loop": args.rigid_loop,
     }

@@ -259,6 +259,7 @@ def build_scene(
     force_limit: float = arm_gripper.GRASP_LIMIT_N,
     squeeze: float = GRIP_SQUEEZE,
     self_contact: bool = True,
+    rigid_loop: bool = False,
     rod_radius: float = ROD_RADIUS,
 ):
     vertices, tets, labels = load_toy()
@@ -375,6 +376,7 @@ def build_scene(
             force_limit=force_limit,
             mu=mu,
             grip_mu=grip_mu,
+            rigid_loop=rigid_loop,
         )
     )
     if grip is not None and abs(float(grip.entity.center[2]) - (TABLE_Z + geometry["grip_z_m"])) > 1.0e-6:
@@ -576,6 +578,7 @@ def run(
     force_limit: float = arm_gripper.GRASP_LIMIT_N,
     squeeze: float = GRIP_SQUEEZE,
     enable_self_contact: bool = True,
+    rigid_loop: bool = False,
     rod_radius: float = ROD_RADIUS,
 ) -> dict:
     out.mkdir(parents=True, exist_ok=True)
@@ -589,6 +592,7 @@ def run(
         force_limit=force_limit,
         squeeze=squeeze,
         self_contact=enable_self_contact,
+        rigid_loop=rigid_loop,
         rod_radius=rod_radius,
     )
     surface = np.asarray(rss.get_cell(CELL).surface_frame[:3], dtype=np.float64)

@@ -100,6 +100,7 @@ def build_scene(
     force_limit: float = arm_gripper.GRASP_LIMIT_N,
     squeeze: float = GRIP_SQUEEZE,
     self_contact: bool = True,
+    rigid_loop: bool = False,
 ):
     vertices, tets, labels = load_toy()
     ring = ring_geometry(vertices, tets, labels)
@@ -186,6 +187,7 @@ def build_scene(
             force_limit=force_limit,
             mu=mu,
             grip_mu=grip_mu,
+            rigid_loop=rigid_loop,
         )
     )
     return sim, obj, jaw, camera, geometry
@@ -340,6 +342,7 @@ def run(
     force_limit: float = arm_gripper.GRASP_LIMIT_N,
     squeeze: float = GRIP_SQUEEZE,
     enable_self_contact: bool = True,
+    rigid_loop: bool = False,
 ) -> dict:
     out.mkdir(parents=True, exist_ok=True)
     sim, obj, jaw, camera, geometry = build_scene(
@@ -352,6 +355,7 @@ def run(
         force_limit=force_limit,
         squeeze=squeeze,
         self_contact=enable_self_contact,
+        rigid_loop=rigid_loop,
     )
     entity = obj.entity
     particles = entity.particles
