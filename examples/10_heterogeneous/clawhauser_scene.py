@@ -57,10 +57,10 @@ SOURCE_HASHES = {
     "appearance/visual_to_physics.npz": "4b015d1141794211e4e2c6e2b39fadef6762a73ffe2d76b921e47d5676f3d6c4",
 }
 
-CONTACT_GAP = 0.02
-"""The collision pipeline's detection gap [m]. The coarse block's own gap must be
-this: a correction can only reach contacts the pipeline stored."""
-COARSE_BUDGET = 0.005
+CONTACT_GAP = 0.006
+"""The collision pipeline's detection gap [m], the handoff's. The coarse block's own
+gap must be this: a correction can only reach contacts the pipeline stored."""
+COARSE_BUDGET = CONTACT_GAP / 4.0
 """Cumulative coarse translation per substep [m], at most a quarter of the gap."""
 
 SOLVERS = {
@@ -87,8 +87,12 @@ class PhysicsSettings:
     """Particle-shape contact damping [N·s/m], for the toy and every shape."""
     soft_mu: float
     """The toy's soft-contact friction."""
+    particle_radius: float
+    """The toy's particle radius [m]: the distance at which it touches a shape."""
     shape_mu: float
     """Every collision shape's friction."""
+    damping_ratio: float = 0.0
+    """Stiffness-proportional tet damping [s]; 0 keeps the spec's uniform ``damping``."""
     part_overrides: tuple = ()
     """``(part_id, field, value)`` rows for ``HeterogeneousSoftSpec``."""
 
@@ -98,20 +102,29 @@ class PhysicsSettings:
         return math.sqrt(self.soft_mu * self.shape_mu)
 
 
+DAMP_BETA = 5.0e-4
+"""The handoff's damping ratio [s]: each tet's ``k_damp`` is this times its shear modulus."""
+BODY_SHEAR_PA = 5.0e5 / (2.0 * (1.0 + 0.45))
+"""The body's source shear modulus [Pa] (E 0.5 MPa, Poisson ratio 0.45)."""
+
 REFERENCE = PhysicsSettings(
     control_hz=60,
     substeps=20,
     contact_ke=1.0e6,
     contact_kd=10.0,
     soft_mu=1.0,
+    particle_radius=0.003,
     shape_mu=1.5,
+    damping_ratio=DAMP_BETA,
     part_overrides=(
         (0, "youngs_modulus_pa", 1.0e5),  # tail: the source's 0.5 MPa x TAIL_SCALE 0.2
         (2, "density_kg_m3", 300.0),  # loop: LOOP_RHO, not the source's 1100
+        (2, "damping_pa_s", DAMP_BETA * BODY_SHEAR_PA),  # loop: damped at the body's level, not its own
     ),
 )
 """The handoff's values. Its body E, Poisson ratios and tail and body density
-already match the source, so only two parts are overridden."""
+already match the source, so only the tail's E and the loop's density and damping
+are overridden."""
 
 
 def load_toy() -> tuple[np.ndarray, np.ndarray, np.ndarray]:
@@ -164,8 +177,9 @@ def arrangement(
         "particle_rest_shape_contact_exclusion_radius": 0.006,
         "particle_vertex_contact_buffer_size": 32,
         "particle_edge_contact_buffer_size": 64,
-        "particle_enable_tile_solve": False,
-        "rigid_body_particle_contact_buffer_size": 4096,
+        # The handoff's, which are Newton's defaults.
+        "particle_enable_tile_solve": True,
+        "rigid_body_particle_contact_buffer_size": 256,
     }
     vbd = (
         rss.backend(
@@ -215,6 +229,8 @@ def toy_spec(settings: PhysicsSettings, *, pose, quat) -> HeterogeneousSoftSpec:
         contact_ke=settings.contact_ke,
         contact_kd=settings.contact_kd,
         contact_mu=settings.soft_mu,
+        particle_radius=settings.particle_radius,
+        damping_ratio=settings.damping_ratio,
         part_overrides=settings.part_overrides,
     )
 
@@ -285,6 +301,10 @@ def check_build(
     lame = np.column_stack((young / (2.0 * (1.0 + nu)), young * nu / ((1.0 + nu) * (1.0 - 2.0 * nu))))
     if not np.allclose(sim.model.tet_materials.numpy()[span, :2], lame, rtol=1e-5):
         raise RuntimeError("Newton FEM elasticity differs from the toy's materials")
+    if not np.allclose(sim.model.tet_materials.numpy()[span, 2], entity.damping, rtol=1e-5):
+        raise RuntimeError("Newton FEM damping differs from the toy's materials")
+    if not np.allclose(sim.model.particle_radius.numpy()[entity.particles], settings.particle_radius):
+        raise RuntimeError("Newton particle radius differs from the settings'")
     if not np.allclose(sim.model.particle_mass.numpy()[entity.particles], entity.mass, rtol=1e-5):
         raise RuntimeError("Newton nodal mass differs from the toy's per-tet densities")
     return report

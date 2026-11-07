@@ -22,7 +22,7 @@ from robosimstudio.scene.registry import register_entity
 
 __all__ = ["PART_FIELDS", "EntityHeterogeneousSoft", "HeterogeneousSoftSpec", "load_labelled_tets"]
 
-PART_FIELDS = ("youngs_modulus_pa", "poisson_ratio", "density_kg_m3")
+PART_FIELDS = ("youngs_modulus_pa", "poisson_ratio", "density_kg_m3", "damping_pa_s")
 """The per-part values a :class:`HeterogeneousSoftSpec` override may replace."""
 
 
@@ -109,8 +109,8 @@ class HeterogeneousSoftSpec:
 
     `pose` places the source mesh origin in the work-surface frame. Young's
     modulus, Poisson ratio, and density come from `params_path`, except where
-    `part_overrides` replaces one part's value. `damping` is a solver setting,
-    not a source material estimate.
+    `part_overrides` replaces one part's value. `damping` and `damping_ratio` are
+    solver settings, not source material estimates.
     """
 
     stage: ClassVar[str] = "deformables"
@@ -125,6 +125,10 @@ class HeterogeneousSoftSpec:
     damping: float = 5e3
     """Viscous tet damping [Pa·s] -- Newton's ``k_damp`` -- one value for the whole
     mesh, so the loop and the ten-times-softer body resist deformation alike.
+    """
+    damping_ratio: float = 0.0
+    """Stiffness-proportional damping [s]. When positive, each tet's ``k_damp`` is
+    this times its own shear modulus, in place of the uniform ``damping``.
     """
     particle_radius: float = 0.0007
     contact_ke: float = 30000.0
@@ -142,7 +146,7 @@ class HeterogeneousSoftSpec:
     def __post_init__(self) -> None:
         if not self.mesh_path or not self.params_path or not self.materials_path:
             raise ValueError("heterogeneous soft body needs mesh, parameter, and material paths")
-        if self.scale <= 0 or self.particle_radius <= 0 or self.damping < 0:
+        if self.scale <= 0 or self.particle_radius <= 0 or self.damping < 0 or self.damping_ratio < 0:
             raise ValueError("scale and particle radius must be positive; damping cannot be negative")
         for row in self.part_overrides:
             if len(row) != 3 or row[1] not in PART_FIELDS:
@@ -197,7 +201,7 @@ class EntityHeterogeneousSoft(ParticleMixin, Entity):
             rows = labels == int(part_id)
             if field == "density_kg_m3":
                 density[rows] = float(value)
-            else:
+            elif field != "damping_pa_s":  # applied once the shear modulus is known
                 elastic[rows, PART_FIELDS.index(field)] = float(value)
         if np.any(elastic[:, 0] <= 0) or np.any((elastic[:, 1] < 0) | (elastic[:, 1] >= 0.5)) or np.any(density <= 0):
             raise ValueError(f"{spec.name}: an override puts E, Poisson ratio or density outside the FEM range")
@@ -205,6 +209,12 @@ class EntityHeterogeneousSoft(ParticleMixin, Entity):
         young, nu = elastic.T
         mu = young / (2.0 * (1.0 + nu))
         lam = young * nu / ((1.0 + nu) * (1.0 - 2.0 * nu))
+        damping = spec.damping_ratio * mu if spec.damping_ratio > 0 else np.full(len(tets), spec.damping)
+        for part_id, field, value in spec.part_overrides:
+            if field == "damping_pa_s":
+                damping[labels == int(part_id)] = float(value)
+        if np.any(damping < 0):
+            raise ValueError(f"{spec.name}: a damping override is negative")
         volume = np.linalg.det(vertices[tets[:, 1:]] - vertices[tets[:, :1]]) * spec.scale**3 / 6.0
 
         def nodal(per_tet: np.ndarray) -> np.ndarray:
@@ -244,7 +254,7 @@ class EntityHeterogeneousSoft(ParticleMixin, Entity):
             density=1.0,
             k_mu=mu,
             k_lambda=lam,
-            k_damp=float(spec.damping),
+            k_damp=damping,
             particle_radius=spec.particle_radius,
             color=colors,
             label=spec.name,
@@ -263,6 +273,7 @@ class EntityHeterogeneousSoft(ParticleMixin, Entity):
         # What Newton was given: the source with `part_overrides` applied.
         self.elastic = elastic
         self.density = density
+        self.damping = damping
         self.mass = masses
 
     def host_actor(self):
