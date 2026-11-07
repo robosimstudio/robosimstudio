@@ -43,6 +43,9 @@ SUBSTEPS = PHYSICS.substeps
 # window a drift is measured in.
 DURATION = 10.0
 TABLE_Z = 0.75
+REST_Z = TABLE_Z + PHYSICS.particle_radius
+"""Where the toy's lowest node rests [m]: one particle radius above the bench.
+Clearances are measured from here, so they read the same at any radius."""
 # The move: 150 mm along the bench, and a lift that takes the toy's own length
 # clear of the bench. On the arm the toy hangs ~234 mm below the pads (the
 # pinched loop stretches), so 210 mm left the tail dragging; 270 mm clears it.
@@ -267,12 +270,12 @@ def judge(geometry: dict, diagnostics, quality, entity, steps: int) -> dict:
     lifted = float(max(row["minimum_z_m"] for row in diagnostics) - diagnostics[0]["minimum_z_m"])
     tail = diagnostics[-round(0.5 * CONTROL_HZ) :]
     released = max(row["finger_contacts"] for row in tail) == 0
-    clearance = float(min(row["minimum_z_m"] for row in tail) - TABLE_Z)
+    clearance = float(min(row["minimum_z_m"] for row in tail) - REST_Z)
     # Touch-down: the first frame after the pads let go whose lowest point is on
     # the bench. Drift is measured from there, not from the release, because the
     # fall itself is not drift.
     landing = next(
-        (row for row in diagnostics if row["frame"] > held and row["minimum_z_m"] - TABLE_Z <= 0.002),
+        (row for row in diagnostics if row["frame"] > held and row["minimum_z_m"] - REST_Z <= 0.002),
         None,
     )
     landed_frame = None if landing is None else landing["frame"]

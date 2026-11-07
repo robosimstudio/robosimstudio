@@ -122,6 +122,9 @@ its lowest point by tens of millimetres, cannot look like one.
 DROP_CLEARANCE = 0.006
 """Above this the toy is not resting on the bench."""
 TABLE_Z = 0.75
+REST_Z = TABLE_Z + PHYSICS.particle_radius
+"""Where the toy's lowest node rests [m]: one particle radius above the bench.
+Clearances are measured from here, so they read the same at any radius."""
 BENCH_X = 0.6
 """Where the work-surface frame's origin sits in world x."""
 SOURCE_X = -0.07
@@ -1152,7 +1155,7 @@ def judge(
     reach = deepest["insertion_depth_m"]
     inside = max(row["inside_fraction"] for row in diagnostics)
     released = max(row["finger_contacts"] for row in settled) == 0
-    settled_clearance = min(row["minimum_z_m"] for row in settled) - TABLE_Z
+    settled_clearance = min(row["minimum_z_m"] for row in settled) - REST_Z
     # The pads' own clearance over the rim: reported, not gated. A body press can
     # legitimately put them inside the bore; what must not happen is touching it.
     pad_z = min(min(row["finger_positions"][side][2] for side in (0, 1)) for row in diagnostics) - (TABLE_Z + RIM_Z)

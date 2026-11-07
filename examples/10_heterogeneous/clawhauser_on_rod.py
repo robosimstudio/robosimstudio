@@ -140,6 +140,9 @@ SEAT_OPEN = 0.6
 SEAT_WITHDRAW = 0.5
 """After the guarded stop: hold the toy still, open, and rise clear."""
 TABLE_Z = 0.75
+REST_Z = TABLE_Z + PHYSICS.particle_radius
+"""Where the toy's lowest node rests [m]: one particle radius above the bench.
+Clearances are measured from here, so they read the same at any radius."""
 SOURCE_X = -0.13
 ROD_RADIUS = 0.006
 POST_RADIUS = 0.010
@@ -857,7 +860,7 @@ def judge(out: Path, diagnostics, quality, geometry, sim, entity, steps, *, vide
     loop_rise = float(np.mean([row["ring_centre_m"][2] for row in settled])) - float(standing[2])
     seated_depth = geometry["rod_z_m"] - ((float(standing[2]) - TABLE_Z) + loop_rise)
     settled_load = float(np.mean([row["rod_support_n"] for row in settled]))
-    settled_clearance = min(row["minimum_z_m"] for row in settled) - TABLE_Z
+    settled_clearance = min(row["minimum_z_m"] for row in settled) - REST_Z
     # The rod's own support is the direct evidence of what holds the toy once the
     # jaws are gone. ``loop_rise`` and ``seated_depth`` are reported beside it but
     # not gated on: the loop deforms under the pinch, so its centroid is only a
@@ -890,7 +893,7 @@ def judge(out: Path, diagnostics, quality, geometry, sim, entity, steps, *, vide
         "peak_torque_nm": peak_over(diagnostics, "peak_torque_nm"),
         "settled_load_n": settled_load,
         "settled_clearance_m": settled_clearance,
-        "hold_clearance_m": (min(row["minimum_z_m"] for row in hold) - TABLE_Z) if hold else None,
+        "hold_clearance_m": (min(row["minimum_z_m"] for row in hold) - REST_Z) if hold else None,
         "hold_finger_contacts": max((row["finger_contacts"] for row in hold), default=None),
         "released": max(row["finger_contacts"] for row in settled) == 0,
         "rod_threaded": threaded,

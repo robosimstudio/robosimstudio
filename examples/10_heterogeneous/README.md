@@ -95,7 +95,8 @@ start, no rod and no cup -- close on the loop, lift 210 mm, carry 80 mm, open an
 drop. Its judge asks for the release, the carried distance measured at the last
 frame the pads hold (where the toy rolls to afterwards is not what the carry
 did), a settled clearance of 0-2 mm and an intact mesh; `rolled_after_release_m`
-reports the roll separately.
+reports the roll separately. Every scene measures clearance from the toy's rest
+height, one particle radius over the bench.
 
 The three cameras were pulled back 20% (`eye - look_at` scaled, target
 unchanged), then raised 50 mm: the first pull-back still clipped the carrier at
