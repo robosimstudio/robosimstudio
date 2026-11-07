@@ -216,16 +216,17 @@ def usd_film_back(spec: CameraSpec) -> dict[str, float]:
 SHADER_CACHE_SKIP_CLEANUP_ENV = "__GL_SHADER_DISK_CACHE_SKIP_CLEANUP"
 """The NVIDIA driver's switch that stops it trimming its shader disk cache.
 
-**OVRTX caps the driver's cache at 4,000 MB, and a benchmark's scenes do not fit.**
-The first render of a scene builds its ray-tracing pipelines, several minutes of
-CPU (measured: 250-500 s for a tool-sorting scene, 19 s once cached), and the
-driver keeps the result in ``ovrtx/bin/cache/nv_shadercache`` in 128 MB chunks.
-OVRTX's ``gpu.foundation`` sets ``__GL_SHADER_DISK_CACHE_SIZE`` to 4,194,304,000
-bytes when the renderer starts, overwriting any value in the environment, and has
-no config key for it. A tool-sorting scene's pipelines are about 130-230 MB, so
-the thirty scenes of one cell alone overflow the cap. The driver then evicts the
-oldest chunks, and a scene warmed an hour earlier compiles again inside a run.
-Measured on 2026-11-05: after warming every scene of VABAR's cells, the cache
+**OVRTX caps the driver's cache at 4,000 MB, and each process needs a file of its own.**
+A process's first render builds its ray-tracing pipelines, several minutes of CPU
+(measured: 250-500 s, 19 s once cached), and the driver keeps the result in
+``ovrtx/bin/cache/nv_shadercache``. A process locks one file there, about 134 MB,
+and compiles everything into it if the file is new. Every file holds the same
+pipelines, whichever scene wrote it, so the cache grows with the processes run, not
+with the scenes. OVRTX's ``gpu.foundation`` sets ``__GL_SHADER_DISK_CACHE_SIZE`` to
+4,194,304,000 bytes when the renderer starts, overwriting any value in the
+environment, and has no config key for it. About 30 files fill that. The driver
+then evicts the oldest, and a worker left without a complete file compiles again
+inside a run. Measured on 2026-11-05: after warming every scene of VABAR's cells, the cache
 held 34 chunks, 26 of them written in the next hour's runs, and a 15-worker
 tool-sorting cell spent 12 of its first 15 builds compiling for 410-500 s.
 
