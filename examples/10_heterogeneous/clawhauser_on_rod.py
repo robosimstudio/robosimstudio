@@ -52,7 +52,6 @@ Run on a CUDA node with Newton 1.8 development and RoboSimStudio on PYTHONPATH.
 from __future__ import annotations
 
 import argparse
-import hashlib
 import json
 import subprocess
 import time
@@ -61,17 +60,26 @@ from pathlib import Path
 import arm_gripper
 import newton
 import numpy as np
+from clawhauser_scene import (
+    COARSE_BUDGET,
+    CONTACT_GAP,
+    add_scene_arguments,
+    arrangement,
+    check_build,
+    load_toy,
+    scene_kwargs,
+    toy_spec,
+)
+from clawhauser_scene import REFERENCE as PHYSICS
 from loop_geometry import ring_geometry, smooth
 from mesh_quality import MeshQuality, penetration
 from parallel_gripper import ParallelGripperSpec
 
 import robosimstudio as rss
-from robosimstudio_materials.heterogeneous import HeterogeneousSoftSpec, load_labelled_tets
 
-ASSET = Path(__file__).resolve().parent / "assets" / "clawhauser"
 OUTPUT = Path(__file__).resolve().parents[2] / "outputs" / "clawhauser_on_rod"
-CONTROL_HZ = 30
-SUBSTEPS = 20
+CONTROL_HZ = PHYSICS.control_hz
+SUBSTEPS = PHYSICS.substeps
 DURATION = 10.0
 """Long enough for the guarded seat to stop early or late and still leave the last
 half second still, so that the window the hang is judged on is a quiet one.
@@ -105,8 +113,8 @@ free end during the thread reports support for one or two frames -- measured 2.1
 at t = 4.4 s of the run that first used this guard -- and a guard that fired there
 would hold the toy while it was still only half threaded on.
 """
-SEAT_FRAMES = 3
-"""Consecutive frames the rod must carry that fraction before the seat stops."""
+SEAT_FRAMES = round(0.1 * CONTROL_HZ)
+"""Consecutive frames (0.1 s) the rod must carry that fraction before the seat stops."""
 SEAT_FLOOR = 0.006
 """How far past the nominal seat height the planned descent is allowed to go.
 
@@ -133,14 +141,6 @@ SEAT_WITHDRAW = 0.5
 """After the guarded stop: hold the toy still, open, and rise clear."""
 TABLE_Z = 0.75
 SOURCE_X = -0.13
-CONTACT_GAP = 0.02
-"""The collision pipeline's detection gap. The coarse block's own gap must be
-this: a correction can only reach contacts the pipeline stored."""
-CONTACT_KE = 100000.0
-"""The arrangement's rigid-soft penalty stiffness: support load is this times
-the summed penetration a contact patch reports."""
-COARSE_BUDGET = 0.005
-"""Cumulative coarse translation per substep, at most a quarter of the gap."""
 ROD_RADIUS = 0.006
 POST_RADIUS = 0.010
 ROD_FREE_Y = 0.030
@@ -246,36 +246,22 @@ stops when the rod reports support, and ``SEAT_FLOOR`` bounds it if it does not.
 The open and withdraw windows are only the fallback's, for a run whose guard
 never fires; a working run gets its own ``after_seat`` path instead.
 """
-SOURCE_HASHES = {
-    "final_mesh.mesh": "df3d1505d96d36fbfa76291e7ab94269a30500ba5e4b87516d0bf8f57f0c6458",
-    "heterogeneous_params.npz": "7cfc8ca3cc7c08d261aa90b08832230801fec1ac62848d0e9239d9e2f318e8c6",
-    "inferred_params.json": "45aacd698f2b38a6fd8bf13b46cc9c33497fc90c6c1bdf088ed12d915ec3d992",
-    "appearance/visual_to_physics.npz": "4b015d1141794211e4e2c6e2b39fadef6762a73ffe2d76b921e47d5676f3d6c4",
-}
 
 
 def build_scene(
     *,
-    coarse: bool,
-    rod_radius: float = ROD_RADIUS,
-    mu: float | None = arm_gripper.GLOBAL_MU,
+    claw: str = "arm",
+    coarse: bool = False,
+    solver_name: str = "chebyshev",
+    iterations: int = 160,
+    mu: float | None = None,
+    grip_mu: float | None = None,
     force_limit: float = arm_gripper.GRASP_LIMIT_N,
     squeeze: float = GRIP_SQUEEZE,
     self_contact: bool = True,
-    claw: str = "arm",
-    grip_mu: float = arm_gripper.GRIP_MU,
+    rod_radius: float = ROD_RADIUS,
 ):
-    for relative, expected in SOURCE_HASHES.items():
-        actual = hashlib.sha256((ASSET / relative).read_bytes()).hexdigest()
-        if actual != expected:
-            raise ValueError(f"Clawhauser source asset changed: {relative}")
-    vertices, tets, labels, elastic, density = load_labelled_tets(
-        ASSET / "final_mesh.mesh", ASSET / "heterogeneous_params.npz"
-    )
-    if (len(vertices), len(tets)) != (1840, 6850) or set(np.unique(labels)) != {0, 1, 2}:
-        raise ValueError("Clawhauser source geometry or labels changed")
-    if not np.array_equal(np.unique(elastic[:, 0]), [5e5, 5e6]) or not np.array_equal(np.unique(density), [300, 1100]):
-        raise ValueError("Clawhauser source material estimates changed")
+    vertices, tets, labels = load_toy()
     ring = ring_geometry(vertices, tets, labels)
 
     # Lying flat in its own rest pose, grasped on the loop's rim: the same pose and
@@ -330,59 +316,9 @@ def build_scene(
     }
     print(json.dumps({"geometry": geometry}), flush=True)
 
-    common = {
-        "particle_enable_self_contact": self_contact,
-        # Millimetre-scale self-contact: the solver's own default margin is
-        # 0.2 m, which makes every particle pair touch and the toy explode.
-        "particle_self_contact_radius": 0.002,
-        "particle_self_contact_margin": 0.002,
-        "particle_topological_contact_filter_threshold": 2,
-        # The plush's own surface is within the contact margin at rest, and the
-        # grasp squeezes the 11 mm loop by 6 mm; exclude pairs that are that
-        # close in the rest shape, or the pinch folds the loop into itself.
-        "particle_rest_shape_contact_exclusion_radius": 0.006,
-        "particle_vertex_contact_buffer_size": 32,
-        "particle_edge_contact_buffer_size": 64,
-        "particle_enable_tile_solve": False,
-        "rigid_body_particle_contact_buffer_size": 4096,
-    }
-    vbd = (
-        rss.backend(
-            "robosimstudio_materials.coarse_translation.SolverVBDCoarse",
-            coarse_translation=True,
-            coarse_contact_gap=CONTACT_GAP,
-            coarse_budget=COARSE_BUDGET,
-            iterations=12,
-            **common,
-        )
-        if coarse
-        else rss.backend(
-            "robosimstudio_materials.chebyshev_acceleration.SolverVBDChebyshev",
-            iterations=160,
-            chebyshev_rho=0.95,
-            chebyshev_gamma=1.0,
-            **common,
-        )
-    )
-    # The arm resolves to MuJoCo and is its own island; the toy keeps VBD.
-    # `one_way` with `slide_feedback` stops each finger on the loop's push, so the
-    # cap is the grip. Sticky matching is the scene's and the coupler forwards it.
     split = claw != "claw"
-    physics = rss.ArrangementSpec(
-        control_hz=CONTROL_HZ,
-        substeps=SUBSTEPS,
-        use_cuda_graph=False,
-        backends=((("articulated", rss.backend("mujoco")),) if split else ())
-        + (("soft", vbd), ("rigid", vbd), ("*", vbd)),
-        **({"coupling": rss.coupler("one_way", contact_forces=True, slide_feedback=True)} if split else {}),
-        collision=rss.CollisionSpec(
-            soft_contact_margin=CONTACT_GAP,
-            full_surface_contact=False,
-            contact_ke=CONTACT_KE,
-            contact_kd=25.0,
-            broad_phase="nxn",
-            contact_matching="sticky",
-        ),
+    physics = arrangement(
+        PHYSICS, claw=claw, coarse=coarse, solver_name=solver_name, iterations=iterations, self_contact=self_contact
     )
     scene = rss.Scene(cell=CELL, physics=physics, name="clawhauser_on_rod")
     rod_x = SOURCE_X + float(hole[0])
@@ -398,17 +334,7 @@ def build_scene(
             at=(rod_x, ROD_FREE_Y + span / 2.0, rod_z, -np.sin(np.pi / 4.0), 0.0, 0.0, np.cos(np.pi / 4.0)),
         )
     )
-    obj = scene.add(
-        HeterogeneousSoftSpec(
-            name="clawhauser",
-            mesh_path=str(ASSET / "final_mesh.mesh"),
-            params_path=str(ASSET / "heterogeneous_params.npz"),
-            materials_path=str(ASSET / "inferred_params.json"),
-            pose=pose,
-            quat=quat,
-            contact_ke=CONTACT_KE,
-        )
-    )
+    obj = scene.add(toy_spec(PHYSICS, pose=pose, quat=quat))
     grip = None
     if split:
         arm_gripper.add_arm(scene, base_offset=ARM_BASE, force_limit=force_limit)
@@ -439,30 +365,18 @@ def build_scene(
     camera = scene.add(rss.CameraSpec(name="overview", width=960, height=540, eye=eye, look_at=look_at, fov_y=fov_y))
     sim = scene.build(device="cuda:0", warmup=False, use_cuda_graph=False)
     entity = obj.entity
-    # Every VBD attribute comes from the solver itself, never the coupling wrapper.
-    vbd_solver = arm_gripper.vbd_solver(sim.pipeline.program.solver)
-    if not type(vbd_solver).__name__.startswith("SolverVBD"):
-        raise RuntimeError(f"expected a VBD solver, got {type(vbd_solver).__name__}")
-    if split:
-        geometry["arm"] = arm_gripper.check_arm(sim, limit=force_limit)
-    if sim.model.tet_count != len(tets) or len(entity.tet_part_labels) != len(tets):
-        raise RuntimeError("RSS lost Clawhauser tetrahedra or part labels")
-    if sim.model.attachment_particle_body_count:
-        raise RuntimeError("the contact grasp scene must not contain particle attachments")
-    if split:
-        geometry["friction"] = arm_gripper.set_contact_friction(
-            sim, global_mu=arm_gripper.GLOBAL_MU if mu is None else mu, grip_mu=grip_mu
+    geometry.update(
+        check_build(
+            sim,
+            entity,
+            tets,
+            PHYSICS,
+            claw=claw,
+            force_limit=force_limit,
+            mu=mu,
+            grip_mu=grip_mu,
         )
-        geometry["global_soft_contact_mu"] = geometry["friction"]["global_soft_contact_mu"]
-    elif mu is not None:
-        # Newton VBD exposes one global soft-contact friction coefficient; this is
-        # it, and here it is the knob the sweep turns. The solver steps the model
-        # it was built with, so if that is a distinct object the assignment has to
-        # land there as well -- and the value in use is reported either way.
-        sim.model.soft_contact_mu = float(mu)
-        if vbd_solver.model is not sim.model:
-            vbd_solver.model.soft_contact_mu = float(mu)
-        geometry["global_soft_contact_mu"] = float(vbd_solver.model.soft_contact_mu)
+    )
     if grip is not None and abs(float(grip.entity.center[2]) - (TABLE_Z + geometry["grip_z_m"])) > 1.0e-6:
         raise RuntimeError(
             f"the claw sits at z={grip.entity.center[2]:.4f}, not the bench-referenced "
@@ -653,25 +567,29 @@ def run(
     *,
     steps: int,
     render_every: int = 0,
+    claw: str = "arm",
     coarse: bool = False,
-    rod_radius: float = ROD_RADIUS,
-    mu: float | None = arm_gripper.GLOBAL_MU,
+    solver_name: str = "chebyshev",
+    iterations: int = 160,
+    mu: float | None = None,
+    grip_mu: float | None = None,
     force_limit: float = arm_gripper.GRASP_LIMIT_N,
     squeeze: float = GRIP_SQUEEZE,
     enable_self_contact: bool = True,
-    claw: str = "arm",
-    grip_mu: float = arm_gripper.GRIP_MU,
+    rod_radius: float = ROD_RADIUS,
 ) -> dict:
     out.mkdir(parents=True, exist_ok=True)
     sim, obj, grip, camera, rod, ring, geometry = build_scene(
+        claw=claw,
         coarse=coarse,
-        rod_radius=rod_radius,
+        solver_name=solver_name,
+        iterations=iterations,
         mu=mu,
+        grip_mu=grip_mu,
         force_limit=force_limit,
         squeeze=squeeze,
         self_contact=enable_self_contact,
-        claw=claw,
-        grip_mu=grip_mu,
+        rod_radius=rod_radius,
     )
     surface = np.asarray(rss.get_cell(CELL).surface_frame[:3], dtype=np.float64)
     rod_world = surface + np.array((SOURCE_X + float(ring["hole_centre_local"][0]), ROD_FREE_Y, geometry["rod_z_m"]))
@@ -734,7 +652,7 @@ def run(
     if np.any(rest_det <= 0):
         raise RuntimeError("source tetrahedra were not positively oriented after build")
     rod_shapes = {int(v) for v in rod.shapes}
-    mass = float(entity.source_mass.sum())
+    mass = float(entity.mass.sum())
     weight = mass * 9.81
     print(json.dumps({"mass_kg": mass, "weight_n": weight}), flush=True)
 
@@ -924,7 +842,7 @@ def judge(out: Path, diagnostics, quality, geometry, sim, entity, steps, *, vide
             if seat_frame + max(1, CONTROL_HZ // 3) <= row["frame"] <= seat_frame + round(1.2 * CONTROL_HZ)
         ]
     settled = diagnostics[-max(2, int(0.5 * CONTROL_HZ)) :]
-    weight = float(entity.source_mass.sum() * 9.81)
+    weight = float(entity.mass.sum() * 9.81)
     # The claw's own support, while it is still holding and the toy must be up.
     rod_load = float(np.mean([row["rod_support_n"] for row in hold])) if hold else 0.0
     # What holds the toy once the jaws have opened. The loop is the part that is
@@ -1009,44 +927,10 @@ def judge(out: Path, diagnostics, quality, geometry, sim, entity, steps, *, vide
 
 def main() -> None:
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument("--out", type=Path, default=OUTPUT / "run")
-    parser.add_argument("--steps", type=int, default=round(DURATION * CONTROL_HZ))
-    parser.add_argument("--render-every", type=int, default=0)
-    parser.add_argument("--coarse", dest="coarse", action="store_true", help="run the coarse common-translation solve")
+    add_scene_arguments(parser, out=OUTPUT / "run", steps=round(DURATION * CONTROL_HZ), squeeze=GRIP_SQUEEZE)
     parser.add_argument("--rod-radius", type=float, default=ROD_RADIUS, help="rod radius [m]")
-    parser.add_argument(
-        "--mu", type=float, default=arm_gripper.GLOBAL_MU, help="the toy's global soft-contact friction coefficient"
-    )
-    parser.add_argument(
-        "--grip-mu", type=float, default=arm_gripper.GRIP_MU, help="the arm's pad-toy friction, set on the pads only"
-    )
-    parser.add_argument(
-        "--force-limit", type=float, default=arm_gripper.GRASP_LIMIT_N, help="the jaws' closing budget [N]"
-    )
-    parser.add_argument("--squeeze", type=float, default=GRIP_SQUEEZE, help="close travel past the loop [m]")
-    parser.add_argument(
-        "--no-self-contact", dest="self_contact", action="store_false", help="turn the toy's self-contact off"
-    )
-    parser.add_argument(
-        "--claw",
-        choices=("arm", "claw"),
-        default="arm",
-        help="who moves: the AIRBOT arm, or the scripted parallel claw this scene was built on",
-    )
     args = parser.parse_args()
-    run(
-        args.out,
-        steps=args.steps,
-        render_every=args.render_every,
-        coarse=args.coarse,
-        rod_radius=args.rod_radius,
-        mu=args.mu,
-        force_limit=args.force_limit,
-        squeeze=args.squeeze,
-        enable_self_contact=args.self_contact,
-        claw=args.claw,
-        grip_mu=args.grip_mu,
-    )
+    run(args.out, **scene_kwargs(args), rod_radius=args.rod_radius)
 
 
 if __name__ == "__main__":

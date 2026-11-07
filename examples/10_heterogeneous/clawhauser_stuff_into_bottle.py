@@ -36,7 +36,7 @@ Knobs, each reported with its measured effect:
 
     --bore      inner radius of the container [m]
     --mu        the pipeline's single global soft-contact friction coefficient
-    --cap       closing force clamp [N]
+    --force-limit  closing force clamp [N]
     --push-cap  pressing force clamp [N]
 
 Run on a CUDA node with Newton 1.8 development and RoboSimStudio on PYTHONPATH.
@@ -45,7 +45,6 @@ Run on a CUDA node with Newton 1.8 development and RoboSimStudio on PYTHONPATH.
 from __future__ import annotations
 
 import argparse
-import hashlib
 import json
 import subprocess
 import time
@@ -54,17 +53,26 @@ from pathlib import Path
 import arm_gripper
 import newton
 import numpy as np
+from clawhauser_scene import (
+    COARSE_BUDGET,
+    CONTACT_GAP,
+    add_scene_arguments,
+    arrangement,
+    check_build,
+    load_toy,
+    scene_kwargs,
+    toy_spec,
+)
+from clawhauser_scene import REFERENCE as PHYSICS
 from loop_geometry import ring_geometry, smooth
 from mesh_quality import MeshQuality, penetration
 from parallel_gripper import PUSH_LIMIT_N, ParallelGripperSpec
 
 import robosimstudio as rss
-from robosimstudio_materials.heterogeneous import HeterogeneousSoftSpec, load_labelled_tets
 
-ASSET = Path(__file__).resolve().parent / "assets" / "clawhauser"
 OUTPUT = Path(__file__).resolve().parents[2] / "outputs" / "clawhauser_stuff_into_bottle"
-CONTROL_HZ = 30
-SUBSTEPS = 20
+CONTROL_HZ = PHYSICS.control_hz
+SUBSTEPS = PHYSICS.substeps
 DURATION = 24.5
 """Long enough for the grasp, the guarded descent that stalls on the rim, the
 release, and the press that follows the body to the container's floor, and for
@@ -106,9 +114,9 @@ DESCEND_RATE = 0.035
 tail has to find the bore, and the jam has to be a jam rather than an impact.
 """
 JAM_STEP = 0.0005
-JAM_FRAMES = 8
-"""A stall: 0.5 mm of depth is the least progress that counts, and eight frames
-without it (0.27 s) is long enough that the swing of the carried toy, which moves
+JAM_FRAMES = round(0.27 * CONTROL_HZ)
+"""A stall: 0.5 mm of depth is the least progress that counts, and 0.27 s
+without it is long enough that the swing of the carried toy, which moves
 its lowest point by tens of millimetres, cannot look like one.
 """
 DROP_CLEARANCE = 0.006
@@ -118,14 +126,6 @@ BENCH_X = 0.6
 """Where the work-surface frame's origin sits in world x."""
 SOURCE_X = -0.07
 TARGET_X = 0.07
-CONTACT_GAP = 0.02
-"""The collision pipeline's detection gap. The coarse block's own gap must be
-this: a correction can only reach contacts the pipeline stored."""
-CONTACT_KE = 100000.0
-"""The arrangement's rigid-soft penalty stiffness: support load is this times
-the summed penetration a contact patch reports."""
-COARSE_BUDGET = 0.005
-"""Cumulative coarse translation per substep, at most a quarter of the gap."""
 GRIP_SQUEEZE = 0.016
 """How far past the loop's measured width the closed pads aim [m]. The same
 measured value the rod scene uses. The parallel jaws hold the pads' attitude, so
@@ -239,37 +239,23 @@ DESCENT_TIME = 2.5
 height, then descend [s]. The descent's end is not a boundary, only the ramp's
 bound; what ends it in every working run is the jam guard.
 """
-SOURCE_HASHES = {
-    "final_mesh.mesh": "df3d1505d96d36fbfa76291e7ab94269a30500ba5e4b87516d0bf8f57f0c6458",
-    "heterogeneous_params.npz": "7cfc8ca3cc7c08d261aa90b08832230801fec1ac62848d0e9239d9e2f318e8c6",
-    "inferred_params.json": "45aacd698f2b38a6fd8bf13b46cc9c33497fc90c6c1bdf088ed12d915ec3d992",
-    "appearance/visual_to_physics.npz": "4b015d1141794211e4e2c6e2b39fadef6762a73ffe2d76b921e47d5676f3d6c4",
-}
 
 
 def build_scene(
     *,
-    coarse: bool,
-    bore: float,
-    cap: float,
-    push_cap: float,
-    mu: float | None = arm_gripper.GLOBAL_MU,
+    claw: str = "arm",
+    coarse: bool = False,
+    solver_name: str = "chebyshev",
+    iterations: int = 160,
+    mu: float | None = None,
+    grip_mu: float | None = None,
+    force_limit: float = arm_gripper.GRASP_LIMIT_N,
     squeeze: float = GRIP_SQUEEZE,
     self_contact: bool = True,
-    claw: str = "arm",
-    grip_mu: float = arm_gripper.GRIP_MU,
+    bore: float = BORE_RADIUS,
+    push_cap: float = PUSH_LIMIT_N,
 ):
-    for relative, expected in SOURCE_HASHES.items():
-        actual = hashlib.sha256((ASSET / relative).read_bytes()).hexdigest()
-        if actual != expected:
-            raise ValueError(f"Clawhauser source asset changed: {relative}")
-    vertices, tets, labels, elastic, density = load_labelled_tets(
-        ASSET / "final_mesh.mesh", ASSET / "heterogeneous_params.npz"
-    )
-    if (len(vertices), len(tets)) != (1840, 6850) or set(np.unique(labels)) != {0, 1, 2}:
-        raise ValueError("Clawhauser source geometry or labels changed")
-    if not np.array_equal(np.unique(elastic[:, 0]), [5e5, 5e6]) or not np.array_equal(np.unique(density), [300, 1100]):
-        raise ValueError("Clawhauser source material estimates changed")
+    vertices, tets, labels = load_toy()
     ring = ring_geometry(vertices, tets, labels)
     ring["body_ids"] = np.unique(tets[labels == 1])
 
@@ -328,64 +314,14 @@ def build_scene(
         "descend_m": FLOOR_Z - RIM_Z - APPROACH,
         "descend_rate_m_s": DESCEND_RATE,
         "withdraw_z_m": WITHDRAW_Z,
-        "force_cap_n": cap,
+        "force_cap_n": force_limit,
         "push_force_cap_n": push_cap,
         "push_torque_cap_nm": 2.0,
     }
     print(json.dumps({"geometry": geometry}), flush=True)
 
-    common = {
-        "particle_enable_self_contact": self_contact,
-        # Millimetre-scale self-contact: the solver's own default margin is
-        # 0.2 m, which makes every particle pair touch and the toy explode.
-        "particle_self_contact_radius": 0.002,
-        "particle_self_contact_margin": 0.002,
-        "particle_topological_contact_filter_threshold": 2,
-        # The plush's own surface is within the contact margin at rest, and the
-        # grasp squeezes the 11 mm loop by 6 mm; exclude pairs that are that
-        # close in the rest shape, or the pinch folds the loop into itself.
-        "particle_rest_shape_contact_exclusion_radius": 0.006,
-        "particle_vertex_contact_buffer_size": 32,
-        "particle_edge_contact_buffer_size": 64,
-        "particle_enable_tile_solve": False,
-        "rigid_body_particle_contact_buffer_size": 4096,
-    }
-    vbd = (
-        rss.backend(
-            "robosimstudio_materials.coarse_translation.SolverVBDCoarse",
-            coarse_translation=True,
-            coarse_contact_gap=CONTACT_GAP,
-            coarse_budget=COARSE_BUDGET,
-            iterations=12,
-            **common,
-        )
-        if coarse
-        else rss.backend(
-            "robosimstudio_materials.chebyshev_acceleration.SolverVBDChebyshev",
-            iterations=160,
-            chebyshev_rho=0.95,
-            chebyshev_gamma=1.0,
-            **common,
-        )
-    )
-    physics = rss.ArrangementSpec(
-        control_hz=CONTROL_HZ,
-        substeps=SUBSTEPS,
-        use_cuda_graph=False,
-        # The arm is articulated and resolves to MuJoCo, so it is its own island
-        # and the toy keeps VBD; `one_way` with `slide_feedback` is what carries
-        # the grip, and `contact_matching` is forwarded into its pipeline.
-        backends=((("articulated", rss.backend("mujoco")),) if claw != "claw" else ())
-        + (("soft", vbd), ("rigid", vbd), ("*", vbd)),
-        **({"coupling": rss.coupler("one_way", contact_forces=True, slide_feedback=True)} if claw != "claw" else {}),
-        collision=rss.CollisionSpec(
-            soft_contact_margin=CONTACT_GAP,
-            full_surface_contact=False,
-            contact_ke=CONTACT_KE,
-            contact_kd=25.0,
-            broad_phase="nxn",
-            contact_matching="sticky",
-        ),
+    physics = arrangement(
+        PHYSICS, claw=claw, coarse=coarse, solver_name=solver_name, iterations=iterations, self_contact=self_contact
     )
     scene = rss.Scene(cell=CELL, physics=physics, name="clawhauser_stuff_into_bottle")
 
@@ -428,17 +364,7 @@ def build_scene(
             )
         )
 
-    obj = scene.add(
-        HeterogeneousSoftSpec(
-            name="clawhauser",
-            mesh_path=str(ASSET / "final_mesh.mesh"),
-            params_path=str(ASSET / "heterogeneous_params.npz"),
-            materials_path=str(ASSET / "inferred_params.json"),
-            pose=pose,
-            quat=quat,
-            contact_ke=CONTACT_KE,
-        )
-    )
+    obj = scene.add(toy_spec(PHYSICS, pose=pose, quat=quat))
     grip = None
     if claw == "claw":
         grip = scene.add(
@@ -451,7 +377,7 @@ def build_scene(
                 closed_half_gap=ring["side_reach"] + PAD_HALF_THICKNESS - squeeze,
                 pad_half_thickness=PAD_HALF_THICKNESS,
                 pad_half_width=PAD_HALF_WIDTH,
-                force_limit=cap,
+                force_limit=force_limit,
                 push_force_limit=push_cap,
                 duration=DURATION,
                 control_hz=CONTROL_HZ,
@@ -459,7 +385,7 @@ def build_scene(
             )
         )
     else:
-        arm_gripper.add_arm(scene, base_offset=ARM_BASE, force_limit=cap)
+        arm_gripper.add_arm(scene, base_offset=ARM_BASE, force_limit=force_limit)
     if claw == "claw":
         # Framed for the lying start: the toy rests toward the camera, so the eye
         # is pulled back from the standing framing and the view is aimed at the
@@ -472,43 +398,18 @@ def build_scene(
     scene.add(camera)
     sim = scene.build(device="cuda:0", warmup=False, use_cuda_graph=False)
     entity = obj.entity
-    # Every VBD attribute comes from the solver itself, never the coupling wrapper.
-    solver = arm_gripper.vbd_solver(sim.pipeline.program.solver)
-    if not type(solver).__name__.startswith("SolverVBD"):
-        raise RuntimeError(f"expected a VBD solver, got {type(solver).__name__}")
-    if grip is None:
-        geometry["arm"] = arm_gripper.check_arm(sim, limit=cap)
-    if sim.model.tet_count != len(tets) or len(entity.tet_part_labels) != len(tets):
-        raise RuntimeError("RSS lost Clawhauser tetrahedra or part labels")
-    if sim.model.attachment_particle_body_count:
-        raise RuntimeError("the contact grasp scene must not contain particle attachments")
-    if grip is None:
-        # Pad-only grip friction: a global 8 also made the toy grip the glass (2.8)
-        # and itself (8).
-        geometry["friction"] = arm_gripper.set_contact_friction(
-            sim, global_mu=arm_gripper.GLOBAL_MU if mu is None else mu, grip_mu=grip_mu
+    geometry.update(
+        check_build(
+            sim,
+            entity,
+            tets,
+            PHYSICS,
+            claw=claw,
+            force_limit=force_limit,
+            mu=mu,
+            grip_mu=grip_mu,
         )
-        geometry["global_soft_contact_mu"] = geometry["friction"]["global_soft_contact_mu"]
-    elif mu is not None:
-        # Newton VBD exposes one global soft-contact friction coefficient; this is
-        # it, and it is the knob the sweep turns. The solver steps the model it was
-        # built with, so if that is a distinct object the assignment has to land
-        # there as well -- and the value in use is reported either way.
-        sim.model.soft_contact_mu = float(mu)
-        if solver.model is not sim.model:
-            solver.model.soft_contact_mu = float(mu)
-        geometry["global_soft_contact_mu"] = float(solver.model.soft_contact_mu)
-    model_tets = sim.model.tet_indices.numpy()[entity.tet_range[0] : entity.tet_range[1]]
-    if not np.array_equal(model_tets - entity.particles[0], tets):
-        raise RuntimeError("Newton changed the source tetrahedron order")
-    young, nu = entity.source_elastic.T
-    source_mu = young / (2.0 * (1.0 + nu))
-    source_lambda = young * nu / ((1.0 + nu) * (1.0 - 2.0 * nu))
-    model_elastic = sim.model.tet_materials.numpy()[entity.tet_range[0] : entity.tet_range[1], :2]
-    if not np.allclose(model_elastic, np.column_stack((source_mu, source_lambda)), rtol=1e-5):
-        raise RuntimeError("Newton FEM elasticity differs from the source estimates")
-    if not np.allclose(sim.model.particle_mass.numpy()[entity.particles], entity.source_mass, rtol=1e-5):
-        raise RuntimeError("Newton nodal mass differs from source per-tet densities")
+    )
     # The shapes, not the entity ranges: a range ends one past its last shape, and
     # that extra id belongs to the next entity. Counting contacts by the range put
     # the toy's proxy in the container and read every pad-toy press contact as a
@@ -704,27 +605,31 @@ def run(
     *,
     steps: int,
     render_every: int = 0,
+    claw: str = "arm",
     coarse: bool = False,
-    bore: float = BORE_RADIUS,
-    cap: float = arm_gripper.GRASP_LIMIT_N,
-    push_cap: float = PUSH_LIMIT_N,
-    mu: float | None = arm_gripper.GLOBAL_MU,
+    solver_name: str = "chebyshev",
+    iterations: int = 160,
+    mu: float | None = None,
+    grip_mu: float | None = None,
+    force_limit: float = arm_gripper.GRASP_LIMIT_N,
     squeeze: float = GRIP_SQUEEZE,
     enable_self_contact: bool = True,
-    claw: str = "arm",
-    grip_mu: float = arm_gripper.GRIP_MU,
+    bore: float = BORE_RADIUS,
+    push_cap: float = PUSH_LIMIT_N,
 ) -> dict:
     out.mkdir(parents=True, exist_ok=True)
     sim, obj, grip, camera, ring, glass_shapes, glass_bodies, geometry = build_scene(
+        claw=claw,
         coarse=coarse,
-        bore=bore,
-        cap=cap,
-        push_cap=push_cap,
+        solver_name=solver_name,
+        iterations=iterations,
         mu=mu,
+        grip_mu=grip_mu,
+        force_limit=force_limit,
         squeeze=squeeze,
         self_contact=enable_self_contact,
-        claw=claw,
-        grip_mu=grip_mu,
+        bore=bore,
+        push_cap=push_cap,
     )
     entity = obj.entity
     particles = entity.particles
@@ -831,7 +736,7 @@ def run(
     rest_det = np.linalg.det(q0[tets[:, 1:]] - q0[tets[:, :1]])
     if np.any(rest_det <= 0):
         raise RuntimeError("source tetrahedra were not positively oriented after build")
-    mass = float(entity.source_mass.sum())
+    mass = float(entity.mass.sum())
     weight = mass * 9.81
     rim = TABLE_Z + RIM_Z
     # The container is placed in the work-surface frame, the particles are read in
@@ -1230,7 +1135,7 @@ def judge(
     reported as the measured deformation at this bore, not hidden: it is a
     quality number and a result field, not a silent pass.
     """
-    weight = float(entity.source_mass.sum() * 9.81)
+    weight = float(entity.mass.sum() * 9.81)
     # The claw's peak is the wrench its own drive applied, so its cap is exact to
     # a float32 ulp. The arm's is the squeeze its pads read back through the
     # coupling: the actuator is clamped at the same number, and the readback can
@@ -1384,45 +1289,11 @@ def judge(
 
 def main() -> None:
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument("--out", type=Path, default=OUTPUT / "run")
-    parser.add_argument("--steps", type=int, default=round(DURATION * CONTROL_HZ))
-    parser.add_argument("--render-every", type=int, default=0)
-    parser.add_argument("--coarse", dest="coarse", action="store_true", help="run the coarse common-translation solve")
+    add_scene_arguments(parser, out=OUTPUT / "run", steps=round(DURATION * CONTROL_HZ), squeeze=GRIP_SQUEEZE)
     parser.add_argument("--bore", type=float, default=BORE_RADIUS, help="container inner radius [m]")
-    parser.add_argument("--cap", type=float, default=arm_gripper.GRASP_LIMIT_N, help="jaw closing clamp [N]")
     parser.add_argument("--push-cap", type=float, default=PUSH_LIMIT_N, help="carrier push clamp [N]")
-    parser.add_argument("--force-limit", type=float, default=None, help="alias for --cap, the sweep's name")
-    parser.add_argument("--squeeze", type=float, default=GRIP_SQUEEZE, help="close travel past the loop [m]")
-    parser.add_argument(
-        "--mu", type=float, default=arm_gripper.GLOBAL_MU, help="the toy's global soft-contact friction coefficient"
-    )
-    parser.add_argument(
-        "--grip-mu", type=float, default=arm_gripper.GRIP_MU, help="the arm's pad-toy friction, set on the pads only"
-    )
-    parser.add_argument(
-        "--no-self-contact", dest="self_contact", action="store_false", help="turn the toy's self-contact off"
-    )
-    parser.add_argument(
-        "--claw",
-        choices=("arm", "claw"),
-        default="arm",
-        help="who moves: the AIRBOT arm, or the scripted parallel claw this scene was built on",
-    )
     args = parser.parse_args()
-    run(
-        args.out,
-        steps=args.steps,
-        render_every=args.render_every,
-        coarse=args.coarse,
-        bore=args.bore,
-        cap=args.cap if args.force_limit is None else args.force_limit,
-        push_cap=args.push_cap,
-        mu=args.mu,
-        squeeze=args.squeeze,
-        enable_self_contact=args.self_contact,
-        claw=args.claw,
-        grip_mu=args.grip_mu,
-    )
+    run(args.out, **scene_kwargs(args), bore=args.bore, push_cap=args.push_cap)
 
 
 if __name__ == "__main__":

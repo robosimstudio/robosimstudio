@@ -111,7 +111,7 @@ Controls and knobs, each reported with its measured effect:
   inverted its rim tets. 100 mm is the default.
 - `--mu`: the pipeline's single global soft friction coefficient. 0.9 for the
   rod; 2.0 for the cup's loop grip.
-- `--cap` / `--push-cap`: the jaw closing clamp and the carrier push budget [N].
+- `--force-limit` / `--push-cap`: the jaw closing clamp and the carrier push budget [N].
   The jaws never exceed 10 N; the press measures 145-200 N at the 200 N default
   and 100.0 N at 100 N, over the same 85 mm path.
 - `--rod-radius`: 6 mm; the rod carries the toy at 1.16-1.19 N.
@@ -221,11 +221,18 @@ which stays as the reference the arm is measured against. `arm_gripper.py` is
 the shared module: the MJCF asset, the embodiment, the hand's registry entry, the
 route/IK planner and the build-time checks. The grasp's numbers do not change --
 a 20 N closing clamp, the pads commanded 16 mm past the loop's measured
-half-width, and the pipeline's global `mu`, 8.0 by default on the stock pads --
+half-width, and the toy's friction from `REFERENCE` (below) --
 and neither does the task: each
 scene states a tool-centre path and a pad-face gap, the arm's IK turns it into
 joint targets at the control rate, and every per-frame diagnostic is computed
 from the same state arrays the claw's were.
+
+`clawhauser_scene.py` holds what the three share: the asset check, the
+arrangement, the toy's spec, the build checks and the common CLI (`--solver
+chebyshev|vbd`, `--iterations`, `--mu`, `--grip-mu`, `--force-limit`,
+`--squeeze`, `--no-self-contact`). Its `REFERENCE` settings are the slim Newton
+VBD handoff's: 60 Hz x 20 substeps, contact ke 1e6 / kd 10, soft mu 1.0 and
+shape mu 1.5, the tail at E 0.1 MPa and the loop at 300 kg/m³.
 
 **The bench carries the arm.** The mount is 132 mm above the work surface and
 180 mm behind `bench_075`'s near edge, which is where every route was planned;

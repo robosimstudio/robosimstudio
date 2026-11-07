@@ -20,7 +20,10 @@ from robosimstudio.domains.capabilities import ParticleMixin
 from robosimstudio.scene.entity import Entity
 from robosimstudio.scene.registry import register_entity
 
-__all__ = ["EntityHeterogeneousSoft", "HeterogeneousSoftSpec", "load_labelled_tets"]
+__all__ = ["PART_FIELDS", "EntityHeterogeneousSoft", "HeterogeneousSoftSpec", "load_labelled_tets"]
+
+PART_FIELDS = ("youngs_modulus_pa", "poisson_ratio", "density_kg_m3")
+"""The per-part values a :class:`HeterogeneousSoftSpec` override may replace."""
 
 
 def load_labelled_tets(mesh_path: str | Path, params_path: str | Path) -> tuple[np.ndarray, ...]:
@@ -105,8 +108,9 @@ class HeterogeneousSoftSpec:
     """Paths and placement for a single connected labelled FEM object.
 
     `pose` places the source mesh origin in the work-surface frame. Young's
-    modulus, Poisson ratio, and density come exclusively from `params_path`.
-    `damping` is a solver setting, not a source material estimate.
+    modulus, Poisson ratio, and density come from `params_path`, except where
+    `part_overrides` replaces one part's value. `damping` is a solver setting,
+    not a source material estimate.
     """
 
     stage: ClassVar[str] = "deformables"
@@ -129,12 +133,20 @@ class HeterogeneousSoftSpec:
     settle_frames: int = 0
     settle_substeps: int = 0
     particle_sets: tuple = ()
+    part_overrides: tuple = ()
+    """``(part_id, field, value)`` rows replacing a part's source estimate, where
+    ``field`` is one of :data:`PART_FIELDS`. The source files stay untouched;
+    the entity keeps both the source arrays and the ones it built with.
+    """
 
     def __post_init__(self) -> None:
         if not self.mesh_path or not self.params_path or not self.materials_path:
             raise ValueError("heterogeneous soft body needs mesh, parameter, and material paths")
         if self.scale <= 0 or self.particle_radius <= 0 or self.damping < 0:
             raise ValueError("scale and particle radius must be positive; damping cannot be negative")
+        for row in self.part_overrides:
+            if len(row) != 3 or row[1] not in PART_FIELDS:
+                raise ValueError(f"part override {row!r} is not (part_id, one of {PART_FIELDS}, value)")
 
 
 @register_entity("heterogeneous_soft")
@@ -178,13 +190,29 @@ class EntityHeterogeneousSoft(ParticleMixin, Entity):
             actual = np.column_stack((elastic[rows], density[rows]))
             if not np.allclose(actual, expected, rtol=1e-6, atol=0):
                 raise ValueError(f"{spec.materials_path}: part {part_id} disagrees with the per-tet arrays")
+        source_elastic, source_density = elastic.copy(), density.copy()
+        for part_id, field, value in spec.part_overrides:
+            if int(part_id) not in parts:
+                raise ValueError(f"{spec.name}: override names part {part_id}, which the mesh does not have")
+            rows = labels == int(part_id)
+            if field == "density_kg_m3":
+                density[rows] = float(value)
+            else:
+                elastic[rows, PART_FIELDS.index(field)] = float(value)
+        if np.any(elastic[:, 0] <= 0) or np.any((elastic[:, 1] < 0) | (elastic[:, 1] >= 0.5)) or np.any(density <= 0):
+            raise ValueError(f"{spec.name}: an override puts E, Poisson ratio or density outside the FEM range")
 
         young, nu = elastic.T
         mu = young / (2.0 * (1.0 + nu))
         lam = young * nu / ((1.0 + nu) * (1.0 - 2.0 * nu))
         volume = np.linalg.det(vertices[tets[:, 1:]] - vertices[tets[:, :1]]) * spec.scale**3 / 6.0
-        masses = np.zeros(len(vertices), dtype=np.float64)
-        np.add.at(masses, tets.ravel(), np.repeat(density * volume / 4.0, 4))
+
+        def nodal(per_tet: np.ndarray) -> np.ndarray:
+            out = np.zeros(len(vertices), dtype=np.float64)
+            np.add.at(out, tets.ravel(), np.repeat(per_tet * volume / 4.0, 4))
+            return out
+
+        masses = nodal(density)
         if np.any(masses <= 0):
             raise ValueError(f"{spec.mesh_path}: zero-mass vertices")
 
@@ -229,9 +257,13 @@ class EntityHeterogeneousSoft(ParticleMixin, Entity):
         self.part_materials = parts
         self.source_vertices = vertices
         self.source_tets = tets
-        self.source_elastic = elastic
-        self.source_density = density
-        self.source_mass = masses
+        self.source_elastic = source_elastic
+        self.source_density = source_density
+        self.source_mass = nodal(source_density)
+        # What Newton was given: the source with `part_overrides` applied.
+        self.elastic = elastic
+        self.density = density
+        self.mass = masses
 
     def host_actor(self):
         raise ValueError(f"{self.name}: labelled FEM needs a Newton particle solver; route soft to VBD")
