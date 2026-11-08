@@ -9,9 +9,9 @@ is not the scene's own task:
 3. :func:`toy_spec` places the toy, with the settings' material overrides.
 4. :func:`check_build` checks what Newton built and applies the contact settings.
    ``build_scene(*, claw, coarse, solver_name, iterations, mu, grip_mu,
-   force_limit, squeeze, self_contact, self_contact_radius, rigid_loop,
-   <scene's own>)`` and ``run(out, *, steps, render_every, <the same>)`` take the
-   common arguments in this order.
+   force_limit, squeeze, self_contact, self_contact_radius, feedback_smoothing,
+   feedback_clamp, rigid_loop, <scene's own>)`` and ``run(out, *, steps,
+   render_every, <the same>)`` take the common arguments in this order.
 5. :func:`add_scene_arguments` / :func:`scene_kwargs` are the common CLI.
 
 :class:`PhysicsSettings` holds what a scene takes from a reference setup;
@@ -167,12 +167,15 @@ def arrangement(
     iterations: int,
     self_contact: bool,
     self_contact_radius: float = SELF_CONTACT_RADIUS,
+    feedback_smoothing: float = 1.0,
+    feedback_clamp: float = 0.0,
 ) -> rss.ArrangementSpec:
     """The scenes' physics: the toy on VBD, and the arm on MuJoCo unless ``claw == "claw"``.
 
     The arm resolves to MuJoCo and is its own island; ``one_way`` with
     ``slide_feedback`` stops each finger on the loop's push, so the clamp is the
     grip. Sticky matching is the scene's and the coupler forwards it.
+    ``feedback_smoothing`` and ``feedback_clamp`` are the coupler's slide-feedback options.
     """
     common = {
         "particle_enable_self_contact": self_contact,
@@ -210,7 +213,19 @@ def arrangement(
         use_cuda_graph=False,
         backends=((("articulated", rss.backend("mujoco")),) if split else ())
         + (("soft", vbd), ("rigid", vbd), ("*", vbd)),
-        **({"coupling": rss.coupler("one_way", contact_forces=True, slide_feedback=True)} if split else {}),
+        **(
+            {
+                "coupling": rss.coupler(
+                    "one_way",
+                    contact_forces=True,
+                    slide_feedback=True,
+                    slide_feedback_smoothing=feedback_smoothing,
+                    slide_feedback_clamp=feedback_clamp,
+                )
+            }
+            if split
+            else {}
+        ),
         collision=rss.CollisionSpec(
             soft_contact_margin=CONTACT_GAP,
             full_surface_contact=False,
@@ -357,6 +372,18 @@ def add_scene_arguments(parser: argparse.ArgumentParser, *, out: Path, steps: in
         "--self-contact-radius", type=float, default=SELF_CONTACT_RADIUS, help="self-contact radius and margin [m]"
     )
     parser.add_argument(
+        "--feedback-smoothing",
+        type=float,
+        default=1.0,
+        help="weight of each substep's push in the running average fed to the fingers (1: as it is)",
+    )
+    parser.add_argument(
+        "--feedback-clamp",
+        type=float,
+        default=0.0,
+        help="cap the fed push at this multiple of the finger's effort limit (0: uncapped)",
+    )
+    parser.add_argument(
         "--rigid-loop", action="store_true", help="project the loop onto a rigid pose after every substep"
     )
 
@@ -376,5 +403,7 @@ def scene_kwargs(args: argparse.Namespace) -> dict:
         "squeeze": args.squeeze,
         "enable_self_contact": args.self_contact,
         "self_contact_radius": args.self_contact_radius,
+        "feedback_smoothing": args.feedback_smoothing,
+        "feedback_clamp": args.feedback_clamp,
         "rigid_loop": args.rigid_loop,
     }
