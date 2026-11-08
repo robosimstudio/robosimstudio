@@ -311,6 +311,74 @@ def _slide_feedback(
         wp.atomic_add(body_f, p, wp.spatial_vector(-push, wp.cross(lever, -push)))
 
 
+@wp.kernel
+def _slide_push(
+    count: wp.array[int],
+    shape: wp.array[int],
+    offset: int,
+    contact_f: wp.array[wp.spatial_vector],
+    shape_body: wp.array[int],
+    body_slot: wp.array[int],
+    slot_joint: wp.array[int],
+    joint_X_c: wp.array[wp.transform],
+    joint_axis: wp.array[wp.vec3],
+    joint_qd_start: wp.array[int],
+    body_q: wp.array[wp.transform],
+    raw: wp.array[float],
+):
+    """Each live rigid-soft record's push along its body's slide axis, summed per slide joint."""
+    tid = wp.tid()
+    if tid >= count[0]:
+        return
+    s = shape[tid]
+    if s < 0:
+        return
+    b = shape_body[s]
+    if b < 0:
+        return
+    k = body_slot[b]
+    if k < 0:
+        return
+    j = slot_joint[k]
+    rot = wp.transform_get_rotation(body_q[b]) * wp.transform_get_rotation(joint_X_c[j])
+    axis = wp.quat_rotate(rot, joint_axis[joint_qd_start[j]])
+    wp.atomic_add(raw, k, wp.dot(wp.spatial_top(contact_f[offset + tid]), axis))
+
+
+@wp.kernel
+def _slide_apply(
+    raw: wp.array[float],
+    filtered: wp.array[float],
+    limit: wp.array[float],
+    alpha: float,
+    slot_joint: wp.array[int],
+    slot_body: wp.array[int],
+    joint_parent: wp.array[int],
+    joint_X_c: wp.array[wp.transform],
+    joint_axis: wp.array[wp.vec3],
+    joint_qd_start: wp.array[int],
+    body_q: wp.array[wp.transform],
+    body_com: wp.array[wp.vec3],
+    body_f: wp.array[wp.spatial_vector],
+):
+    """Smooth each slide's summed push over substeps, clamp it, and apply it as the pair ``_slide_feedback`` does."""
+    k = wp.tid()
+    f = filtered[k] + alpha * (raw[k] - filtered[k])
+    f = wp.clamp(f, -limit[k], limit[k])
+    filtered[k] = f
+    raw[k] = 0.0
+    j = slot_joint[k]
+    b = slot_body[k]
+    rot = wp.transform_get_rotation(body_q[b]) * wp.transform_get_rotation(joint_X_c[j])
+    axis = wp.quat_rotate(rot, joint_axis[joint_qd_start[j]])
+    push = f * axis
+    wp.atomic_add(body_f, b, wp.spatial_vector(push, wp.vec3()))
+    p = joint_parent[j]
+    if p >= 0:
+        lever = wp.transform_point(body_q[b], body_com[b]) - wp.transform_point(body_q[p], body_com[p])
+        wp.atomic_add(body_f, p, wp.spatial_vector(-push, wp.cross(lever, -push)))
+
+
 class SolverOneWay:
     """Two solvers over one model, the rigid one leading: a kinematic mirror, fed back only along slides.
 
@@ -365,6 +433,10 @@ class SolverOneWay:
         contact_forces: Ask the deformable solver for its contact forces every substep.
         slide_feedback: Give every slide (prismatic) joint the soft contacts' push along its axis,
             the substep after it was pushed.
+        slide_feedback_smoothing: With slide feedback, the weight of each substep's push in a running
+            average of it (1 feeds every substep's push as it is).
+        slide_feedback_clamp: With slide feedback, cap the fed push at this multiple of each slide's
+            effort limit (0 leaves it uncapped).
     """
 
     def __init__(
@@ -377,6 +449,8 @@ class SolverOneWay:
         *,
         contact_forces: bool = False,
         slide_feedback: bool = False,
+        slide_feedback_smoothing: float = 1.0,
+        slide_feedback_clamp: float = 0.0,
     ) -> None:
         self.model = model
         self.rigid = rigid
@@ -390,6 +464,7 @@ class SolverOneWay:
         self.observables = None
         self._shape_forces = None
         self._body_slide = None
+        self._filtered = None
         if contact_forces or slide_feedback:
             self.enable_contact_forces()
         if slide_feedback and model.body_count:
@@ -399,6 +474,21 @@ class SolverOneWay:
             for j in np.flatnonzero(kinds == int(newton.JointType.PRISMATIC)):
                 table[int(child[j])] = int(j)
             self._body_slide = wp.array(table, dtype=wp.int32, device=self.device)
+            self._smoothing = float(slide_feedback_smoothing)
+            if not 0.0 < self._smoothing <= 1.0:
+                raise ValueError("slide_feedback_smoothing must be in (0, 1]")
+            if self._smoothing < 1.0 or slide_feedback_clamp > 0.0:
+                joints = np.flatnonzero(kinds == int(newton.JointType.PRISMATIC)).astype(np.int32)
+                slot = np.full(int(model.body_count), -1, dtype=np.int32)
+                slot[child[joints]] = np.arange(len(joints), dtype=np.int32)
+                effort = model.joint_effort_limit.numpy()[model.joint_qd_start.numpy()[joints]]
+                limit = slide_feedback_clamp * effort if slide_feedback_clamp > 0.0 else np.full(len(joints), 1e30)
+                self._body_slot = wp.array(slot, dtype=wp.int32, device=self.device)
+                self._slot_joint = wp.array(joints, dtype=wp.int32, device=self.device)
+                self._slot_body = wp.array(child[joints].astype(np.int32), dtype=wp.int32, device=self.device)
+                self._limit = wp.array(limit.astype(np.float32), dtype=float, device=self.device)
+                self._raw = wp.zeros(len(joints), dtype=float, device=self.device)
+                self._filtered = wp.zeros(len(joints), dtype=float, device=self.device)
 
     def enable_contact_forces(self) -> None:
         """Ask the deformable solver for its contact forces from the next substep on.
@@ -496,7 +586,49 @@ class SolverOneWay:
             self.soft.step(state_in, state_out, control, self.contacts, dt, **self._observing())
             return
         wp.copy(self._body_q_prev, state_in.body_q)
-        if self._body_slide is not None and self.contacts.soft_contact_max > 0:
+        if self._filtered is not None and self.contacts.soft_contact_max > 0:
+            # Smoothed and clamped per slide: sum last substep's pushes by joint, then apply the average.
+            model, contacts = self.model, self.contacts
+            wp.launch(
+                _slide_push,
+                dim=contacts.soft_contact_max,
+                inputs=[
+                    contacts.soft_contact_count,
+                    contacts.soft_contact_shape,
+                    int(contacts.rigid_contact_max),
+                    self.observables.contact_f,
+                    model.shape_body,
+                    self._body_slot,
+                    self._slot_joint,
+                    model.joint_X_c,
+                    model.joint_axis,
+                    model.joint_qd_start,
+                    state_in.body_q,
+                ],
+                outputs=[self._raw],
+                device=self.device,
+            )
+            wp.launch(
+                _slide_apply,
+                dim=self._raw.shape[0],
+                inputs=[
+                    self._raw,
+                    self._filtered,
+                    self._limit,
+                    self._smoothing,
+                    self._slot_joint,
+                    self._slot_body,
+                    model.joint_parent,
+                    model.joint_X_c,
+                    model.joint_axis,
+                    model.joint_qd_start,
+                    state_in.body_q,
+                    model.body_com,
+                ],
+                outputs=[state_in.body_f],
+                device=self.device,
+            )
+        elif self._body_slide is not None and self.contacts.soft_contact_max > 0:
             # Last substep's records and forces, still in the buffers: the collide and the solve below
             # replace them. ``body_f`` was cleared before this substep, so the pair adds, once.
             model, contacts = self.model, self.contacts
@@ -543,6 +675,9 @@ class SolverOneWay:
             # on the first substep after the reset; the next collide fills the buffers again. The count is every
             # world's, so a reset of some worlds costs the others one substep of feedback and readout too.
             self.contacts.soft_contact_count.zero_()
+            # getattr: a coupler can be assembled without __init__, as the readout tests do.
+            if getattr(self, "_filtered", None) is not None:
+                self._filtered.zero_()
         for inner in (self.rigid, self.soft):
             reset = getattr(inner, "reset", None)
             if reset is None:
@@ -579,6 +714,8 @@ def build_one_way(ctx: CouplerBuild) -> Any:
     pipeline = newton.CollisionPipeline(ctx.model, **kwargs)
     forces = bool(ctx.spec.get("contact_forces", False))
     slides = bool(ctx.spec.get("slide_feedback", False))
+    smoothing = float(ctx.spec.get("slide_feedback_smoothing", 1.0))
+    clamp = float(ctx.spec.get("slide_feedback_clamp", 0.0))
     return SolverOneWay(
         ctx.model,
         rigid_solver,
@@ -587,6 +724,8 @@ def build_one_way(ctx: CouplerBuild) -> Any:
         (rigid.name, deformable.name),
         contact_forces=forces,
         slide_feedback=slides,
+        slide_feedback_smoothing=smoothing,
+        slide_feedback_clamp=clamp,
     )
 
 
