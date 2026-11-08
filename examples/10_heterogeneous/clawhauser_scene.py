@@ -9,8 +9,9 @@ is not the scene's own task:
 3. :func:`toy_spec` places the toy, with the settings' material overrides.
 4. :func:`check_build` checks what Newton built and applies the contact settings.
    ``build_scene(*, claw, coarse, solver_name, iterations, mu, grip_mu,
-   force_limit, squeeze, self_contact, rigid_loop, <scene's own>)`` and ``run(out, *, steps,
-   render_every, <the same>)`` take the common arguments in this order.
+   force_limit, squeeze, self_contact, self_contact_radius, rigid_loop,
+   <scene's own>)`` and ``run(out, *, steps, render_every, <the same>)`` take the
+   common arguments in this order.
 5. :func:`add_scene_arguments` / :func:`scene_kwargs` are the common CLI.
 
 :class:`PhysicsSettings` holds what a scene takes from a reference setup;
@@ -38,6 +39,7 @@ __all__ = [
     "COARSE_BUDGET",
     "CONTACT_GAP",
     "REFERENCE",
+    "SELF_CONTACT_RADIUS",
     "SOLVERS",
     "PhysicsSettings",
     "add_scene_arguments",
@@ -63,6 +65,11 @@ CONTACT_GAP = 0.006
 gap must be this: a correction can only reach contacts the pipeline stored."""
 COARSE_BUDGET = CONTACT_GAP / 4.0
 """Cumulative coarse translation per substep [m], at most a quarter of the gap."""
+SELF_CONTACT_RADIUS = 0.002
+"""The toy's self-contact radius and detection margin [m].
+
+VBD truncates each particle's motion per substep to about 0.43 x this, so it also
+caps the toy's speed: 0.002 m allows about 1 m/s at 1200 substeps per second."""
 
 SOLVERS = {
     "chebyshev": (
@@ -158,6 +165,7 @@ def arrangement(
     solver_name: str,
     iterations: int,
     self_contact: bool,
+    self_contact_radius: float = SELF_CONTACT_RADIUS,
 ) -> rss.ArrangementSpec:
     """The scenes' physics: the toy on VBD, and the arm on MuJoCo unless ``claw == "claw"``.
 
@@ -169,8 +177,8 @@ def arrangement(
         "particle_enable_self_contact": self_contact,
         # Millimetre-scale self-contact: the solver's own default margin is
         # 0.2 m, which makes every particle pair touch and the toy explode.
-        "particle_self_contact_radius": 0.002,
-        "particle_self_contact_margin": 0.002,
+        "particle_self_contact_radius": self_contact_radius,
+        "particle_self_contact_margin": self_contact_radius,
         "particle_topological_contact_filter_threshold": 2,
         # The plush's own surface is within the contact margin at rest, and the
         # grasp squeezes the 11 mm loop by 6 mm; exclude pairs that are that
@@ -345,6 +353,9 @@ def add_scene_arguments(parser: argparse.ArgumentParser, *, out: Path, steps: in
         "--no-self-contact", dest="self_contact", action="store_false", help="turn the toy's self-contact off"
     )
     parser.add_argument(
+        "--self-contact-radius", type=float, default=SELF_CONTACT_RADIUS, help="self-contact radius and margin [m]"
+    )
+    parser.add_argument(
         "--rigid-loop", action="store_true", help="project the loop onto a rigid pose after every substep"
     )
 
@@ -363,5 +374,6 @@ def scene_kwargs(args: argparse.Namespace) -> dict:
         "force_limit": args.force_limit,
         "squeeze": args.squeeze,
         "enable_self_contact": args.self_contact,
+        "self_contact_radius": args.self_contact_radius,
         "rigid_loop": args.rigid_loop,
     }

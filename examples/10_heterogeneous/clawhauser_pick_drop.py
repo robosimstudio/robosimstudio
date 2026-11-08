@@ -29,7 +29,15 @@ from pathlib import Path
 import arm_gripper
 import numpy as np
 from clawhauser_scene import REFERENCE as PHYSICS
-from clawhauser_scene import add_scene_arguments, arrangement, check_build, load_toy, scene_kwargs, toy_spec
+from clawhauser_scene import (
+    SELF_CONTACT_RADIUS,
+    add_scene_arguments,
+    arrangement,
+    check_build,
+    load_toy,
+    scene_kwargs,
+    toy_spec,
+)
 from loop_geometry import ring_geometry, smooth
 from mesh_quality import MeshQuality, penetration
 from parallel_gripper import ParallelGripperSpec
@@ -103,6 +111,7 @@ def build_scene(
     force_limit: float = arm_gripper.GRASP_LIMIT_N,
     squeeze: float = GRIP_SQUEEZE,
     self_contact: bool = True,
+    self_contact_radius: float = SELF_CONTACT_RADIUS,
     rigid_loop: bool = False,
 ):
     vertices, tets, labels = load_toy()
@@ -139,7 +148,13 @@ def build_scene(
 
     split = claw != "claw"
     physics = arrangement(
-        PHYSICS, claw=claw, coarse=coarse, solver_name=solver_name, iterations=iterations, self_contact=self_contact
+        PHYSICS,
+        claw=claw,
+        coarse=coarse,
+        solver_name=solver_name,
+        iterations=iterations,
+        self_contact=self_contact,
+        self_contact_radius=self_contact_radius,
     )
     scene = rss.Scene(cell=CELL, physics=physics, name="clawhauser_pick_drop")
     obj = scene.add(toy_spec(PHYSICS, pose=pose, quat=quat))
@@ -345,6 +360,7 @@ def run(
     force_limit: float = arm_gripper.GRASP_LIMIT_N,
     squeeze: float = GRIP_SQUEEZE,
     enable_self_contact: bool = True,
+    self_contact_radius: float = SELF_CONTACT_RADIUS,
     rigid_loop: bool = False,
 ) -> dict:
     out.mkdir(parents=True, exist_ok=True)
@@ -358,6 +374,7 @@ def run(
         force_limit=force_limit,
         squeeze=squeeze,
         self_contact=enable_self_contact,
+        self_contact_radius=self_contact_radius,
         rigid_loop=rigid_loop,
     )
     entity = obj.entity

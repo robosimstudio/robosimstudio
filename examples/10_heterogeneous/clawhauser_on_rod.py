@@ -63,6 +63,7 @@ import numpy as np
 from clawhauser_scene import (
     COARSE_BUDGET,
     CONTACT_GAP,
+    SELF_CONTACT_RADIUS,
     add_scene_arguments,
     arrangement,
     check_build,
@@ -262,6 +263,7 @@ def build_scene(
     force_limit: float = arm_gripper.GRASP_LIMIT_N,
     squeeze: float = GRIP_SQUEEZE,
     self_contact: bool = True,
+    self_contact_radius: float = SELF_CONTACT_RADIUS,
     rigid_loop: bool = False,
     rod_radius: float = ROD_RADIUS,
 ):
@@ -322,7 +324,13 @@ def build_scene(
 
     split = claw != "claw"
     physics = arrangement(
-        PHYSICS, claw=claw, coarse=coarse, solver_name=solver_name, iterations=iterations, self_contact=self_contact
+        PHYSICS,
+        claw=claw,
+        coarse=coarse,
+        solver_name=solver_name,
+        iterations=iterations,
+        self_contact=self_contact,
+        self_contact_radius=self_contact_radius,
     )
     scene = rss.Scene(cell=CELL, physics=physics, name="clawhauser_on_rod")
     rod_x = SOURCE_X + float(hole[0])
@@ -581,6 +589,7 @@ def run(
     force_limit: float = arm_gripper.GRASP_LIMIT_N,
     squeeze: float = GRIP_SQUEEZE,
     enable_self_contact: bool = True,
+    self_contact_radius: float = SELF_CONTACT_RADIUS,
     rigid_loop: bool = False,
     rod_radius: float = ROD_RADIUS,
 ) -> dict:
@@ -595,6 +604,7 @@ def run(
         force_limit=force_limit,
         squeeze=squeeze,
         self_contact=enable_self_contact,
+        self_contact_radius=self_contact_radius,
         rigid_loop=rigid_loop,
         rod_radius=rod_radius,
     )
