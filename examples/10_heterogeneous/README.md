@@ -232,7 +232,7 @@ from the same state arrays the claw's were.
 arrangement, the toy's spec, the build checks and the common CLI (`--solver
 chebyshev|vbd`, `--iterations`, `--mu`, `--grip-mu`, `--force-limit`,
 `--squeeze`, `--no-self-contact`, `--self-contact-radius`, `--feedback-smoothing`,
-`--feedback-clamp`). Its `REFERENCE` settings are the slim Newton
+`--feedback-clamp`, `--surface-contact`). Its `REFERENCE` settings are the slim Newton
 VBD handoff's: 60 Hz x 20 substeps, contact ke 1e4 (the handoff's is 1e6) / kd 10, soft mu 1.0 and
 shape mu 1.5, the tail at E 0.1 MPa and the loop at 300 kg/m³. The handoff's
 solver settings are matched too: tet damping of 5e-4 s x each tet's shear

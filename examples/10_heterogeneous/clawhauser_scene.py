@@ -10,8 +10,8 @@ is not the scene's own task:
 4. :func:`check_build` checks what Newton built and applies the contact settings.
    ``build_scene(*, claw, coarse, solver_name, iterations, mu, grip_mu,
    force_limit, squeeze, self_contact, self_contact_radius, feedback_smoothing,
-   feedback_clamp, rigid_loop, <scene's own>)`` and ``run(out, *, steps,
-   render_every, <the same>)`` take the common arguments in this order.
+   feedback_clamp, surface_contact, rigid_loop, <scene's own>)`` and ``run(out, *,
+   steps, render_every, <the same>)`` take the common arguments in this order.
 5. :func:`add_scene_arguments` / :func:`scene_kwargs` are the common CLI.
 
 :class:`PhysicsSettings` holds what a scene takes from a reference setup;
@@ -169,13 +169,15 @@ def arrangement(
     self_contact_radius: float = SELF_CONTACT_RADIUS,
     feedback_smoothing: float = 1.0,
     feedback_clamp: float = 0.0,
+    surface_contact: bool = False,
 ) -> rss.ArrangementSpec:
     """The scenes' physics: the toy on VBD, and the arm on MuJoCo unless ``claw == "claw"``.
 
     The arm resolves to MuJoCo and is its own island; ``one_way`` with
     ``slide_feedback`` stops each finger on the loop's push, so the clamp is the
     grip. Sticky matching is the scene's and the coupler forwards it.
-    ``feedback_smoothing`` and ``feedback_clamp`` are the coupler's slide-feedback options.
+    ``feedback_smoothing`` and ``feedback_clamp`` are the coupler's slide-feedback options;
+    ``surface_contact`` adds soft contacts over the whole surface (edges and faces), not only particles.
     """
     common = {
         "particle_enable_self_contact": self_contact,
@@ -228,7 +230,7 @@ def arrangement(
         ),
         collision=rss.CollisionSpec(
             soft_contact_margin=CONTACT_GAP,
-            full_surface_contact=False,
+            full_surface_contact=surface_contact,
             contact_ke=settings.contact_ke,
             contact_kd=settings.contact_kd,
             broad_phase="nxn",
@@ -384,6 +386,9 @@ def add_scene_arguments(parser: argparse.ArgumentParser, *, out: Path, steps: in
         help="cap the fed push at this multiple of the finger's effort limit (0: uncapped)",
     )
     parser.add_argument(
+        "--surface-contact", action="store_true", help="soft contacts over the whole surface, not only particles"
+    )
+    parser.add_argument(
         "--rigid-loop", action="store_true", help="project the loop onto a rigid pose after every substep"
     )
 
@@ -405,5 +410,6 @@ def scene_kwargs(args: argparse.Namespace) -> dict:
         "self_contact_radius": args.self_contact_radius,
         "feedback_smoothing": args.feedback_smoothing,
         "feedback_clamp": args.feedback_clamp,
+        "surface_contact": args.surface_contact,
         "rigid_loop": args.rigid_loop,
     }

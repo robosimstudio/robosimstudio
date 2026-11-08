@@ -114,6 +114,7 @@ def build_scene(
     self_contact_radius: float = SELF_CONTACT_RADIUS,
     feedback_smoothing: float = 1.0,
     feedback_clamp: float = 0.0,
+    surface_contact: bool = False,
     rigid_loop: bool = False,
 ):
     vertices, tets, labels = load_toy()
@@ -159,6 +160,7 @@ def build_scene(
         self_contact_radius=self_contact_radius,
         feedback_smoothing=feedback_smoothing,
         feedback_clamp=feedback_clamp,
+        surface_contact=surface_contact,
     )
     scene = rss.Scene(cell=CELL, physics=physics, name="clawhauser_pick_drop")
     obj = scene.add(toy_spec(PHYSICS, pose=pose, quat=quat))
@@ -367,6 +369,7 @@ def run(
     self_contact_radius: float = SELF_CONTACT_RADIUS,
     feedback_smoothing: float = 1.0,
     feedback_clamp: float = 0.0,
+    surface_contact: bool = False,
     rigid_loop: bool = False,
 ) -> dict:
     out.mkdir(parents=True, exist_ok=True)
@@ -383,6 +386,7 @@ def run(
         self_contact_radius=self_contact_radius,
         feedback_smoothing=feedback_smoothing,
         feedback_clamp=feedback_clamp,
+        surface_contact=surface_contact,
         rigid_loop=rigid_loop,
     )
     entity = obj.entity
