@@ -118,7 +118,7 @@ BODY_SHEAR_PA = 5.0e5 / (2.0 * (1.0 + 0.45))
 REFERENCE = PhysicsSettings(
     control_hz=60,
     substeps=20,
-    contact_ke=1.0e6,
+    contact_ke=1.0e4,
     contact_kd=10.0,
     soft_mu=1.0,
     particle_radius=0.003,
@@ -130,7 +130,8 @@ REFERENCE = PhysicsSettings(
         (2, "damping_pa_s", DAMP_BETA * BODY_SHEAR_PA),  # loop: damped at the body's level, not its own
     ),
 )
-"""The handoff's values. Its body E, Poisson ratios and tail and body density
+"""The handoff's values, except ``contact_ke``: 1e4, where the handoff has 1e6, which
+blows up full-surface contact. Its body E, Poisson ratios and tail and body density
 already match the source, so only the tail's E and the loop's density and damping
 are overridden."""
 
