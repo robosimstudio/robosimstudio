@@ -39,6 +39,8 @@ from typing import Any
 
 import numpy as np
 
+from robosimstudio.core.math import mat_to_axis_angle
+
 __all__ = ["polish_pose_batched", "pose_errors_batched", "solve_q_batched", "solve_q_full_batched"]
 
 
@@ -223,19 +225,6 @@ def solve_q_full_batched(
     return polish_pose_batched(fk, q, targets, rot_target, lower=lower, upper=upper, active=live)
 
 
-def _rotvecs(turn: np.ndarray) -> np.ndarray:
-    """``[n, 3, 3]`` rotations to ``[n, 3]`` rotation vectors (the log map), per row."""
-    trace = np.trace(turn, axis1=1, axis2=2)
-    angle = np.arccos(np.clip((trace - 1.0) / 2.0, -1.0, 1.0))
-    skew = np.stack(
-        [turn[:, 2, 1] - turn[:, 1, 2], turn[:, 0, 2] - turn[:, 2, 0], turn[:, 1, 0] - turn[:, 0, 1]], axis=1
-    )
-    sin = np.sin(angle)
-    # Small angles: the skew part over two is the vector itself to second order.
-    scale = np.where(sin > 1.0e-6, angle / np.where(sin > 1.0e-6, 2.0 * sin, 1.0), 0.5)
-    return skew * scale[:, None]
-
-
 POLISH_STEPS = 8
 """Damped Gauss-Newton steps the full-pose polish may take, rejected ones included.
 Two or three close a 1-2 degree residual; the rest is room for a step that has
@@ -374,7 +363,7 @@ def polish_pose_batched(
     def weighted_error(pos: np.ndarray, quat: np.ndarray) -> tuple[np.ndarray, np.ndarray]:
         rot = _quat_to_mats(quat)
         gap = target - pos
-        turn = _rotvecs(rot_target @ np.transpose(rot, (0, 2, 1)))
+        turn = mat_to_axis_angle(rot_target @ np.transpose(rot, (0, 2, 1)))
         return np.concatenate([gap, turn], axis=1) * weight, rot
 
     pos, quat = fk.poses(q)
@@ -411,7 +400,7 @@ def polish_pose_batched(
                 probe[:, k] += fd_eps
                 pos_p, quat_p = fk.poses(probe)
                 fresh[:, :3, k] = (pos_p - pos) / fd_eps
-                fresh[:, 3:, k] = _rotvecs(_quat_to_mats(quat_p) @ np.transpose(rot, (0, 2, 1))) / fd_eps
+                fresh[:, 3:, k] = mat_to_axis_angle(_quat_to_mats(quat_p) @ np.transpose(rot, (0, 2, 1))) / fd_eps
             fresh = fresh * weight[None, :, None]
             jac = np.where(stale[:, None, None], fresh, jac)
             # Each world's smallest singular value, read only where it is
