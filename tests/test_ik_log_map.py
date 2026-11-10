@@ -1,9 +1,10 @@
 # SPDX-License-Identifier: Apache-2.0
-"""The rotation log map the batched IK polish reads its orientation error with: ``|log R|`` is the angle, for every ``R``.
+"""The rotation log map the IK solvers read their orientation errors with: ``|log R|`` is the angle, for every ``R``.
 
 :func:`robosimstudio.core.math.mat_to_axis_angle`, which the batched full-pose
 polish (:mod:`robosimstudio.solvers.ik.fleet_dls`) measures its rotation
-residual with, over a stack, and which also takes one matrix at a time. The property is the definition: the
+residual with, over a stack, and PyRoKi's root-frame measurement reads each
+joint's turn with, one matrix at a time. The property is the definition: the
 vector's length is the rotation's angle and the exponential of the vector is
 the rotation, on random rotations and on the ones a log map is easy to get
 wrong at -- no turn, a tiny one, and a half turn, approached to within 1e-9 rad
@@ -72,7 +73,7 @@ class TestTheBatchedLogMap(_LogMapLaw, unittest.TestCase):
 
 
 class TestOneMatrixAtATime(_LogMapLaw, unittest.TestCase):
-    """On one ``[3, 3]``, as it reads a stack row by row."""
+    """On one ``[3, 3]``: how far each probe turned the tool, when PyRoKi measures the arm's root frame."""
 
     def log(self, rotations: np.ndarray) -> np.ndarray:
         return np.stack([mat_to_axis_angle(r) for r in rotations])
