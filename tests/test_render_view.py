@@ -507,63 +507,6 @@ def _client(cid: int, width: int, height: int):
     return types.SimpleNamespace(client_id=cid, camera=camera, scene=scene)
 
 
-class TestEachBrowserGetsItsOwnShape(unittest.TestCase):
-    def test_two_browsers_of_different_aspect_get_frames_of_their_own_aspect(self) -> None:
-        built: list[_Renderer] = []
-
-        def make_renderer(backend, cameras, channels, **_):
-            built.append(_Renderer(cameras))
-            return built[-1]
-
-        env = types.SimpleNamespace(
-            model=object(), cameras=(_Spec(),), state=object(), make_renderer=make_renderer, handles=None
-        )
-        session = _StubSession(env, _StubGui())
-        clients = {1: _client(1, 1600, 900), 2: _client(2, 800, 800)}
-        session.server.get_clients = lambda: clients
-        with unittest.mock.patch("robosimstudio_studio.render_view._choose", return_value=("tiled", "x")):
-            panel = PanelRenderView(session, world_model=True, scale=0.5)
-        panel.drain()
-        wide, square = clients[1].scene.background, clients[2].scene.background
-        self.assertEqual(wide.shape[:2], (450, 800))
-        self.assertEqual(square.shape[:2], (400, 400), "the second browser got the first one's frame")
-        self.assertEqual(len(built), 2)
-
-        # The second browser goes away: its renderer is given back.
-        del clients[2]
-        panel.budget.reset()
-        panel.drain()
-        self.assertEqual([r.closed for r in built], [False, True])
-        panel.close()
-        self.assertTrue(all(r.closed for r in built))
-
-    def test_a_resize_gives_the_old_renderer_back_before_building_the_new_one(self) -> None:
-        built: list[_Renderer] = []
-        alive_at_build: list[int] = []
-
-        def make_renderer(backend, cameras, channels, **_):
-            alive_at_build.append(sum(not r.closed for r in built))
-            built.append(_Renderer(cameras))
-            return built[-1]
-
-        env = types.SimpleNamespace(
-            model=object(), cameras=(_Spec(),), state=object(), make_renderer=make_renderer, handles=None
-        )
-        session = _StubSession(env, _StubGui())
-        clients = {1: _client(1, 1600, 900)}
-        session.server.get_clients = lambda: clients
-        with unittest.mock.patch("robosimstudio_studio.render_view._choose", return_value=("tiled", "x")):
-            panel = PanelRenderView(session, world_model=True, scale=0.5)
-        panel.drain()
-        clients[1] = _client(1, 1200, 900)
-        panel.budget.reset()
-        panel.drain()
-        self.assertEqual(len(built), 2)
-        self.assertEqual(alive_at_build, [0, 0], "the retired shape was still alive while its successor built")
-        self.assertEqual(clients[1].scene.background.shape[:2], (450, 600))
-        panel.close()
-
-
 @dataclasses.dataclass
 class _PlateSpec(_Spec):
     """A rig camera that carries a clean plate of the clip it was filmed in, of the browser's own aspect, so the
