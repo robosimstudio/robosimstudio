@@ -480,6 +480,7 @@ class Recorder:
         deterministic, would play differently."""
         from dataclasses import replace
 
+        from robosimstudio.core.render.base import warms_up
         from robosimstudio.solvers.render import RENDERERS, backend_class, supported_channels
 
         def alias(b: str) -> str:  # a dotted path to a registered renderer goes by its alias
@@ -501,7 +502,7 @@ class Recorder:
             channels = ["rgb"] + (["depth"] if self.cam.background and "depth" in supported_channels(b) else [])
             entry = self.also[b] = {"video": self.also_dir / f"{b}.mp4"}  # an alias, or the whole path
             entry["renderer"] = self.sim.make_renderer(b, cameras=[bare], channels=channels)
-            if getattr(backend_class(b), "warms_up", False):
+            if warms_up(backend_class(b)):
                 entry["renderer"].render(self.sim.state)  # the first frame only builds the stage
             entry["writer"] = writer(entry["video"], fps=self.fps)
         grid = self.also_dir / "all.mp4"

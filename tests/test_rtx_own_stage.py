@@ -122,6 +122,42 @@ class TheViewerWrapsNewtonsOwnInit(unittest.TestCase):
         self.assertEqual(made["renderer"].config.active_cuda_gpus, "2")
         self.assertNotEqual(first, made["stage"].name, "two viewers in one process, two stage names")
 
+    def test_two_viewers_built_at_once_on_two_threads_leave_the_modules_as_they_were(self) -> None:
+        """Each saves the module's class, swaps its own in, and puts back what it saved: unserialised, the second
+        thread saved the first one's stand-in and put that back for good."""
+        import threading
+        import time
+
+        cls = rtx._viewer_class()
+        base = cls.__mro__[1]
+        names: list[str] = []
+
+        def newton_init(self) -> None:
+            import ovstage
+
+            time.sleep(0.05)  # long enough for the other thread to reach its own swap
+            names.append(ovstage.Stage("newton.ViewerRTX").name)
+
+        def build() -> None:
+            viewer = cls.__new__(cls)
+            viewer._decorate = None
+            viewer.device = types.SimpleNamespace(is_cuda=True, ordinal=0)
+            viewer._init_ovrtx()
+
+        fake = _modules()
+        with mock.patch.dict(sys.modules, fake), mock.patch.object(base, "_init_ovrtx", newton_init):
+            original_stage, original_renderer = fake["ovstage"].Stage, fake["ovrtx"].Renderer
+            threads = [threading.Thread(target=build) for _ in range(2)]
+            for thread in threads:
+                thread.start()
+            for thread in threads:
+                thread.join()
+            self.assertIs(fake["ovstage"].Stage, original_stage, "a stand-in Stage was left installed")
+            self.assertIs(fake["ovrtx"].Renderer, original_renderer, "a stand-in Renderer was left installed")
+        self.assertEqual(2, len(set(names)))
+        for name in names:
+            self.assertEqual(2, name.count("."), f"a suffix on a suffix: {name}")
+
 
 if __name__ == "__main__":
     unittest.main()

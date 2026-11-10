@@ -113,8 +113,10 @@ class RendererBase:
     """Whether :attr:`first_note`'s cost comes again with every scene built in the process (a Blender per
     scene), rather than once a process (shaders compiled once)."""
 
-    warms_up: bool = False
-    """Whether a new renderer's first frame only builds its stage and is drawn again before it is kept."""
+    warms_up: bool | None = None
+    """Whether a new renderer's first frame only builds its stage and is drawn again before it is kept. ``None``
+    for a backend that does not say: it is warmed up (:func:`warms_up`), as every backend but the collider tracer
+    was before backends said; each shipped one says."""
 
     def aim(self, cameras: Sequence[CameraSpec], channels: Sequence[str] | None = None) -> None:
         """Render these cameras from the next frame on.
@@ -178,3 +180,13 @@ class RendererBase:
 
     def close(self) -> None:
         """Release GL contexts, USD stages and the like. Idempotent."""
+
+
+def warms_up(renderer: Any) -> bool:
+    """Whether a renderer, or its class, draws its first frame again before keeping it.
+
+    Its own :attr:`RendererBase.warms_up` where it says (the path tracer's first frame only builds its stage; the
+    collider tracer, MuJoCo's rasteriser and Blender need nothing), and yes where it does not: a renderer a
+    scene names by dotted path is warmed up, as every backend but the collider tracer was before backends said.
+    """
+    return getattr(renderer, "warms_up", None) is not False

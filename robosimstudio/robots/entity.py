@@ -28,7 +28,7 @@ import newton
 import numpy as np
 import warp as wp
 
-from robosimstudio.core.builder import rekey_custom_attributes, restate_body_attribute, set_body_attribute
+from robosimstudio.core.builder import restate_body_attribute, set_body_attribute
 from robosimstudio.core.suction import Suction
 from robosimstudio.paths import resolve_asset
 from robosimstudio.robots.registry import resolve_gripper
@@ -232,6 +232,40 @@ def _mesh_volume(vertices: np.ndarray, faces: np.ndarray) -> float:
     """
     a, b, c = vertices[faces[:, 0]], vertices[faces[:, 1]], vertices[faces[:, 2]]
     return float(abs(np.einsum("ij,ij->i", a, np.cross(b, c)).sum()) / 6.0)
+
+
+def mimic_linkages(
+    joint0: Sequence[int],
+    joint1: Sequence[int],
+    enabled: Sequence[bool],
+    qd_start: Sequence[int],
+    dof_count: int,
+) -> dict[int, tuple[int, ...]]:
+    """Each DOF an enabled mimic row ties to another, mapped to every DOF of its linkage.
+
+    A row joins its two joints, linkages that share a joint merge, and a disabled row, or one with an end at
+    -1 (Newton keeps -1 ends when it remaps after a collapse), joins nothing: read through -1, two hands' fingers
+    were one linkage. A union-find over the rows. ``qd_start`` is per joint, with or without the model's closing
+    entry; ``dof_count`` ends the last joint's DOFs. The robot's build (``EntityEmbodiment._geared_dofs``) and the
+    real2sim replays (``physics._mimic_linkage``) both read the hand's linkages through this.
+    """
+    parent: dict[int, int] = {}
+
+    def root(joint: int) -> int:
+        parent.setdefault(joint, joint)
+        while parent[joint] != joint:
+            parent[joint] = parent[parent[joint]]
+            joint = parent[joint]
+        return joint
+
+    for a, b, on in zip(joint0, joint1, enabled, strict=False):
+        if on and int(a) >= 0 and int(b) >= 0:
+            parent[root(int(a))] = root(int(b))
+    linkages: dict[int, list[int]] = {}
+    for joint in list(parent):
+        end = int(qd_start[joint + 1]) if joint + 1 < len(qd_start) else int(dof_count)
+        linkages.setdefault(root(joint), []).extend(range(int(qd_start[joint]), end))
+    return {dof: tuple(sorted(members)) for members in linkages.values() for dof in members}
 
 
 class EntityEmbodiment(Entity):
@@ -458,9 +492,13 @@ class EntityEmbodiment(Entity):
                 os.unlink(stripped)
 
         if placing:
-            self._place_arms(builder, joint_start)
+            self._place_arms(builder, joint_start, shape_start)
             if self.spec.collapse_fixed_joints:
-                rekey_custom_attributes(builder, builder.collapse_fixed_joints(verbose=False))
+                # This robot's own fixed joints only, as every import's collapse: the whole builder's would fold a
+                # fixture welded to the world before it and renumber every body after.
+                from robosimstudio.scene.build.imports import collapse_own_fixed_joints
+
+                collapse_own_fixed_joints(builder, joint_start)
 
         self._attach_hands(builder)
 
@@ -812,7 +850,7 @@ class EntityEmbodiment(Entity):
         )
 
     # ------------------------------------------------------- arms on their own
-    def _place_arms(self, builder: newton.ModelBuilder, joint_start: int) -> None:
+    def _place_arms(self, builder: newton.ModelBuilder, joint_start: int, shape_start: int | None = None) -> None:
         """Stand each arm :attr:`arm_mounts` names with its base body at that world pose.
 
         Runs on the import as the file declares it, before any fixed joint is
@@ -828,7 +866,8 @@ class EntityEmbodiment(Entity):
         weld (``joint_X_p``, which for a joint on the world is a world pose) and
         every body under it (``body_q``). Shapes, joints, actuators, the hand and
         the wrist camera ride their bodies, so the arm is the file's own arm in a
-        new place. A collapse afterwards folds the moved weld exactly as it would
+        new place. A shape the file puts on the world body itself belongs to no
+        arm and stays where the file put it; the build says so, naming it. A collapse afterwards folds the moved weld exactly as it would
         have folded the file's, and everything that reads the arm's frame off
         the finalized model -- IK, a planner's base, the handle's ``base_body``
         where the base survives as a body (a collapse folds it into the world,
@@ -939,6 +978,18 @@ class EntityEmbodiment(Entity):
             builder.joint_X_p[root] = delta * _wp_xform(builder.joint_X_p[root])
             for b in carried:
                 builder.body_q[b] = delta * _wp_xform(builder.body_q[b])
+        # A shape the file puts on the world body (a floor, a table, a plate) belongs to no arm: it stays where the
+        # file put it, and is said so once, rather than left as an obstacle where an arm used to stand unsaid.
+        on_world = [
+            str(builder.shape_label[s]).rsplit("/", 1)[-1]
+            for s in range(builder.shape_count if shape_start is None else shape_start, builder.shape_count)
+            if int(builder.shape_body[s]) < 0
+        ]
+        if on_world:
+            print(
+                f"[rss] {self.spec.name}: arms_at moved its arms; {len(on_world)} shape(s) its file puts on the world "
+                f"stay where the file put them: {', '.join(on_world[:6])}{' ...' if len(on_world) > 6 else ''}"
+            )
 
     def _hull_colliders(self, builder: newton.ModelBuilder) -> None:
         """Convex-hull the arm's link meshes, keeping the visual meshes.
@@ -1357,25 +1408,7 @@ class EntityEmbodiment(Entity):
         joint0 = list(getattr(builder, "constraint_mimic_joint0", ()))
         joint1 = list(getattr(builder, "constraint_mimic_joint1", ()))
         enabled = list(getattr(builder, "constraint_mimic_enabled", ())) or [True] * len(joint0)
-        parent: dict[int, int] = {}
-
-        def root(joint: int) -> int:
-            parent.setdefault(joint, joint)
-            while parent[joint] != joint:
-                parent[joint] = parent[parent[joint]]
-                joint = parent[joint]
-            return joint
-
-        for a, b, on in zip(joint0, joint1, enabled, strict=False):
-            if on:
-                parent[root(int(a))] = root(int(b))
-        starts = builder.joint_qd_start
-        count = len(builder.joint_armature)
-        linkages: dict[int, list[int]] = {}
-        for joint in list(parent):
-            end = int(starts[joint + 1]) if joint + 1 < len(starts) else count
-            linkages.setdefault(root(joint), []).extend(range(int(starts[joint]), end))
-        return {dof: tuple(sorted(members)) for members in linkages.values() for dof in members}
+        return mimic_linkages(joint0, joint1, enabled, builder.joint_qd_start, len(builder.joint_armature))
 
     # -------------------------------------------------------------- indexing
     def _arm_joints(

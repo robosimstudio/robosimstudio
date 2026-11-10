@@ -30,7 +30,7 @@ from typing import Any
 import numpy as np
 
 from robosimstudio.core.env import EnvBase
-from robosimstudio.core.render.base import RendererBase
+from robosimstudio.core.render.base import RendererBase, warms_up
 from robosimstudio.core.render.look import look_for
 from robosimstudio.core.render.spec import RenderSpec
 from robosimstudio.machine import Platform, platform_of
@@ -146,6 +146,17 @@ class Sim(EnvBase):
             self.renderer = self._make_renderer(renderer)
         self._still_renderer: RendererBase | None = None
         self._still_key: tuple | None = None
+        self._plates: dict[CameraSpec, tuple] = {}
+        """A fixed camera's plate passes (:meth:`plate_pass`), by camera and size: the tracer, its static picture and
+        the static poses it was drawn at. At most four, the most recently used last."""
+        self._plates_failed: set[CameraSpec] = set()
+        """Cameras whose passes failed to build: drawn without their plate until the scene is reset."""
+        self._plates_said: set[tuple[str, str]] = set()
+        """``(background, why)`` said once by :meth:`_plate_refused`."""
+        self._plates_missing: set[str] = set()
+        """Plate paths said once to be nowhere (:meth:`_plate_path`)."""
+        self._static_mask: np.ndarray | None = None
+        """Per body, whether it is welded to the world (``plate.static_bodies``): the finalized model's, read once."""
 
         self._register_obs_providers()
 
@@ -394,7 +405,7 @@ class Sim(EnvBase):
                 old.close()
             self._say_fallback(backend, why)
             renderer = self.make_renderer(backend, cameras=[spec], channels=list(asked))
-            if getattr(cls, "warms_up", False):
+            if warms_up(cls):
                 try:
                     renderer.render(self.state)  # the first frame only builds the stage
                 except Exception:
@@ -483,24 +494,23 @@ class Sim(EnvBase):
         if path is None:
             return {}
         key = replace(spec, background="", channels=("rgb", "seg", "depth"))
-        if key in self.__dict__.setdefault("_plates_failed", set()):
+        if key in self._plates_failed:
             return {}
-        cache = self.__dict__.setdefault("_plates", {})
+        cache = self._plates
         entry = cache.pop(key, None)
         if entry is None:
             try:
                 entry = self._plate_passes(key)
             except Exception as exc:  # a contended card, a table for another model: the picture as rendered, said once
-                self._plates_failed.add(key)
-                print(
-                    f"[rss] the plate passes for camera {spec.name!r} failed ({type(exc).__name__}: {exc}); drawing it without its plate"
-                )
-                return {}
+                return self._plate_failed(key, exc)
             while len(cache) >= 4:  # a twin's plate cameras, at the sizes its stills and viewport ask for
                 cache.pop(next(iter(cache)))[0].close()
         if entry[2] != self._static_poses():  # a reset re-placed a weld, or a person dragged a fixture
             entry[0].close()
-            entry = self._plate_passes(key)
+            try:
+                entry = self._plate_passes(key)
+            except Exception as exc:  # as on the first build: the picture as rendered, said once, not a raise
+                return self._plate_failed(key, exc)
         cache[key] = entry  # last in is the most recently used
         renderer, bare, _ = entry
         try:
@@ -519,6 +529,23 @@ class Sim(EnvBase):
             "static_depth": bare["depth"],
             "moving_depth": full["depth"],
         }
+
+    def _plate_failed(self, key: CameraSpec, exc: Exception) -> dict:
+        """A camera whose passes failed to build: drawn without its plate, said once, tried again after a reset."""
+        self._plates_failed.add(key)
+        print(
+            f"[rss] the plate passes for camera {key.name!r} failed ({type(exc).__name__}: {exc}); drawing it without "
+            "its plate until the scene is reset"
+        )
+        return {}
+
+    def _static_bodies(self) -> np.ndarray:
+        """Per body, whether it is welded to the world: the finalized model's, so read once."""
+        from robosimstudio.core.render import plate
+
+        if self._static_mask is None:
+            self._static_mask = plate.static_bodies(self.model)
+        return self._static_mask
 
     def _plate_passes(self, key: CameraSpec):
         """The collider tracer over ``key``, and its one picture of the static scene alone (nothing static moves)."""
@@ -539,13 +566,13 @@ class Sim(EnvBase):
             cameras=[key],
             channels=["rgb", "seg", "depth"],
             render=look,
-            shape_labels=plate.shape_labels(self.model),
+            shape_labels=plate.shape_labels(self.model, self._static_bodies()),
         )
         try:
             away = self.model.state()
             if self.model.body_count:
                 q = self.state.body_q.numpy().copy()
-                q[~plate.static_bodies(self.model), 2] -= 1000.0
+                q[~self._static_bodies(), 2] -= 1000.0
                 away.body_q.assign(q)
             if self.model.particle_count:
                 p = self.state.particle_q.numpy().copy()
@@ -558,18 +585,14 @@ class Sim(EnvBase):
 
     def _static_poses(self) -> bytes:
         """Where the static bodies stand, to the tenth of a millimetre: the static pass is redrawn when it changes."""
-        from robosimstudio.core.render import plate
-
         if not self.model.body_count:
             return b""
-        static = plate.static_bodies(self.model)
-        return np.round(self.state.body_q.numpy()[static], 4).tobytes()
+        return np.round(self.state.body_q.numpy()[self._static_bodies()], 4).tobytes()
 
     def _plate_refused(self, background: str, why: str) -> None:
         """Say once why a camera is drawn without its plate."""
-        said = self.__dict__.setdefault("_plates_missing", set())
-        if (background, why) not in said:
-            said.add((background, why))
+        if (background, why) not in self._plates_said:
+            self._plates_said.add((background, why))
             print(f"[rss] {why}: drawing it without its plate")
 
     def _plate_path(self, background: str):
@@ -584,9 +607,8 @@ class Sim(EnvBase):
         try:
             return resolve_path(background)
         except (FileNotFoundError, OSError, ValueError):
-            missing = self.__dict__.setdefault("_plates_missing", set())
-            if background not in missing:
-                missing.add(background)
+            if background not in self._plates_missing:
+                self._plates_missing.add(background)
                 print(f"[rss] no plate at {path.resolve()}: drawing camera pictures without it")
             return None
 
@@ -868,6 +890,8 @@ class Sim(EnvBase):
         import newton
 
         self._refuse_layout(self.episode)
+        # A camera whose plate passes failed (a contended card) is tried again with the new episode.
+        self._plates_failed.clear()
         if self._start_joint_q is not None:
             self.pipeline.state_0.joint_q.assign(self._start_joint_q)
             self.pipeline.state_1.joint_q.assign(self._start_joint_q)
@@ -1274,8 +1298,9 @@ class Sim(EnvBase):
         if self._still_renderer is not None:
             self._still_renderer.close()
             self._still_renderer = None
-        for entry in self.__dict__.pop("_plates", {}).values():
+        for entry in self._plates.values():
             entry[0].close()
+        self._plates.clear()
 
     def __repr__(self) -> str:
         return f"{type(self).__name__}({getattr(self.request, 'full_name', '?')!r}, {len(self.names())} things, t={self.time:.3f}s)"

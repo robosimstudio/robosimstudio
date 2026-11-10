@@ -54,6 +54,7 @@ import numpy as np
 from robosimstudio.core.cameras import CameraSpec
 from robosimstudio.core.render.base import FrameSet, RendererBase
 from robosimstudio.core.render.spec import put
+from robosimstudio.core.render.visual import mesh_rgba
 from robosimstudio.solvers.render.tiled import SEG_PARTICLES, SEG_SOFT_MESH
 
 __all__ = ["RendererGL", "egl_device_for"]
@@ -240,31 +241,6 @@ def _context(width: int, height: int, egl_device: int | None, cuda_ordinal: int)
         ) from exc
 
 
-def _rgba(mesh: Any) -> tuple[list[float], Any, Any]:
-    """A part's flat colour, and its base-colour texture and UVs when it has both.
-
-    MuJoCo multiplies a texture by its geom's colour, so a textured part's
-    colour is its stated base-colour factor or white -- not trimesh's
-    ``main_color``, which is a 40 % grey when no factor is stated.
-    """
-    visual = getattr(mesh, "visual", None)
-    material = getattr(visual, "material", None)
-    image = getattr(material, "baseColorTexture", None)
-    uv = getattr(visual, "uv", None)
-    if image is not None and uv is not None and len(uv) == len(mesh.vertices):
-        factor = getattr(material, "baseColorFactor", None)
-        rgba = [1.0, 1.0, 1.0, 1.0] if factor is None else _unit(factor)
-        return rgba, image, np.asarray(uv, dtype=np.float64)
-    color = getattr(material, "main_color", None)
-    return ([0.6, 0.6, 0.6, 1.0] if color is None else _unit(color)), None, None
-
-
-def _unit(color: Any) -> list[float]:
-    """An RGBA colour in ``[0, 1]``, from trimesh's bytes."""
-    rgba = [float(c) / 255.0 for c in np.asarray(color).reshape(-1)[:4]]
-    return rgba + [1.0] * (4 - len(rgba))
-
-
 class RendererGL(RendererBase):
     """Every camera through MuJoCo's rasteriser, one at a time, off the model's visible shapes.
 
@@ -289,6 +265,8 @@ class RendererGL(RendererBase):
             other particle a sphere.
         deformable_colors: ``name -> RGB`` for those.
     """
+
+    warms_up = False  # its first frame is the picture
 
     name = "gl"
     supported_channels = ("rgb", "depth", "seg")
@@ -377,7 +355,7 @@ class RendererGL(RendererBase):
                 body.mass, body.inertia = 1.0, [1.0, 1.0, 1.0]
                 bodies[part.body] = body
             parent = bodies[part.body] if part.body >= 0 else spec.worldbody
-            rgba, image, uv = _rgba(mesh)
+            rgba, image, uv = mesh_rgba(mesh)
             asset = spec.add_mesh(
                 name=f"mesh{part.shape}",
                 uservert=np.asarray(mesh.vertices, dtype=np.float64).ravel().tolist(),

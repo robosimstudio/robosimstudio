@@ -148,5 +148,47 @@ class Hangs(unittest.TestCase):
         )
 
 
+class TheRegisteredBuildIsKept(unittest.TestCase):
+    """The robot line compares against the registered robot built alone; that build is the robot's and the
+    physics', so it is made once a process and read back off the host after its model is gone."""
+
+    def test_a_kept_model_reads_as_the_model_did(self) -> None:
+        kept = physics._Kept(_model("yam"))
+        self.assertEqual(physics.compare_models(_model("yam"), kept, "yam", "yam"), [])
+        self.assertIn("joint6", "; ".join(physics.compare_models(_model("yam", joint6=3.1416), kept, "yam", "yam")))
+
+    def test_the_second_replay_builds_nothing(self) -> None:
+        from unittest import mock
+
+        import robosimstudio as rss
+
+        builds: list[str] = []
+
+        class FakeScene:
+            def __init__(self, **kwargs) -> None:
+                pass
+
+            def add(self, spec) -> None:
+                pass
+
+            def build(self, **kwargs):
+                builds.append("built")
+                return types.SimpleNamespace(model=_model("yam"), close=lambda: None)
+
+        sim = types.SimpleNamespace(
+            scene=types.SimpleNamespace(embodiment=types.SimpleNamespace(spec=types.SimpleNamespace(name="yam"))),
+            request=types.SimpleNamespace(physics=("a physics", 1)),
+            model=_model("yam"),
+        )
+        reg = types.SimpleNamespace(name="yam_kept_test")
+        physics._REGISTERED.clear()
+        with mock.patch.object(rss, "Scene", FakeScene), mock.patch.object(rss, "robot", lambda spec: spec):
+            first = physics.built_departures(sim, reg)
+            second = physics.built_departures(sim, reg)
+        self.assertEqual(first, second)
+        self.assertEqual(["built"], builds, "the registered robot was built again for the second replay")
+        physics._REGISTERED.clear()
+
+
 if __name__ == "__main__":
     unittest.main()
