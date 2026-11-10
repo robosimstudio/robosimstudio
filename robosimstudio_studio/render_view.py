@@ -62,6 +62,7 @@ from typing import Any
 
 import numpy as np
 
+from robosimstudio.core.render.base import warms_up
 from robosimstudio.core.render.live import RenderBudget
 from robosimstudio.machine import platform_of
 from robosimstudio.solvers.render import ENV, FALLBACK, PUBLIC
@@ -251,7 +252,9 @@ class PanelRenderView(Panel):
         # the old one is still alive doubles the peak, and on a contended card
         # that is the difference between a resize and a fallback to tiled.
         for key in [k for k in self._renderers if k not in used]:
-            self._close(self._renderers.pop(key))
+            gone = self._renderers.pop(key)
+            if not any(r is gone for r in self._renderers.values()):  # one a retargeting backend shares stays
+                self._close(gone)
             if self._built == key:
                 self._renderer = self._built = None
         for client, key in zip(clients, used, strict=True):
@@ -391,8 +394,18 @@ class PanelRenderView(Panel):
         return (width, height, self.env.model, self.locked)
 
     def _ensure(self, client, key: tuple) -> bool:
-        """Build the renderer of this key, if there is not one yet. False when it would not build."""
+        """Build the renderer of this key, if there is not one yet. False when it would not build.
+
+        A backend that reads its cameras every frame (``retargets``: Blender, a process with the scene in it)
+        serves every shape and every client from one renderer, aimed per push, rather than one per shape.
+        """
         if key in self._renderers:
+            return True
+        shared = next(
+            (r for k, r in self._renderers.items() if k[2] is key[2] and getattr(r, "retargets", False)), None
+        )
+        if shared is not None:
+            self._renderers[key] = shared
             return True
         width, height = key[0], key[1]
         spec = self._spec(client, width, height)
@@ -402,9 +415,12 @@ class PanelRenderView(Panel):
             # rgb alone: the depth channel costs 13 ms a frame to encode and
             # composites nothing. accumulate is set per frame in `drain`.
             extra = {"accumulate": self.passes[0]} if self.backend == PUBLIC else {}
-            renderer = self.env.make_renderer(self.backend, cameras=[spec], channels=["rgb"], **extra)
+            # a camera over a clean plate also wants the depth that says which pixels are what moves
+            channels = ["rgb", "depth"] if getattr(spec, "background", "") else ["rgb"]
+            renderer = self.env.make_renderer(self.backend, cameras=[spec], channels=channels, **extra)
             self._renderers[key] = renderer
-            renderer.render(self.env.state)
+            if warms_up(renderer):  # a renderer whose first frame only builds its stage
+                renderer.render(self.env.state)
         except Exception as exc:  # no GPU, a contended card, a GPU the rule misjudged
             self._failed(f"{self.backend} would not build -- {type(exc).__name__}: {exc}")
             return False
@@ -453,6 +469,8 @@ class PanelRenderView(Panel):
             look_at=tuple(float(v) for v in look),
             up=tuple(float(v) for v in up),
             channels=("rgb",),
+            # the free view is no camera's, so a plate the borrowed spec carries does not apply
+            **({"background": ""} if hasattr(base, "background") else {}),
         )
 
     def _push(self, client, key: tuple) -> bool:
@@ -461,7 +479,10 @@ class PanelRenderView(Panel):
         spec = self._spec(client, key[0], key[1])
         if spec is None:
             return False
-        renderer.cameras[0] = spec
+        if getattr(renderer, "retargets", False):  # shared across shapes: aimed, with this camera's channels
+            renderer.aim([spec], channels=["rgb", "depth"] if getattr(spec, "background", "") else ["rgb"])
+        else:
+            renderer.cameras[0] = spec
         try:
             frames = renderer.render(self.env.state)
         except Exception as exc:
@@ -470,6 +491,11 @@ class PanelRenderView(Panel):
         name = "viewport" if self._locked_camera() is None else self.locked
         rgb = np.ascontiguousarray(frames[name]["rgb"][..., :3]).astype(np.uint8)
         if self._locked_camera() is not None:
+            if getattr(spec, "background", "") and hasattr(self.env, "over_plate"):
+                try:  # a camera with a clean plate shows the clip's own pixels behind what moves, as its stills do
+                    rgb = self.env.over_plate(spec, rgb, depth=frames[name].get("depth"))
+                except Exception as exc:
+                    self._note = f"the plate would not draw -- {type(exc).__name__}: {exc}"
             rgb = self._letterbox(rgb, client)
         client.scene.set_background_image(rgb, format="jpeg", jpeg_quality=80)
         return True
@@ -602,7 +628,7 @@ class PanelRenderView(Panel):
         result outputs when a renderer goes without being closed, and a page
         that swaps tasks builds one per swap.
         """
-        for renderer in self._renderers.values():
+        for renderer in {id(r): r for r in self._renderers.values()}.values():  # a shared one once
             self._close(renderer)
         self._renderers.clear()
         self._renderer = None

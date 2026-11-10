@@ -15,6 +15,7 @@ ever asks for a frame, each of which has already been wrong once:
 
 from __future__ import annotations
 
+import dataclasses
 import types
 import unittest
 import unittest.mock
@@ -325,6 +326,41 @@ class TestLockingToARigCamera(unittest.TestCase):
         self.assertIs(panel._letterbox(fits, client), fits)
 
 
+class _Aimed:
+    """A renderer that reads its cameras every frame, as Blender's does, counting how often it is closed."""
+
+    retargets = True
+
+    def __init__(self) -> None:
+        self.closed = 0
+        self.aimed: list = []
+
+    def aim(self, cameras, channels=None) -> None:
+        self.aimed.append((list(cameras), channels))
+
+    def close(self) -> None:
+        self.closed += 1
+
+
+class TestOneRendererForEveryShape(unittest.TestCase):
+    """A backend that reads its cameras every frame (Blender: a process holding the scene) serves every shape."""
+
+    def test_a_new_shape_shares_the_renderer_rather_than_starting_another(self) -> None:
+        panel = _panel(world_model=True)
+        shared = _Aimed()
+        model = panel.env.model
+        panel._renderers[(100, 100, model, "")] = shared
+        self.assertTrue(panel._ensure(object(), (200, 120, model, "")))
+        self.assertIs(panel._renderers[(200, 120, model, "")], shared)
+
+    def test_a_shared_renderer_is_closed_once(self) -> None:
+        panel = _panel(world_model=True)
+        shared = _Aimed()
+        panel._renderers = {(100, 100, panel.env.model, ""): shared, (200, 120, panel.env.model, ""): shared}
+        panel._release()
+        self.assertEqual(shared.closed, 1)
+
+
 class TestTheQualityDial(unittest.TestCase):
     def test_the_passes_pair_is_taken_as_given(self) -> None:
         self.assertEqual(_panel(world_model=True, passes=(2, 9)).passes, (2, 9))
@@ -348,6 +384,181 @@ class TestTheQualityDial(unittest.TestCase):
         panel._service_requests()
         self.assertEqual(panel.mode, "raster")
         self.assertTrue(node.visible)
+
+
+@dataclasses.dataclass
+class _Spec:
+    name: str = "overhead"
+    width: int = 0
+    height: int = 0
+    fx: object = None
+    fy: object = None
+    cx: object = None
+    cy: object = None
+    fov_y: float = 60.0
+    xform: object = None
+    parent_body: int = -1
+    parent_frame: str = ""
+    eye: tuple = ()
+    look_at: tuple = ()
+    up: tuple = ()
+    channels: tuple = ()
+
+
+class _Renderer:
+    def __init__(self, cameras) -> None:
+        self.cameras = list(cameras)
+        self.closed = False
+        self.accumulate = 1
+
+    def render(self, state):
+        spec = self.cameras[0]
+        return {spec.name: {"rgb": np.zeros((spec.height, spec.width, 3), dtype=np.uint8)}}
+
+    def close(self) -> None:
+        self.closed = True
+
+
+def _client(cid: int, width: int, height: int):
+    camera = types.SimpleNamespace(
+        image_width=width,
+        image_height=height,
+        position=(1.0, 0.0, 1.0),
+        look_at=(0.0, 0.0, 0.0),
+        up_direction=(0.0, 0.0, 1.0),
+        fov=1.0,
+    )
+    scene = types.SimpleNamespace(set_background_image=lambda image, **_: setattr(scene, "background", image))
+    return types.SimpleNamespace(client_id=cid, camera=camera, scene=scene)
+
+
+class TestEachBrowserGetsItsOwnShape(unittest.TestCase):
+    def test_two_browsers_of_different_aspect_get_frames_of_their_own_aspect(self) -> None:
+        built: list[_Renderer] = []
+
+        def make_renderer(backend, cameras, channels, **_):
+            built.append(_Renderer(cameras))
+            return built[-1]
+
+        env = types.SimpleNamespace(
+            model=object(), cameras=(_Spec(),), state=object(), make_renderer=make_renderer, handles=None
+        )
+        session = _StubSession(env, _StubGui())
+        clients = {1: _client(1, 1600, 900), 2: _client(2, 800, 800)}
+        session.server.get_clients = lambda: clients
+        with unittest.mock.patch("robosimstudio_studio.render_view._choose", return_value=("tiled", "x")):
+            panel = PanelRenderView(session, world_model=True, scale=0.5)
+        panel.drain()
+        wide, square = clients[1].scene.background, clients[2].scene.background
+        self.assertEqual(wide.shape[:2], (450, 800))
+        self.assertEqual(square.shape[:2], (400, 400), "the second browser got the first one's frame")
+        self.assertEqual(len(built), 2)
+
+        # The second browser goes away: its renderer is given back.
+        del clients[2]
+        panel.budget.reset()
+        panel.drain()
+        self.assertEqual([r.closed for r in built], [False, True])
+        panel.close()
+        self.assertTrue(all(r.closed for r in built))
+
+    def test_a_resize_gives_the_old_renderer_back_before_building_the_new_one(self) -> None:
+        built: list[_Renderer] = []
+        alive_at_build: list[int] = []
+
+        def make_renderer(backend, cameras, channels, **_):
+            alive_at_build.append(sum(not r.closed for r in built))
+            built.append(_Renderer(cameras))
+            return built[-1]
+
+        env = types.SimpleNamespace(
+            model=object(), cameras=(_Spec(),), state=object(), make_renderer=make_renderer, handles=None
+        )
+        session = _StubSession(env, _StubGui())
+        clients = {1: _client(1, 1600, 900)}
+        session.server.get_clients = lambda: clients
+        with unittest.mock.patch("robosimstudio_studio.render_view._choose", return_value=("tiled", "x")):
+            panel = PanelRenderView(session, world_model=True, scale=0.5)
+        panel.drain()
+        clients[1] = _client(1, 1200, 900)
+        panel.budget.reset()
+        panel.drain()
+        self.assertEqual(len(built), 2)
+        self.assertEqual(alive_at_build, [0, 0], "the retired shape was still alive while its successor built")
+        self.assertEqual(clients[1].scene.background.shape[:2], (450, 600))
+        panel.close()
+
+
+@dataclasses.dataclass
+class _PlateSpec(_Spec):
+    """A rig camera that carries a clean plate of the clip it was filmed in, of the browser's own aspect, so the
+    locked frame is not letterboxed."""
+
+    width: int = 1600
+    height: int = 900
+    background: str = "plate.png"
+
+    def scaled(self, width: int, height: int) -> _PlateSpec:
+        return dataclasses.replace(self, width=width, height=height)
+
+
+class _DepthRenderer(_Renderer):
+    def render(self, state):
+        spec = self.cameras[0]
+        return {
+            spec.name: {
+                "rgb": np.zeros((spec.height, spec.width, 3), dtype=np.uint8),
+                "depth": np.ones((spec.height, spec.width), dtype=np.float32),
+            }
+        }
+
+
+class TestALockedCameraShowsItsPlate(unittest.TestCase):
+    """A viewport locked to a camera with a clean plate shows the clip's pixels behind what moves, as that camera's
+    stills do; the free view is no camera's, so it draws no plate."""
+
+    def _drained(self, locked: str):
+        asked: list[list[str]] = []
+        plated: list[tuple] = []
+
+        def make_renderer(backend, cameras, channels, **_):
+            asked.append(list(channels))
+            return _DepthRenderer(cameras)
+
+        def over_plate(spec, rgb, depth=None):
+            plated.append((spec.name, depth is not None))
+            return np.full_like(rgb, 7)
+
+        env = types.SimpleNamespace(
+            model=object(),
+            cameras=(_PlateSpec(),),
+            state=object(),
+            make_renderer=make_renderer,
+            over_plate=over_plate,
+            handles=None,
+        )
+        session = _StubSession(env, _StubGui())
+        clients = {1: _client(1, 1600, 900)}
+        session.server.get_clients = lambda: clients
+        with unittest.mock.patch("robosimstudio_studio.render_view._choose", return_value=("tiled", "x")):
+            panel = PanelRenderView(session, world_model=True, scale=0.5)
+        panel._locked_request = locked
+        panel._service_requests()
+        panel.drain()
+        self.addCleanup(panel.close)
+        return asked, plated, clients[1].scene.background
+
+    def test_the_locked_view_is_drawn_over_the_plate_with_the_depth_that_places_it(self) -> None:
+        asked, plated, frame = self._drained("overhead")
+        self.assertEqual([["rgb", "depth"]], asked, "the depth says which pixels are what moves")
+        self.assertEqual([("overhead", True)], plated)
+        self.assertTrue((frame == 7).all(), "the viewport shows the bare render, not the plate")
+
+    def test_the_free_view_draws_no_plate(self) -> None:
+        asked, plated, frame = self._drained("")
+        self.assertEqual([["rgb"]], asked)
+        self.assertEqual([], plated)
+        self.assertTrue((frame == 0).all())
 
 
 if __name__ == "__main__":
