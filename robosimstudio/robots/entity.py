@@ -979,11 +979,13 @@ class EntityEmbodiment(Entity):
             for b in carried:
                 builder.body_q[b] = delta * _wp_xform(builder.body_q[b])
         # A shape the file puts on the world body (a floor, a table, a plate) belongs to no arm: it stays where the
-        # file put it, and is said so once, rather than left as an obstacle where an arm used to stand unsaid.
+        # file put it, and is said so once, rather than left as an obstacle where an arm used to stand unsaid. A site
+        # (an invisible frame) is no obstacle, so it is not named.
+        site = int(newton.ShapeFlags.SITE)
         on_world = [
             str(builder.shape_label[s]).rsplit("/", 1)[-1]
             for s in range(builder.shape_count if shape_start is None else shape_start, builder.shape_count)
-            if int(builder.shape_body[s]) < 0
+            if int(builder.shape_body[s]) < 0 and not int(builder.shape_flags[s]) & site
         ]
         if on_world:
             print(

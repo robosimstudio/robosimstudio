@@ -333,6 +333,17 @@ class TestThePlacement(unittest.TestCase):
             self._build(APART, collapse=False, mounts={"a": WANT})
         self.assertNotIn("puts on the world", quiet.getvalue())
 
+    def test_a_site_on_the_world_is_not_named(self) -> None:
+        """A site is an invisible frame, no obstacle: the notice names the shapes an arm could meet."""
+        import contextlib
+        import io
+
+        sited = APART.replace("<worldbody>", '<worldbody><site name="target" pos="0 0 1"/>', 1)
+        heard = io.StringIO()
+        with contextlib.redirect_stdout(heard):
+            self._build(sited, collapse=False, mounts={"a": WANT})
+        self.assertNotIn("puts on the world", heard.getvalue())
+
     def test_a_position_keeps_the_heading(self) -> None:
         """On a robot turned a quarter by its mount, a position moves the base and does not turn it."""
         turned = (0.1, 0.0, 0.5, 0.0, 0.0, H, H)
