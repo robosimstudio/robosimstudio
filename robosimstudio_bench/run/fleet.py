@@ -43,6 +43,7 @@ from robosimstudio.specs import Episode, TaskSpec, replace
 from robosimstudio_bench.goals.context import diverged_result, finite_reward
 from robosimstudio_bench.taskbuild.episodes import make_episode, model_key_for
 
+from .jobs import FLEET_RUNTIME
 from .summary import RunSummary
 
 __all__ = [
@@ -566,6 +567,13 @@ class RunnerFleet:
     """What ``run_episodes`` ended with -- not what opened it, since a wave whose
     benches differ rebuilds."""
 
+    tick_reads_verdicts: bool = True
+    """Whether :attr:`on_wave_tick` reads a live world's verdict off its slots.
+
+    A live view does. A pool worker's progress stamp reads nothing, and says so,
+    because a hook that might read would have every world scored on every step
+    (:meth:`_verdict_can_wait`) in the one arrangement a cell actually runs in."""
+
     def __init__(self, job, *, root: str | Path = "outputs", verbose: bool = True, run_dir: Path | None = None) -> None:
         from robosimstudio.record import EpisodeStore
 
@@ -862,6 +870,10 @@ class RunnerFleet:
         cadence = fleet.eval_every
         world_steps = 0
         step = 0
+        unread = [self._verdict_can_wait(slot, fleet, policy) for slot in slots]
+        advancing = [
+            bool(wait and getattr(slot.evaluator, "advances", False)) for wait, slot in zip(unread, slots, strict=True)
+        ]
 
         while live.any() and step < limit:
             policy.act(live)
@@ -883,9 +895,14 @@ class RunnerFleet:
             requests = policy.termination_requests()
             for world in np.flatnonzero(live):
                 slot = slots[world]
-                done, info = score_world(
-                    slot, fleet, snapshot, step=step, limit=limits[world], request=requests.get(int(world), "")
-                )
+                request = requests.get(int(world), "")
+                # Nothing can close this world on this step and nothing will read
+                # what the evaluator would say about it: see _verdict_can_wait.
+                if unread[world] and not request and step < limits[world] and not snapshot.diverged[world]:
+                    if advancing[world]:
+                        slot.evaluator.advance(fleet.context(slot.world, snapshot, settled_body_q=slot.settled_body_q))
+                    continue
+                done, info = score_world(slot, fleet, snapshot, step=step, limit=limits[world], request=request)
                 if not done:
                     continue
                 slot.extras = dict(policy.row_extras(int(world)))
@@ -934,6 +951,49 @@ class RunnerFleet:
         )
 
     # ------------------------------------------------------------------ helpers
+    def _verdict_can_wait(self, slot: WorldSlot, fleet, policy) -> bool:
+        """Whether this world can go unscored until the step its episode closes.
+
+        A pass over the goal tree is about 2 ms of Python per world, on the
+        fleet's own thread, on every step. Measured on ``cable_routing/L2`` at 15
+        worlds: 29 ms of a 78 ms idle step, and 19 % of a wave's wall time (316 s
+        of 1,666 s), more than rendering or every graph's thinking, and it was
+        most of why a wave advanced no faster when it was made wider: at 60
+        worlds it was 99 ms of a 152 ms step.
+
+        It decides nothing on most steps. Of the things that close a world
+        (:func:`score_world`), a divergence, a request and the budget are all
+        read without the evaluator, which leaves success. So a world's verdict
+        can wait for the step that closes it when all of these hold, and a run
+        with any of them false scores every step, as it always did:
+
+        * **Its document does not end on success.** Otherwise the evaluator is
+          what closes the world.
+        * **Its goal and reward hold no history**
+          (:attr:`~robosimstudio_bench.goals.reward.Scored.memoryless`). A pure
+          function of the last step's state says at the last step what it would
+          have said after scoring all of them. ``observe`` may hold history, and
+          :meth:`~robosimstudio_bench.goals.reward.Scored.advance` keeps it going.
+        * **Nothing reads the verdict while the episode runs.** A policy says so
+          (:attr:`~robosimstudio_bench.solutions.fleet.FleetSolution.reads_verdicts`);
+          a recorder and a live view read ``slot.info`` too.
+
+        So the row is the row every-step scoring writes: same close kind on the
+        same step, the same success and reward from the same state, and the same
+        metrics, which are that last pass's. ``tests/test_fleet_verdict_on_close.py``
+        runs both on one script and compares them.
+        """
+        if slot.parked or self.recorder is not None:
+            return False
+        if self.on_wave_tick is not None and self.tick_reads_verdicts:
+            return False
+        if getattr(policy, "reads_verdicts", True):
+            return False
+        document = slot.task if slot.task is not None else getattr(fleet, "task", None)
+        if bool(getattr(document, "terminate_on_success", True)):
+            return False
+        return bool(getattr(slot.evaluator, "memoryless", False))
+
     def _check_graph(self, slots: list[WorldSlot]) -> None:
         """Refuse a mixed wave whose documents resolve the job's graph differently.
 
@@ -1109,6 +1169,10 @@ class RunnerFleet:
                     "utilization": round(self.summary.utilization, 4),
                     "waves": self.summary.waves,
                     "policy_provenance": dict(policy.provenance()),
+                    # ``--clock`` and ``--obs-render`` are no-ops here: the
+                    # barrier is lockstep for every world, and a world renders
+                    # only when its graph looks. What ran, not what was asked.
+                    **FLEET_RUNTIME,
                 },
             )
         )

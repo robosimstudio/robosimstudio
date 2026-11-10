@@ -62,7 +62,12 @@ could hide, but 134.70 mm on yam_i2rt and 254.73 mm on droid.
 from __future__ import annotations
 
 import copy
+import functools
 import logging
+import os
+import threading
+from collections import OrderedDict
+from contextlib import nullcontext
 from typing import Any
 
 import numpy as np
@@ -75,11 +80,17 @@ from robosimstudio.core.math import (
     quat_wxyz_to_xyzw,
     quat_xyzw_to_wxyz,
 )
-from robosimstudio.core.streams import reading
+from robosimstudio.core.streams import reading, stream_lock
 
 logger = logging.getLogger(__name__)
 
-__all__ = ["MotionBackendCuRobo", "MotionUnavailable"]
+__all__ = [
+    "PLANNER_CACHE_ENV",
+    "MotionBackendCuRobo",
+    "MotionUnavailable",
+    "clear_planner_cache",
+    "planner_cache_enabled",
+]
 
 CUROBO_INSTALL_HINT = (
     "cuRobo is not importable. Install the extra: 'uv sync --extra curobo'. "
@@ -169,6 +180,222 @@ graph at a new batch shape costs about as much as building a fresh planner --
 so reusing one fixed-size planner across calls of different real candidate
 counts beats rebuilding one per call. 32 comfortably covers a heading search's
 worst case (YAWS_DEG + YAWS_FINE_DEG, 18) with headroom."""
+
+ATTACHMENT_SLOTS = 16
+"""Spheres reserved on the tool link of the one attachment planner each arm keeps.
+
+A held object's spheres used to buy a planner of their own: a fresh
+``MotionPlanner`` with them appended to the tool link, built, warmed and
+CUDA-graph-captured (~12 s single-goal, ~6 s for a batch planner). Every grasp
+perceives its object a little differently, so the cache key (spheres to 0.1 mm)
+missed on nearly every plan: on syringe_packing/L1, 47 of 53 carry plans paid
+both, about 17 of the cell's 60 graph-minutes. cuRobo 0.8 keeps one
+``KinematicsParams`` for all of a planner's solvers (IK and trajopt share its
+``link_spheres`` buffer), and its collision kernels read the spheres from that
+buffer on every launch, captured graphs included. cuRobo's own
+``AttachmentManager.update`` attaches objects exactly this way: it writes a
+link's pre-allocated sphere rows in place and pads the unused ones with radius
+-100, which every collision kernel skips. So one planner per arm, built with
+this many extra tool-link spheres, takes any attachment of up to this many
+spheres by a write instead of a build. Self-collision pairs are fixed by link
+membership, not radius, so the slots get the pairs appended spheres got. A
+larger attachment falls back to building a planner of its own. 16 covers every
+attachment measured (4-12 spheres)."""
+_SLOT_DISABLED_RADIUS = -100.0
+"""cuRobo's own disabled-sphere radius (``disable_link_spheres``, ``AttachmentManager.update``)."""
+
+PLANNER_CACHE_ENV = "ROBOSIMSTUDIO_PLANNER_CACHE"
+"""Set to ``1`` to keep warm planners across backends in one process.
+
+**What it buys.** A connector is built per episode, and with it a backend whose
+planner is built, warmed and CUDA-graph-captured on its first plan: ~10.6 s of a
+measured tool_hanging episode, paid again every episode, and once per *world* on
+a fleet (27 planner builds for a 30-instance, 8-world cell). With this set, the
+first backend for a robot model builds it and every later one adopts it.
+
+**What stays the same.** A planner holds no episode state the backend relies
+on: every plan clears and reloads its collision world before solving, the
+tool-pose criteria are restored after every constrained plan, and attachments
+are separate planners keyed by their geometry. Adoption clears the scene and
+resets the sampler seeds, which is the state a planner leaves its own warmup
+in, so an episode's first plan starts where an uncached one would. What a
+backend measures off its own environment -- base and TCP transforms, the TSDF
+grid -- stays on the backend.
+
+**What it costs.** The planners hold their GPU memory between episodes (the
+main planner, plus at most :data:`CACHED_ATTACHED_PLANNERS` attached and
+:data:`CACHED_BATCH_PLANNERS` batch planners per robot model), and backends
+sharing one planner -- the worlds of a fleet -- take turns on it rather than
+each solving on its own copy. Each world's own copy was never parallel on the
+device anyway: every solve already holds the process's stream lock.
+"""
+
+CACHED_ATTACHED_PLANNERS = 4
+"""Attachment planners kept across backends per robot model, least recently used dropped first.
+
+Keyed by the attachment's geometry to 0.1 mm, so a perceived object rarely hits
+across episodes; the bound keeps a long run from holding one per episode. A
+backend still keeps every one it used itself (see ``MotionBackendCuRobo._caches``)."""
+
+CACHED_BATCH_PLANNERS = 4
+"""Batch IK planners kept across backends per robot model, least recently used dropped first."""
+
+
+def planner_cache_enabled() -> bool:
+    """Whether :data:`PLANNER_CACHE_ENV` asks for planners to outlive their backend."""
+    return os.environ.get(PLANNER_CACHE_ENV, "").strip().lower() in {"1", "true", "yes", "on"}
+
+
+class _WarmPlanners:
+    """Every planner built for one robot model on one device, warm and shared.
+
+    The ``lock`` is the model's: whoever loads a world into one of these
+    planners holds it until the solve that world was loaded for has returned,
+    so two backends sharing a planner -- the worlds of a fleet, or an episode
+    and the straggling graph thread of the one before it -- cannot solve in each
+    other's world. It is taken before :func:`reading`, never after.
+    """
+
+    def __init__(self) -> None:
+        self.lock = threading.RLock()
+        self.planner: Any = None
+        self.frame = ""
+        self.attached: OrderedDict[tuple, Any] = OrderedDict()
+        self.batch: OrderedDict[tuple, Any] = OrderedDict()
+
+    def planners(self) -> list[Any]:
+        return [p for p in (self.planner, *self.attached.values(), *self.batch.values()) if p is not None]
+
+    def adopt(self) -> None:
+        """Hand the planners to a new backend in the state a fresh build leaves.
+
+        A fresh planner's warmup ends on ``reset_seed`` with no world loaded;
+        this puts every cached one back there, so an episode's first plan draws
+        the same samples it would have drawn from a planner built for it.
+        """
+        with reading():
+            for planner in self.planners():
+                planner.clear_scene_cache()
+                planner.reset_seed()
+
+    def trim(self) -> None:
+        """Drop the least recently used attachment and batch planners past their bounds."""
+        for cache, keep in ((self.attached, CACHED_ATTACHED_PLANNERS), (self.batch, CACHED_BATCH_PLANNERS)):
+            while len(cache) > keep:
+                cache.popitem(last=False)
+
+
+_WARM: dict[tuple, _WarmPlanners] = {}
+_WARM_LOCK = threading.Lock()
+
+
+def _current_device() -> str:
+    """The device a planner built on this thread lands on: cuRobo's ``"cuda"``."""
+    try:
+        import torch
+    except ImportError:  # pragma: no cover - torch rides with cuRobo
+        return "cpu"
+    if not torch.cuda.is_available():
+        return "cpu"
+    return f"cuda:{torch.cuda.current_device()}"
+
+
+def _planner_cache_key(config_path: Any, urdf_path: str, lock_joints: dict[str, float], device: str) -> tuple:
+    """What has to match for two backends to share a planner.
+
+    The robot description is the config *and* what this stack overrides in it
+    -- the URDF and the locked finger values -- since those are what the
+    planner's kinematics and tool frames are built from; the device, because a
+    planner is pinned to one. Finger locks are rounded to a micro-radian so a
+    float that went through a scene reset still matches.
+    """
+    locks = tuple(sorted((str(k), round(float(v), 6)) for k, v in (lock_joints or {}).items()))
+    return (str(config_path), str(urdf_path or ""), locks, str(device))
+
+
+def _warm_planners(key: tuple) -> _WarmPlanners:
+    with _WARM_LOCK:
+        warm = _WARM.get(key)
+        if warm is None:
+            warm = _WARM[key] = _WarmPlanners()
+        return warm
+
+
+def clear_planner_cache() -> int:
+    """Forget every cached planner, so the GPU memory can be collected. Returns how many sets.
+
+    Backends that already adopted a set keep using it; the next one built
+    builds afresh.
+    """
+    with _WARM_LOCK:
+        count = len(_WARM)
+        _WARM.clear()
+    return count
+
+
+def _holding_model_lock(method):
+    """Run *method* holding the shared planners' lock when this backend has some.
+
+    For the methods that load a collision world into a planner and then solve
+    in it: the load and the solve must be one step for whoever shares the
+    planner. A backend without the cache runs exactly as it did.
+    """
+
+    @functools.wraps(method)
+    def wrapper(self, *args, **kwargs):
+        warm = self._bind()
+        with warm.lock if warm is not None else nullcontext():
+            return method(self, *args, **kwargs)
+
+    return wrapper
+
+
+def _serialize_sphere_fit() -> None:
+    """Run cuRobo's sphere fitter under the stream lock every planner solve holds.
+
+    **The race this closes**, measured on an 8-world tool_hanging fleet: 3 of
+    30 instances died in ``register_sg.register`` with ``RuntimeError: Offset
+    increment outside graph capture encountered unexpectedly``. A graph's
+    registration script fits its held object with MORPHIT
+    (``curobo._src.geom.sphere_fit.fit_spheres_to_mesh``), which draws from
+    torch's CUDA generator (``torch.rand`` on the device). Torch's default
+    generator is one per device, not one per thread, and a CUDA-graph capture
+    on *any* thread puts it in capture mode -- so the fitter's draw on one
+    world's thread, landing while another world's thread captured a cuRobo
+    solver (a planner warming up, a batch planner's first solve), is refused.
+    ``capture_error_mode="thread_local"`` (:func:`_capture_thread_local`) does
+    not reach it: that mode governs allocations and synchronisations, not the
+    generator's state.
+
+    Every capture in this module happens inside :func:`reading`; this puts the
+    fitter there too, so the two cannot overlap. Wrapped in place, the way
+    :func:`_capture_thread_local` patches torch, because the callers are graph
+    scripts that import the fitter themselves. Idempotent; a cuRobo without the
+    fitter is left alone.
+    """
+    import importlib
+
+    for name in ("curobo._src.geom.sphere_fit.fit_spheres", "curobo._src.geom.sphere_fit", "curobo.sphere_fit"):
+        try:
+            module = importlib.import_module(name)
+        except ImportError:
+            continue
+        fit = getattr(module, "fit_spheres_to_mesh", None)
+        if fit is None or getattr(fit, "_rss_serialized", False):
+            continue
+
+        module.fit_spheres_to_mesh = _under_stream_lock(fit)
+
+
+def _under_stream_lock(fit):
+    @functools.wraps(fit)
+    def serialized(*args, **kwargs):
+        with stream_lock:
+            return fit(*args, **kwargs)
+
+    serialized._rss_serialized = True  # type: ignore[attr-defined]
+    return serialized
+
 
 ROBOT_SCENE_FILTER_MARGIN_M = 0.015
 """Extra radius used to remove robot returns from reconstructed RGB-D meshes.
@@ -410,7 +637,55 @@ class MotionBackendCuRobo:
         self._frame: str = ""
         self._tcp_cache: dict[int, np.ndarray] = {}
         self._base_cache: dict[int, tuple[np.ndarray, np.ndarray]] = {}
+        self._cached = planner_cache_enabled()
+        self._warm: _WarmPlanners | None = None
         _capture_thread_local()
+        _serialize_sphere_fit()
+        if self._cached:
+            self._prewarm()
+
+    # ------------------------------------------------------------------ the cache
+    def _bind(self) -> _WarmPlanners | None:
+        """This backend's share of the process's warm planners, or ``None`` without the cache.
+
+        Bound once per backend -- once per episode, since a connector is -- and
+        on binding the cached planners are put back in a fresh build's state
+        (:meth:`_WarmPlanners.adopt`). Attachment and batch planners are then
+        looked up in this backend's own cache first and the shared one second
+        (:meth:`_recall`), so a planner one episode paid to build is the next
+        episode's too.
+        """
+        if not getattr(self, "_cached", False):
+            return None
+        if self._warm is None:
+            warm = _warm_planners(
+                _planner_cache_key(self.config_path, self.urdf_path, self.lock_joints, _current_device())
+            )
+            with warm.lock:
+                if self._warm is None:
+                    warm.adopt()
+                    if warm.planner is not None:
+                        self._planner, self._frame = warm.planner, warm.frame
+                    self._warm = warm
+        return self._warm
+
+    def _prewarm(self) -> None:
+        """Build (or adopt) the shared planner now, on the constructing thread.
+
+        A connector is built before its graph thread starts -- and on a fleet,
+        world 0's before any world's -- so the one capture of the main planner
+        a process pays happens while nothing else in it can be drawing from
+        torch's generator or capturing. Best effort: a failure here is logged
+        and left to the first plan, which raises it where an uncached backend
+        would.
+        """
+        try:
+            _ = self.planner
+        except Exception:
+            logger.warning(
+                "MotionBackendCuRobo: could not warm the shared planner up front; the first plan will try again",
+                exc_info=True,
+            )
 
     # ------------------------------------------------------------------ setup
     @staticmethod
@@ -541,57 +816,70 @@ class MotionBackendCuRobo:
         Warmup is paid here rather than inside episode one. cuRobo compiles its
         kernels through NVRTC on first use and captures CUDA graphs when
         ``use_cuda_graph`` is on; a graph's step budget should not be spending
-        that.
+        that. With :data:`PLANNER_CACHE_ENV` set it is paid once per process
+        and robot model rather than once per backend.
         """
         if self._planner is None:
-            MotionPlanner, MotionPlannerCfg, _, _, _, _ = self._import()
-            # cuRobo 0.8 imports ``wp.torch.device_from_torch``. Warp 1.16
-            # kept the functions but moved the namespace to ``warp._src``.
-            # Install the compatibility alias only when the public namespace
-            # is absent; older supported Warp releases remain untouched.
-            import warp as wp
-
-            if not hasattr(wp, "torch"):
-                from warp._src import torch as warp_torch
-
-                wp.torch = warp_torch
-            _capture_thread_local()
-            with reading():
-                # Allocate a mesh cache up front. The graph may supply a new
-                # RGB-D reconstruction for each episode; without a scene
-                # checker ``update_world`` cannot make an already-created
-                # planner collision aware.
-                planner = MotionPlanner(
-                    MotionPlannerCfg.create(
-                        robot=self._robot_config(),
-                        # The voxel entry pre-allocates the ESDF layer build_world_tsdf fills;
-                        # its dims/voxel_size must cover that grid exactly, and cuRobo
-                        # wants a dict here (an int is a mesh-style cache and crashes
-                        # planner construction with 'int' has no attribute 'get').
-                        collision_cache={
-                            "mesh": 32,
-                            # 128^3 at 10 mm: the mapper caps the grid at 128 voxels per axis,
-                            # so this is the whole grid it can produce at this resolution --
-                            # 1.28 m cubed, centred on the bench, which covers the task volume.
-                            "voxel": {"layers": 1, "dims": [1.28, 1.28, 1.28], "voxel_size": 0.01},
-                        },
-                        position_tolerance=PLANNER_POSITION_TOLERANCE_M,
-                        orientation_tolerance=PLANNER_ORIENTATION_TOLERANCE_RAD,
-                    )
-                )
-                planner.warmup()
-            # Published only once warm: a warmup that raises (a CUDA-graph
-            # capture invalidated, an NVRTC failure) must not leave a
-            # half-built planner behind with no tool frame, which every later
-            # call would then trip over as ``Link  not found``.
-            self._planner = planner
-            self._frame = planner.tool_frames[0]
-            logger.info(
-                "MotionBackendCuRobo: planner up on %s, tool frames %s",
-                self.config_path,
-                self._planner.tool_frames,
-            )
+            warm = self._bind()
+            if warm is None:
+                self._planner = self._build_planner()
+            else:
+                with warm.lock:
+                    if warm.planner is None:
+                        warm.planner = self._build_planner()
+                        warm.frame = warm.planner.tool_frames[0]
+                    self._planner, self._frame = warm.planner, warm.frame
         return self._planner
+
+    def _build_planner(self) -> Any:
+        """Build and warm the main planner. See :attr:`planner`."""
+        MotionPlanner, MotionPlannerCfg, _, _, _, _ = self._import()
+        # cuRobo 0.8 imports ``wp.torch.device_from_torch``. Warp 1.16
+        # kept the functions but moved the namespace to ``warp._src``.
+        # Install the compatibility alias only when the public namespace
+        # is absent; older supported Warp releases remain untouched.
+        import warp as wp
+
+        if not hasattr(wp, "torch"):
+            from warp._src import torch as warp_torch
+
+            wp.torch = warp_torch
+        _capture_thread_local()
+        with reading():
+            # Allocate a mesh cache up front. The graph may supply a new
+            # RGB-D reconstruction for each episode; without a scene
+            # checker ``update_world`` cannot make an already-created
+            # planner collision aware.
+            planner = MotionPlanner(
+                MotionPlannerCfg.create(
+                    robot=self._robot_config(),
+                    # The voxel entry pre-allocates the ESDF layer build_world_tsdf fills;
+                    # its dims/voxel_size must cover that grid exactly, and cuRobo
+                    # wants a dict here (an int is a mesh-style cache and crashes
+                    # planner construction with 'int' has no attribute 'get').
+                    collision_cache={
+                        "mesh": 32,
+                        # 128^3 at 10 mm: the mapper caps the grid at 128 voxels per axis,
+                        # so this is the whole grid it can produce at this resolution --
+                        # 1.28 m cubed, centred on the bench, which covers the task volume.
+                        "voxel": {"layers": 1, "dims": [1.28, 1.28, 1.28], "voxel_size": 0.01},
+                    },
+                    position_tolerance=PLANNER_POSITION_TOLERANCE_M,
+                    orientation_tolerance=PLANNER_ORIENTATION_TOLERANCE_RAD,
+                )
+            )
+            planner.warmup()
+        # Published only once warm: a warmup that raises (a CUDA-graph
+        # capture invalidated, an NVRTC failure) must not leave a
+        # half-built planner behind with no tool frame, which every later
+        # call would then trip over as ``Link  not found``.
+        self._frame = planner.tool_frames[0]
+        logger.info(
+            "MotionBackendCuRobo: planner up on %s, tool frames %s",
+            self.config_path,
+            planner.tool_frames,
+        )
+        return planner
 
     def _planner_for(self, attached_object: dict | None, arm_id: int) -> Any:
         """Return a planner whose ``link_6`` carries the supplied spheres.
@@ -622,11 +910,24 @@ class MotionBackendCuRobo:
             converted.append((tool_center, radius))
         if not converted:
             return self.planner
+        if len(converted) <= ATTACHMENT_SLOTS:
+            return self._slotted_planner("attached", arm_id, converted)
+        return self._build_attached_planner(arm_id, converted)
+
+    def _build_attached_planner(
+        self,
+        arm_id: int,
+        converted: list[tuple[np.ndarray, float]],
+        *,
+        key: tuple | None = None,
+        before_warmup: Any = None,
+    ) -> Any:
+        """Build (or recall) a single-goal planner with ``converted`` appended to its tool link."""
         # The two YAM arms share one arm-only URDF but have independently
         # measured tool-to-TCP transforms.  Never let a geometrically identical
         # attachment on one arm reuse the other arm's planner.
-        key = self._attachment_cache_key(arm_id, converted)
-        cached = self._attached_planners.get(key)
+        key = key or self._attachment_cache_key(arm_id, converted)
+        cached = self._recall("attached", key)
         if cached is not None:
             return cached
 
@@ -675,14 +976,74 @@ class MotionBackendCuRobo:
                     orientation_tolerance=PLANNER_ORIENTATION_TOLERANCE_RAD,
                 )
             )
+            if before_warmup is not None:
+                before_warmup(planner)
             planner.warmup()
-        self._attached_planners[key] = planner
+        self._keep("attached", key, planner)
         logger.info(
             "MotionBackendCuRobo: attached %d collision spheres to %s",
             len(converted),
             tool_link,
         )
         return planner
+
+    def _slotted_planner(self, kind: str, arm_id: int, converted: list[tuple[np.ndarray, float]]) -> Any:
+        """The arm's one ``kind`` ("attached" or "batch") planner, holding ``converted`` in its slots.
+
+        Built once per arm with :data:`ATTACHMENT_SLOTS` placeholder spheres on
+        the tool link, disabled before its warmup, then rewritten in place for
+        each attachment (:meth:`_write_attachment_slots`). Callers hold the
+        model lock through the solve (``_holding_model_lock``), so the write
+        and the solve it is for are one step for whoever shares the planner.
+        """
+        placeholders = [(np.zeros(3), 1.0e-3)] * ATTACHMENT_SLOTS
+        key = ("slots", int(arm_id), ATTACHMENT_SLOTS)
+
+        def disable_slots(planner: Any) -> None:
+            self._write_attachment_slots(planner, [])
+
+        if kind == "batch":
+            planner = self._build_batch_planner(arm_id, placeholders, key=key, before_warmup=disable_slots)
+        else:
+            planner = self._build_attached_planner(arm_id, placeholders, key=key, before_warmup=disable_slots)
+        self._write_attachment_slots(planner, converted)
+        return planner
+
+    def _write_attachment_slots(self, planner: Any, converted: list[tuple[np.ndarray, float]]) -> None:
+        """Write ``converted`` (tool-link frame centres, radii) into the planner's attachment slots.
+
+        The slots are the last :data:`ATTACHMENT_SLOTS` spheres of the tool
+        link, where :meth:`_build_attached_planner` appended them; the unused
+        ones get cuRobo's disabled radius. A change of attachment also resets
+        the planner's seed, as the fresh planner it replaces would have been
+        (its warmup ends on ``reset_seed``); re-planning with the same
+        attachment continues from where the last solve left the seed, as a
+        cached planner did.
+        """
+        import torch
+
+        signature = tuple(
+            (round(float(c[0]), 6), round(float(c[1]), 6), round(float(c[2]), 6), round(r, 6)) for c, r in converted
+        )
+        if getattr(planner, "_rss_slot_signature", None) == signature:
+            return
+        params = planner.kinematics.config.kinematics_config
+        tool_link = self._frame or planner.tool_frames[0]
+        index = params.get_sphere_index_from_link_name(tool_link)
+        if index.shape[0] < ATTACHMENT_SLOTS:
+            raise RuntimeError(
+                f"{tool_link} has {index.shape[0]} spheres; expected {ATTACHMENT_SLOTS} attachment slots"
+            )
+        rows = torch.zeros((ATTACHMENT_SLOTS, 4), dtype=params.link_spheres.dtype, device=params.link_spheres.device)
+        rows[:, 3] = _SLOT_DISABLED_RADIUS
+        for row, (center, radius) in enumerate(converted):
+            rows[row, :3] = torch.as_tensor(np.asarray(center, dtype=np.float64), dtype=rows.dtype, device=rows.device)
+            rows[row, 3] = float(radius)
+        with reading():
+            params.link_spheres[:, index[-ATTACHMENT_SLOTS:], :] = rows
+            if converted:
+                planner.reset_seed()
+        planner._rss_slot_signature = signature
 
     @staticmethod
     def _attachment_cache_key(arm_id: int, converted: list[tuple[np.ndarray, float]]) -> tuple:
@@ -743,9 +1104,21 @@ class MotionBackendCuRobo:
         # the second reusing the first's warm one. Sphere count and a 1 cm
         # rounded reach are enough to tell "roughly this size of thing" apart
         # without over-matching.
+        if 0 < len(converted) <= ATTACHMENT_SLOTS:
+            return self._slotted_planner("batch", arm_id, converted)
         reach = round(max((float(np.linalg.norm(c)) + r for c, r in converted), default=0.0), 2)
-        key = ("batch", int(arm_id), len(converted), reach)
-        cached = self._batch_planners.get(key)
+        return self._build_batch_planner(arm_id, converted, key=("batch", int(arm_id), len(converted), reach))
+
+    def _build_batch_planner(
+        self,
+        arm_id: int,
+        converted: list[tuple[np.ndarray, float]],
+        *,
+        key: tuple,
+        before_warmup: Any = None,
+    ) -> Any:
+        """Build (or recall) a batch-sized planner with ``converted`` appended to its tool link."""
+        cached = self._recall("batch", key)
         if cached is not None:
             return cached
 
@@ -785,6 +1158,8 @@ class MotionBackendCuRobo:
                     max_batch_size=IK_BATCH_MAX_CANDIDATES,
                 )
             )
+            if before_warmup is not None:
+                before_warmup(planner)
             frame = self._frame or planner.tool_frames[0]
             solver = planner.ik_solver
             import torch
@@ -810,9 +1185,48 @@ class MotionBackendCuRobo:
             for _ in range(3):
                 solver.solve_pose(warm_goal, current_state=JointState.from_position(warm_seed), seed_config=warm_seeds)
             torch.cuda.synchronize()
-        self._batch_planners[key] = planner
+        self._keep("batch", key, planner)
         return planner
 
+    def _caches(self, kind: str) -> tuple[dict, OrderedDict | None]:
+        """``(this backend's own, the shared one or None)`` for ``"attached"`` or ``"batch"`` planners.
+
+        Two levels because the shared one is bounded and a backend's is not.
+        The worlds of a fleet each build a planner for their own held object,
+        and a bounded shared cache alone would let world 8's evict world 1's
+        between two of world 1's plans -- a ~10 s rebuild, and a CUDA-graph
+        capture mid-episode, where the uncached backend kept its own for the
+        whole episode. A backend therefore keeps every planner it has used,
+        exactly as before, and the shared cache is only what the *next*
+        backend can start from.
+        """
+        own = self._attached_planners if kind == "attached" else self._batch_planners
+        warm = self._bind()
+        shared = None if warm is None else (warm.attached if kind == "attached" else warm.batch)
+        return own, shared
+
+    def _recall(self, kind: str, key: tuple) -> Any:
+        """A cached attachment or batch planner: this backend's, else one a previous backend left."""
+        own, shared = self._caches(kind)
+        planner = own.get(key)
+        if shared is not None:
+            if planner is None:
+                planner = shared.get(key)
+                if planner is not None:
+                    own[key] = planner
+            if key in shared:
+                shared.move_to_end(key)
+        return planner
+
+    def _keep(self, kind: str, key: tuple, planner: Any) -> None:
+        """Cache a freshly built planner, and offer it to later backends when the cache is on."""
+        own, shared = self._caches(kind)
+        own[key] = planner
+        if shared is not None:
+            shared[key] = planner
+            self._warm.trim()
+
+    @_holding_model_lock
     def solve_ik_batch(
         self,
         target_world_poses: list[dict],
@@ -1302,6 +1716,7 @@ class MotionBackendCuRobo:
         backtrack = float(np.max(np.maximum.accumulate(along) - along))
         return (lateral <= LINEAR_TUBE_M and backtrack <= LINEAR_BACKTRACK_M), lateral, backtrack
 
+    @_holding_model_lock
     def _ik_line(
         self,
         end_position: np.ndarray,
@@ -1509,6 +1924,7 @@ class MotionBackendCuRobo:
         joints = np.asarray(self.env.state.joint_q.numpy(), dtype=np.float64)
         return joints[list(coords)]
 
+    @_holding_model_lock
     def _plan(
         self,
         position: np.ndarray,
@@ -1670,17 +2086,21 @@ class MotionBackendCuRobo:
         rotation, translation = self._base(arm_id)
         device = "cuda:0"
         center_base = (np.asarray(center, dtype=np.float64) - translation) @ rotation
-        mapper = Mapper(
-            MapperCfg(
-                voxel_size=float(voxel_size),
-                esdf_voxel_size=float(voxel_size),
-                extent_meters_xyz=tuple(float(v) for v in extent),
-                grid_center=torch.tensor(center_base, dtype=torch.float32, device=device),
-                depth_maximum_distance=float(depth_max),
-                num_cameras=1,
-                device=device,
+        # The mapper's device work holds the stream lock like every other
+        # cuRobo call here, so it can neither capture nor be running while
+        # another thread does (see _serialize_sphere_fit).
+        with reading():
+            mapper = Mapper(
+                MapperCfg(
+                    voxel_size=float(voxel_size),
+                    esdf_voxel_size=float(voxel_size),
+                    extent_meters_xyz=tuple(float(v) for v in extent),
+                    grid_center=torch.tensor(center_base, dtype=torch.float32, device=device),
+                    depth_maximum_distance=float(depth_max),
+                    num_cameras=1,
+                    device=device,
+                )
             )
-        )
         masks = [np.asarray(m) > 0 for m in (exclude_masks or []) if m is not None]
         robot_spheres = np.asarray(self._robot_spheres_world(), dtype=np.float64).reshape(-1, 4)
         integrated = 0
@@ -1724,10 +2144,12 @@ class MotionBackendCuRobo:
                 ),
                 depth_to_meter=1.0,
             )
-            mapper.integrate(observation)
+            with reading():
+                mapper.integrate(observation)
             integrated += 1
 
-        grid = mapper.compute_esdf()
+        with reading():
+            grid = mapper.compute_esdf()
         cleared = 0
         if clear_cylinders and grid.feature_tensor is not None:
             # The feature tensor is (nx, ny, nz), indexed so that
@@ -1838,7 +2260,11 @@ class MotionBackendCuRobo:
         in-process and over RPC, and avoids leaking cuRobo classes into GAP.
         """
         meshes = list((world_config or {}).get("meshes") or [])
-        planner.clear_scene_cache()
+        # Under the stream lock with every other cuRobo call here: a world load
+        # is device work on the planner, and nothing may reach the device while
+        # another thread is capturing (see _serialize_sphere_fit).
+        with reading():
+            planner.clear_scene_cache()
 
         from curobo._src.geom.types import Mesh, SceneCfg
 
@@ -1866,7 +2292,8 @@ class MotionBackendCuRobo:
                 )
             self._carve_tsdf_contact_spheres(grid, allowed_contact_spheres)
             if not meshes:
-                planner.update_world(SceneCfg(voxel=[grid]))
+                with reading():
+                    planner.update_world(SceneCfg(voxel=[grid]))
                 logger.info("MotionBackendCuRobo: loaded TSDF voxel world")
                 return []
         elif not meshes:
@@ -1932,7 +2359,8 @@ class MotionBackendCuRobo:
         if converted or grid is not None:
             # The cache was cleared above, so a TSDF world whose every mesh was
             # filtered out still has to be loaded, or the plan runs in free space.
-            planner.update_world(SceneCfg(mesh=converted or None, voxel=[grid] if grid is not None else None))
+            with reading():
+                planner.update_world(SceneCfg(mesh=converted or None, voxel=[grid] if grid is not None else None))
         logger.info(
             "MotionBackendCuRobo: loaded %d/%d scene meshes after removing %d "
             "robot-overlapping triangles using %d live spheres",

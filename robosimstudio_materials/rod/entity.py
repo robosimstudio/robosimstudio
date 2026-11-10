@@ -806,7 +806,20 @@ class EntityRod(Centerline, Entity):
         mu = model.shape_material_mu.numpy()
         ke = model.shape_material_ke.numpy()
         kd = model.shape_material_kd.numpy()
-        own = set(self.shapes.tolist())
+        own = {int(s) for s in self.shapes.tolist()}
+        # EVERY WORLD'S CAPSULES, on a replicated model. ``self.shapes`` are
+        # template indices, and this pass runs on the replicated model (see
+        # ``_compile_multi``: "every entity writes its own rows per world"), so
+        # reading them as rows wrote ``mu_cable`` into world 0's capsules alone.
+        # Every other world's rod then fell through to ``mu_base``: measured on
+        # a cable_route/port_easy wave, mu 60 in world 0 and 2.0 in worlds 1+,
+        # i.e. a pad-on-cable grip of sqrt(2 x 60) = 11 instead of 60. The
+        # terminal carry's shallow pinch let go of the cable in those worlds,
+        # and a rod pressed against a fixture moved 0.4-0.8 mm differently from
+        # world 0 and the single-world build, which agreed within 0.02-0.06.
+        worlds = self.worlds
+        if worlds is not None and int(model.shape_count) != int(worlds.shapes_per_world):
+            own = {int(worlds.shape(s, w)) for w in range(self._num_worlds) for s in own}
         labels = list(model.shape_label)
         blades = self._blade_shapes(model)
         for s in range(model.shape_count):

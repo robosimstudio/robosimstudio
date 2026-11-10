@@ -24,6 +24,8 @@ verify without touching the simulator.
 
 from __future__ import annotations
 
+import os
+import threading
 from typing import Any
 
 import numpy as np
@@ -33,7 +35,29 @@ from robosimstudio.core.math import mat_to_axis_angle, quat_multiply, quat_to_ma
 from .arm import ArmKinematics
 from .solver import Roll, pose_errors
 
-__all__ = ["CALIBRATION_TOLERANCE_DEG", "CALIBRATION_TOLERANCE_M", "IKSolverPyroki"]
+__all__ = ["CALIBRATION_TOLERANCE_DEG", "CALIBRATION_TOLERANCE_M", "COMPILED_CACHE_ENV", "IKSolverPyroki"]
+
+COMPILED_CACHE_ENV = "ROBOSIMSTUDIO_PLANNER_CACHE"
+"""Set to ``1`` to share compiled solves between solvers over the same arm.
+
+The policy agent's planner cache and this are one switch, because they answer
+one question -- what a new episode in the same process has to rebuild. A
+solver is built per episode (its backend is), and every one compiled its own
+jaxls problem on its first solve in each roll contract: measured on
+``usbc_insert``'s YAM arms, 1.5-3.5 s for the roll-free solve and 1.2-1.6 s for
+the held one, per arm, every episode, against 2 ms warm. The compiled function
+is a pure function of the URDF, the tool link, the driven joints and the
+calibrated link-to-TCP transform, so a solver whose four match runs the one
+already compiled -- the same computation, not an approximation of it.
+"""
+
+_COMPILED: dict[tuple, Any] = {}
+_COMPILED_LOCK = threading.Lock()
+
+
+def _compiled_cache_enabled() -> bool:
+    return os.environ.get(COMPILED_CACHE_ENV, "").strip().lower() in {"1", "true", "yes", "on"}
+
 
 CALIBRATION_TOLERANCE_M = 1.0e-3
 """How far the tool-link-to-TCP transform may drift between the two probes [m] before the URDF is refused."""
@@ -242,8 +266,31 @@ class IKSolverPyroki:
     def _solver(self, worlds: int, roll: str):
         key = (int(worlds), roll)
         if key not in self._solvers:
-            self._solvers[key] = self._build(worlds, roll)
+            self._solvers[key] = self._shared(worlds, roll) if _compiled_cache_enabled() else self._build(worlds, roll)
         return self._solvers[key]
+
+    def _shared(self, worlds: int, roll: str):
+        """The compiled solve for this arm, shared with every solver over the same one.
+
+        Keyed by what the compiled function closes over: the URDF, the tool
+        link, the driven joints' slots, and the calibrated transform to a
+        nanometre (a fixed mount re-read after a reset must still match). Not
+        by ``worlds``: the batch size is a shape, which ``jax.jit`` already
+        compiles once per value and keeps.
+        """
+        key = (
+            self.urdf,
+            int(self._link),
+            tuple(int(slot) for slot in self._slots),
+            int(self._n_actuated),
+            np.round(np.asarray(self._t_ht, dtype=np.float64), 9).tobytes(),
+            roll,
+        )
+        with _COMPILED_LOCK:
+            solve = _COMPILED.get(key)
+            if solve is None:
+                solve = _COMPILED[key] = self._build(worlds, roll)
+        return solve
 
     def _build(self, worlds: int, roll: str):
         import jax

@@ -47,7 +47,7 @@ from typing import Any
 from robosimstudio_bench.taskdoc.parse import COMPARISONS
 from robosimstudio_bench.taskdoc.typecheck import _GATE_WORDS, _MASK_WORDS
 
-from .combinators import Node
+from .combinators import Node, holds_history
 from .context import EvalResult, WorldState, finite_reward
 
 __all__ = ["Fraction", "Gated", "Progress", "RewardClause", "Scored", "build_reward", "measured_atom", "reading_key"]
@@ -388,6 +388,39 @@ class Scored:
         from .initial import check_init
 
         return check_init(self.doc, self.leaf, Snapshot(ctx=ctx), active=self.active)
+
+    @property
+    def memoryless(self) -> bool:
+        """Whether the verdict depends on this step's state alone.
+
+        True when the goal and the reward clause hold no history
+        (:func:`~robosimstudio_bench.goals.combinators.holds_history`), so a pass
+        on the last step answers what a pass on every step would have ended on,
+        and a runner with no use for the steps between can skip them.
+        ``observe`` does not enter into it: it gates nothing, and
+        :meth:`advance` keeps whatever history it has.
+        """
+        return not holds_history(self.goal) and not any(holds_history(node) for node in _clause_nodes(self.reward))
+
+    def advance(self, ctx: WorldState) -> None:
+        """One step's worth of the history a verdict left unread still owes.
+
+        What a runner calls on a step it does not score an episode that is
+        :attr:`memoryless`. The goal and the reward need nothing, by that
+        property; an ``observe`` entry may still be a ``once`` or a ``hold-for``
+        whose reading depends on every step, and it is recorded in the row, so
+        its clock has to go on being told about them. A runner calls this *or*
+        ``__call__`` on a step, never both: running a stateful node twice
+        advances a clock one step passed on (see ``__call__``).
+        """
+        for node in self.observe:
+            if holds_history(node):
+                node(ctx)
+
+    @property
+    def advances(self) -> bool:
+        """Whether :meth:`advance` has anything to do, so a caller can skip building its context."""
+        return any(holds_history(node) for node in self.observe)
 
     def __call__(self, ctx: WorldState) -> EvalResult:
         verdict = self.goal(ctx)

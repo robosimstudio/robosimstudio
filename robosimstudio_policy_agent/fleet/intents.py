@@ -165,6 +165,22 @@ class ServoToPose:
     stop_on_stall: bool = False
     stall_steps: int = 12
     stall_epsilon: float = 0.0002
+    steps_per_turn: int = 2
+    """Control steps per servo turn: how often the setpoint is re-aimed from a measurement.
+
+    **Two is what the single-world servo actually does**, for the reason
+    :attr:`JointTrajectory.steps_per_waypoint` is two. Under the lockstep clock
+    each turn of :meth:`~robosimstudio_policy_agent.servo.CartesianServo.move`
+    is one bus call that steps once, then the rollout's hold step; the turn
+    measures once, advances the law twice from that one measurement (it counts
+    the steps a turn spans) and commands once. Re-aimed every step from a fresh
+    measurement, the lead clamp binds later and the arm travels faster: measured
+    on ``cable_route/port_easy``, the same go_to_pose targets reached in a
+    median 0.81 of the serial step count (19 matched moves; serial against
+    serial is exactly 1.00). The serial turn also commands its setpoint a hold
+    step after the measurement it came from, and the stepper keeps that
+    latency too (:meth:`~.stepper.StepService._advance_lead`). One turn is one
+    step, commanded at once, when this is 1."""
 
 
 @dataclass(frozen=True)
@@ -206,10 +222,16 @@ class IntentHandle:
     as superseded -- and the waiting thread wakes and either returns or raises.
     """
 
-    __slots__ = ("_done", "error", "ident", "result", "steps", "superseded")
+    __slots__ = ("_done", "error", "group", "ident", "result", "steps", "superseded")
 
     def __init__(self) -> None:
         self._done = threading.Event()
+        self.group: _HandleGroup | None = None
+        """The motions this one was submitted with, when it is one of several.
+
+        Set by :meth:`IntentTable.submit_group`, whose caller waits on every
+        handle of the group inside one park -- so only the group's *last*
+        completion may unpark it. See :class:`_HandleGroup`."""
         self.error: BaseException | None = None
         self.result: Any = None
         """What the motion ended with, for a caller that reads one.
@@ -264,6 +286,39 @@ class IntentHandle:
         return self._done.is_set()
 
 
+class _HandleGroup:
+    """Motions one thread submitted together and waits on inside one park.
+
+    Why a group has to be a thing the table knows about: every completion
+    unparks its waiter *before* setting its event (:meth:`IntentTable._wake`),
+    and :meth:`~.barrier.ParkTable.unpark` clears that thread's park outright.
+    A thread waiting on two arms' motions inside one park would be unparked by
+    whichever finished first and read as *running* while still blocked on the
+    other -- so the barrier would never close again, the fleet would never step,
+    and the second motion could never reach its end. The stall watchdog would
+    retire the world with a plausible-looking cause.
+
+    So a group counts its members down, and only the completion that finishes
+    the last of them unparks. Counted per handle rather than per call, because a
+    member can be completed more than once (completion is idempotent).
+    """
+
+    __slots__ = ("_finished", "_lock", "size")
+
+    def __init__(self, size: int) -> None:
+        self.size = int(size)
+        self._finished: set[int] = set()
+        self._lock = threading.Lock()
+
+    def member_finished(self, handle: IntentHandle) -> bool:
+        """Count ``handle`` as finished; whether it was the group's last."""
+        with self._lock:
+            if id(handle) in self._finished:
+                return False
+            self._finished.add(id(handle))
+            return len(self._finished) >= self.size
+
+
 @dataclass
 class _Slot:
     """One (world, arm) pair's pending and running motion."""
@@ -309,8 +364,15 @@ class IntentTable:
 
         Every completion in this class goes through here, so the ordering is
         stated once rather than remembered five times.
+
+        A member of a group (:meth:`submit_group`) unparks only when it is the
+        group's last to finish: its waiter is still parked on the others.
         """
         if handle is None:
+            return
+        group = getattr(handle, "group", None)
+        if group is not None and not group.member_finished(handle):
+            handle.complete(**completion)
             return
         if self.parks is not None:
             self.parks.unpark(int(world), getattr(handle, "ident", None))
@@ -334,6 +396,47 @@ class IntentTable:
         if displaced is not None:
             self._wake(key[0], displaced.handle, superseded=True)
         return handle
+
+    def submit_group(self, world: int, intents: list[Intent]) -> list[IntentHandle]:
+        """Queue several motions of one world as one, to start on the same step.
+
+        The bimanual form of :meth:`submit`, and both halves of "as one" matter:
+
+        * **One lock**, so a drain takes every member or none. Submitted one at
+          a time from inside a park, the barrier could close between two
+          submits and start the first arm a step (or a hundred) before the
+          second -- two hands carrying one object out of step.
+        * **One park** (:class:`_HandleGroup`): the caller waits on every handle
+          inside a single park, and only the last completion unparks it.
+
+        Each member still occupies its own ``(world, arm, kind)`` slot and
+        supersedes what that slot held, exactly as :meth:`submit` does.
+
+        Raises:
+            IndexError: For a world outside the fleet.
+            ValueError: When two members would occupy the same slot.
+        """
+        world = int(world)
+        if not 0 <= world < self.num_worlds:
+            raise IndexError(f"world {world} is outside a fleet of {self.num_worlds}")
+        keys = [(world, int(intent.arm), slot_kind(intent)) for intent in intents]
+        if len(set(keys)) != len(keys):
+            raise ValueError(f"a group holds one motion per arm slot, got {[k[1:] for k in keys]}")
+        group = _HandleGroup(len(intents))
+        handles = []
+        displaced = []
+        with self._lock:
+            for key, intent in zip(keys, intents, strict=True):
+                handle = IntentHandle()
+                handle.group = group
+                previous = self._pending.pop(key, None)
+                if previous is not None:
+                    displaced.append(previous)
+                self._pending[key] = _Slot(intent=intent, handle=handle)
+                handles.append(handle)
+        for previous in displaced:
+            self._wake(world, previous.handle, superseded=True)
+        return handles
 
     def drain(self, step: int = 0) -> list[tuple[int, int, Intent, IntentHandle]]:
         """Start everything submitted since the last drain. Fleet thread.

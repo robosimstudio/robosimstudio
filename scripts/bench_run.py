@@ -43,9 +43,10 @@ Two things to know before reading the number it prints.
 **Episode ids are not automatically distinct scenes.** Every shipped suite
 declares ``EpisodeSpec(count=1, sampler=fixed)``, and ``make_episode`` keeps
 sampling past ``count`` rather than refusing -- so ``--episodes 0:32`` on a
-shipped variant is *32 trials of one layout*, which for a graph is a real
-experiment (the runtime's thread timing is not pinned, so the rollouts genuinely
-differ) but measures run-to-run variance, not generalisation. For layout spread,
+shipped variant is *32 trials of one layout*, which for a graph under the default
+``--clock free`` is a real experiment (the runtime's thread timing is not pinned,
+so the rollouts genuinely differ; ``--clock lockstep`` pins it) but measures
+run-to-run variance, not generalisation. For layout spread,
 give the variant a sampler that varies -- ``grid_xy_quat``, ``move_near``,
 ``compose`` -- in a job file that registers its own suite, and pass that file so
 the workers import it too.
@@ -55,6 +56,8 @@ graph, a runtime thread whose tool calls are serviced once per control step. Tak
 the cores away and episodes stretch, some truncate that would not have, and the
 bus watchdog -- 30 s of wall clock -- starts firing. ``--workers`` wants sizing
 against cores; ``--bus-timeout`` is the release valve when it cannot be.
+``--clock lockstep`` takes the host out of the measurement: nothing steps while
+a graph thinks, so a starved worker runs slower rather than spending steps on it.
 """
 
 from __future__ import annotations
@@ -68,7 +71,7 @@ from pathlib import Path
 
 from robosimstudio.roots import add_task_root
 from robosimstudio.specs import CaptureSpec, JobSpec, RecordSpec
-from robosimstudio_bench.run import RunnerEval, RunSummary, load_jobs, run_pooled
+from robosimstudio_bench.run import RunnerEval, RunSummary, Watchdog, load_jobs, run_pooled
 from robosimstudio_bench.solutions.declared import ROUTINES_ABSENT, ROUTINES_MODULE, routines_installed
 from robosimstudio_bench.taskbuild.registry import list_tasks
 
@@ -169,6 +172,28 @@ def create_parser() -> argparse.ArgumentParser:
         default="",
         dest="obs_renderer",
         help="renderer for obs['cameras'] (perception); defaults to --renderer when omitted",
+    )
+    parser.add_argument(
+        "--obs-render",
+        default="per-step",
+        choices=("per-step", "on-demand"),
+        dest="obs_render",
+        help=(
+            "when observation cameras render. 'per-step' (default) renders every --render-every control "
+            "steps whatever the policy is doing -- with a path tracer and four cameras that is most of an "
+            "episode's wall clock. 'on-demand' renders only when a graph asks (get_observation), as a "
+            "workflow declaring meta.observation_mode on_demand already does; --record still gets its "
+            "video frames, at the video's own rate. Graph policies only: a policy that reads obs['cameras'] "
+            "every step is refused. Ignored with --num-worlds above 1, which renders on demand already"
+        ),
+    )
+    parser.add_argument(
+        "--render-every",
+        type=int,
+        default=1,
+        dest="render_every",
+        metavar="N",
+        help="with --obs-render per-step, render one control step in N (1 renders every step)",
     )
     parser.add_argument(
         "--record",
@@ -294,6 +319,55 @@ def create_parser() -> argparse.ArgumentParser:
         default=0,
         help="OMP_NUM_THREADS per worker; 0 divides the visible cores among them",
     )
+    group.add_argument(
+        "--watchdog-build",
+        type=float,
+        default=None,
+        metavar="S",
+        help=(
+            "with --workers above 1: seconds a worker may go from taking an episode to its first "
+            "control step -- build, warming reset, first frame -- before it is killed and the "
+            "episode re-run on a fresh worker (default 900, doubled on the retry; 0 off). A cold "
+            "RTX shader compile takes 5-9 minutes, so keep it above that"
+        ),
+    )
+    group.add_argument(
+        "--watchdog-step",
+        type=float,
+        default=None,
+        metavar="S",
+        help=(
+            "with --workers above 1: seconds a worker may go between control steps (default 300, "
+            "and never under --bus-timeout plus 120 s; 0 off)"
+        ),
+    )
+    group.add_argument(
+        "--watchdog-retries",
+        type=int,
+        default=None,
+        metavar="N",
+        help="re-runs of a killed worker's episode before it is written as a watchdog error row (default 1)",
+    )
+    group.add_argument(
+        "--watchdog-wave-steps",
+        type=int,
+        default=None,
+        metavar="N",
+        help=(
+            "a wave whose every world a graph aborted by control step N is run once more on a fresh worker: "
+            "its worker's renderer is the likelier fault. A graph that fails again keeps its first rows, so "
+            "it scores the same. 0 turns this off (default 500)"
+        ),
+    )
+    group.add_argument(
+        "--no-watchdog",
+        action="store_true",
+        help=(
+            "never kill a silent worker (the pool then waits on a hung one for ever), and never re-run a wave. "
+            "Without any --watchdog flag, ROBOSIMSTUDIO_POOL_WATCHDOG ('off', or "
+            "'build=S,step=S,retries=N,wave_steps=N,wave_worlds=N') decides"
+        ),
+    )
 
     if "vla" in SOLUTIONS:
         group = parser.add_argument_group("vla policy")
@@ -413,7 +487,24 @@ def create_parser() -> argparse.ArgumentParser:
         help=(
             "seconds a graph worker waits for the sim thread to service a request; 0 keeps the "
             "SimBus default of 30. Raise it when workers share cores, or contention alone will "
-            "fail episodes that were converging"
+            "fail episodes that were converging. Under --clock lockstep it is also the watchdog on "
+            "the graph: one that runs host code this long without parking on the simulator ends "
+            "its episode, so it has to cover the slowest single node -- a model load, a VLM call, "
+            "a first planner warm-up"
+        ),
+    )
+    group.add_argument(
+        "--clock",
+        default="free",
+        choices=("free", "lockstep"),
+        help=(
+            "how a graph's thinking relates to simulated time. 'free' (default) steps the rollout "
+            "every iteration whatever the graph is doing, so the seconds perception, a VLM or a "
+            "planner take are spent as control steps -- how many depends on the host. 'lockstep' "
+            "steps only while the graph thread is parked on the simulator (a bus request or a step "
+            "wait) or has finished: nothing moves while a node runs host code, and a deterministic "
+            "graph takes the same steps on any machine. Ignored with --num-worlds above 1, whose "
+            "barrier is lockstep already"
         ),
     )
     return parser
@@ -551,6 +642,9 @@ def job_from_args(args: argparse.Namespace) -> JobSpec:
         episode_list=episode_list,
         renderer=args.renderer,
         obs_renderer=args.obs_renderer,
+        obs_render=args.obs_render,
+        render_every=max(1, int(args.render_every)),
+        clock=args.clock,
         record=RecordSpec(
             enabled=args.record,
             cameras=tuple(c.strip() for c in args.record_cameras.split(",") if c.strip()),
@@ -656,6 +750,29 @@ def check_capture_schedules(jobs: list[JobSpec]) -> None:
             "--eval-every 1; a sparser tape would resolve spans to steps it never recorded. "
             f"Job(s) asking for both: {', '.join(unsupported)}"
         )
+
+
+def watchdog_from_args(args: argparse.Namespace) -> Watchdog | None:
+    """The pool's :class:`~robosimstudio_bench.run.pool.Watchdog` from the flags, or ``None`` to let the pool decide.
+
+    ``None`` when no ``--watchdog-*`` flag was given, so the pool reads
+    ``ROBOSIMSTUDIO_POOL_WATCHDOG`` and otherwise uses its defaults -- the same
+    answer a caller of :func:`run_pooled` that has never heard of the flags
+    gets. A flag overrides that one field over the same base.
+    """
+    if args.no_watchdog:
+        return Watchdog(build_s=0.0, step_s=0.0)
+    given = {
+        name: value
+        for name, value in (
+            ("build_s", args.watchdog_build),
+            ("step_s", args.watchdog_step),
+            ("retries", args.watchdog_retries),
+            ("wave_steps", args.watchdog_wave_steps),
+        )
+        if value is not None
+    }
+    return replace(Watchdog.from_env(), **given) if given else None
 
 
 def check_document_waves(jobs: list[JobSpec]) -> None:
@@ -768,6 +885,7 @@ def main() -> int:
                 # its own suite has to be imported in each of them, or the task
                 # will not resolve.
                 preload=args.jobs,
+                watchdog=watchdog_from_args(args),
             ).values()
         )
     else:

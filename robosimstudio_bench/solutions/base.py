@@ -107,6 +107,26 @@ class SolutionBase(SolutionCommon):
         """Short label for video overlays; empty disables the overlay."""
         return ""
 
+    def configure_runtime(self, *, clock: str = "free", obs_render: str = "per-step") -> None:
+        """Take the job's clock and observation render. Called by the runner after construction.
+
+        A policy that computes inside :meth:`get_action` needs nothing for the
+        clock: the rollout cannot step while that call is running, so it is in
+        lockstep by construction, and ``clock`` is accepted and ignored. What it
+        cannot take is ``on-demand`` observations -- it reads ``obs["cameras"]``
+        every step and has no way to ask for a render, so it would act on
+        pictures that stopped updating at reset. Refused rather than run. A
+        policy that drives a graph overrides this
+        (:meth:`~robosimstudio_policy_agent.graph_solution.SolutionGraph.configure_runtime`).
+        """
+        del clock
+        if obs_render != "per-step":
+            raise ValueError(
+                f"{self.name} reads its observations every step and cannot ask for a render, so "
+                f"--obs-render {obs_render} would leave it acting on frames from reset; on-demand "
+                "observations are for a graph, which renders inside get_observation"
+            )
+
     @property
     def control_mode(self) -> str:
         """Which action space :meth:`get_action` emits into, or empty for the env's.

@@ -25,7 +25,7 @@ from robosimstudio.specs import JobSpec, RecordSpec
 from robosimstudio_bench.envs.env import Env
 
 from ..solutions import SolutionBase, load_solution
-from .jobs import job_task
+from .jobs import apply_runtime, job_task, runtime_provenance
 from .summary import RunSummary
 
 __all__ = ["RolloutResult", "RunnerEval", "rollout"]
@@ -196,6 +196,7 @@ class RunnerEval:
             device=job.device,
             max_steps=job.max_steps,
             control_mode=job.control_mode,
+            render_every=job.render_every,
         )
         policy = load_solution(job.solution, env, **dict(job.solution_kwargs))
         recorder = (
@@ -203,6 +204,7 @@ class RunnerEval:
             if job.record.enabled or job.capture.enabled
             else None
         )
+        apply_runtime(job, env, policy)
 
         # Warm before timing, exactly as a pool worker does: the first reset is
         # where kernel compilation and the CUDA-graph capture happen, so doing it
@@ -299,6 +301,7 @@ class RunnerEval:
                     "cuda_graph_steps": step_mix,
                     "builds": self.summary.builds,
                     "suite_provenance": _suite_provenance(job.task),
+                    **runtime_provenance(job),
                 },
             )
         )
