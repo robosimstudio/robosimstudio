@@ -1068,15 +1068,13 @@ def _pin_source_paths(root: ET.Element, base: Path) -> None:
     ``file`` of an ``<include>`` or ``<model>`` relative to the model file's
     directory. A copy written elsewhere keeps resolving to the same assets only
     if those paths are spelled out, and where the file names no directory at
-    all, the copy names the one the loader would have used beside the source.
+    all, the copy names the one MuJoCo would have used beside the source: the
+    model's own directory, ``meshdir`` and ``texturedir`` each, as MJCF says.
 
     **Those defaults go on the first compiler only.** Newton's importer reads
     that one alone, and MuJoCo merges every ``<compiler>`` with the later one
     winning, so a default written on a later compiler would override a
-    directory an earlier one names. **A missing ``texturedir`` is the
-    ``meshdir``**, as Newton's importer reads it; it builds every RSS model.
-    MuJoCo would read the model's directory: the two loaders already differ on
-    the source there, and the copy keeps Newton's reading.
+    directory an earlier one names.
     """
 
     def absolute(value: str) -> str:
@@ -1092,10 +1090,9 @@ def _pin_source_paths(root: ET.Element, base: Path) -> None:
                 compiler.set(attr, absolute(value))
     first = compilers[0]
     if not first.get("assetdir"):
-        if not first.get("meshdir"):
-            first.set("meshdir", str(base))
-        if not first.get("texturedir"):
-            first.set("texturedir", first.get("meshdir"))
+        for attr in _ASSET_DIRS:
+            if not first.get(attr):
+                first.set(attr, str(base))
     for element in (*root.iter("include"), *root.iter("model")):
         if file := element.get("file"):
             element.set("file", absolute(file))
