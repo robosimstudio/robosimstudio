@@ -903,9 +903,19 @@ def compare_models(model: Any, ref: Any, name: str, ref_name: str) -> list[str]:
     return out
 
 
+_KEPT_FIELDS = frozenset(
+    {"joint_label", "joint_qd_start", "joint_parent", "shape_body"}
+    | {field for field, _ in MODEL_ARRAYS}
+    | {name for labels, field, _ in PART_ARRAYS for name in (labels, field)}
+)
+"""What :func:`compare_models` reads off the registered build, and all :class:`_Kept` keeps of it."""
+
+
 class _Kept:
-    """A finalized model as :func:`compare_models` reads it, kept on the host after the model is gone: every array
-    copied once (read back with ``.numpy()``, as on the model), every other attribute as it was."""
+    """A finalized model as :func:`compare_models` reads it, kept on the host after the model is gone: only the
+    :data:`_KEPT_FIELDS`, each array copied once (read back with ``.numpy()``, as on the model) and each label list
+    copied. Nothing else is kept, so no GPU buffer of the model (its meshes, a solver's attribute namespace) outlives
+    it in the cache."""
 
     class _Array:
         def __init__(self, values: np.ndarray) -> None:
@@ -915,19 +925,38 @@ class _Kept:
             return self._values
 
     def __init__(self, model: Any) -> None:
-        for key, value in vars(model).items():
-            kept = value
+        for key in _KEPT_FIELDS:
+            value = getattr(model, key, None)
+            if value is None:
+                continue
             if hasattr(value, "numpy") and callable(value.numpy):
                 try:
-                    kept = self._Array(np.array(value.numpy(), copy=True))
+                    value = self._Array(np.array(value.numpy(), copy=True))
                 except Exception:  # an array the host cannot read (a graph-owned buffer): not compared
                     continue
-            setattr(self, key, kept)
+            elif isinstance(value, (list, tuple)):
+                value = list(value)
+            setattr(self, key, value)
 
 
-_REGISTERED: dict[tuple[str, str], _Kept] = {}
-"""Each registered robot built alone, by its name and the physics it was built on: built once a process for the
-robot line, not once every replay that reads it (a whole second robot model, on the page's own GPU)."""
+_REGISTERED: dict[tuple[Any, ...], _Kept] = {}
+"""Each registered robot built alone, by the registration, its file's modification time and the physics it was
+built on: built once a process for the robot line, not once every replay that reads it (a whole second robot model,
+on the page's own GPU). A twin that registers another robot under a shipped name, or an edit to the robot's file,
+is a new key and builds again."""
+
+
+def _asset_stamp(reg: Any) -> int | None:
+    """The registered robot's file's modification time, or ``None`` when it names no file that can be read."""
+    asset = getattr(reg, "asset", None)
+    if asset is None or not getattr(asset, "path", None):
+        return None
+    try:
+        from robosimstudio.paths import resolve_asset
+
+        return Path(resolve_asset(asset)).stat().st_mtime_ns
+    except Exception:
+        return None
 
 
 def built_departures(sim: Any, reg: Any) -> tuple[list[str], str]:
@@ -937,7 +966,7 @@ def built_departures(sim: Any, reg: Any) -> tuple[list[str], str]:
     import robosimstudio as rss
 
     spec = sim.scene.embodiment.spec
-    key = (str(reg.name), repr(sim.request.physics))
+    key = (str(reg.name), repr(reg), _asset_stamp(reg), repr(sim.request.physics))
     ref = _REGISTERED.get(key)
     if ref is None:
         try:
@@ -1822,9 +1851,10 @@ def _mimic_linkage(model: Any) -> dict[int, tuple[int, ...]]:
         j1 = model.constraint_mimic_joint1.numpy()
         on = model.constraint_mimic_enabled.numpy() if hasattr(model, "constraint_mimic_enabled") else np.ones(len(j0))
         starts = model.joint_qd_start.numpy()
+        dof_count = int(model.joint_dof_count)
     except AttributeError:
         return {}
-    return mimic_linkages(j0, j1, on, starts, int(model.joint_dof_count))
+    return mimic_linkages(j0, j1, on, starts, dof_count)
 
 
 class AsBuilt:

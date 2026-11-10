@@ -1103,10 +1103,11 @@ HAND_ORIENTATIONS = (
 """The ways a camera's picture can come out turned or mirrored that the hand line tries the drawn robot in."""
 
 
-def change_map(frames: np.ndarray, tol: int = HAND_TOL) -> np.ndarray:
+def change_map(frames: np.ndarray, tol: int = HAND_TOL, median: np.ndarray | None = None) -> np.ndarray:
     """Per pixel, the share of ``frames`` (``uint8 [n, h, w, 3]``) that differ from the frames' median by more than
-    ``tol`` in some channel: 0 where nothing ever passes, near 1 where the picture always changes."""
-    med = np.median(frames, axis=0).astype(np.int16)
+    ``tol`` in some channel: 0 where nothing ever passes, near 1 where the picture always changes. ``median`` is
+    that median when the caller already has it (a plate is one), so it is not taken twice."""
+    med = (np.median(frames, axis=0) if median is None else median).astype(np.int16)
     out = np.zeros(frames.shape[1:3], dtype=np.float32)
     for frame in frames:
         out += np.abs(frame.astype(np.int16) - med).max(axis=2) > tol

@@ -69,6 +69,8 @@ class TestAHandsLinkageIsFoundEitherWayRound(unittest.TestCase):
             joint_dof_count=5,
         )
         self.assertEqual({1: (1, 2), 2: (1, 2)}, _mimic_linkage(model))
+        del model.joint_dof_count
+        self.assertEqual({}, _mimic_linkage(model), "a model that cannot say its DOF count has no linkage read")
 
 
 if __name__ == "__main__":

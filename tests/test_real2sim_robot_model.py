@@ -152,10 +152,66 @@ class TheRegisteredBuildIsKept(unittest.TestCase):
     """The robot line compares against the registered robot built alone; that build is the robot's and the
     physics', so it is made once a process and read back off the host after its model is gone."""
 
+    def setUp(self) -> None:
+        physics._REGISTERED.clear()
+        self.addCleanup(physics._REGISTERED.clear)
+
     def test_a_kept_model_reads_as_the_model_did(self) -> None:
         kept = physics._Kept(_model("yam"))
         self.assertEqual(physics.compare_models(_model("yam"), kept, "yam", "yam"), [])
         self.assertIn("joint6", "; ".join(physics.compare_models(_model("yam", joint6=3.1416), kept, "yam", "yam")))
+
+    def test_only_what_the_comparison_reads_is_kept(self) -> None:
+        """A model's other attributes (a solver's namespace, the collision meshes) hold GPU memory: not kept."""
+        model = _model("yam")
+        model.mujoco = object()
+        model.shape_source = [object()]
+        kept = physics._Kept(model)
+        self.assertFalse(hasattr(kept, "mujoco"))
+        self.assertFalse(hasattr(kept, "shape_source"))
+        self.assertEqual(model.joint_label, kept.joint_label)
+        self.assertIsNot(model.joint_label, kept.joint_label, "the label list is the cache's own copy")
+
+    def _built_departures(self, regs) -> list[str]:
+        from unittest import mock
+
+        import robosimstudio as rss
+
+        builds: list[str] = []
+
+        class FakeScene:
+            def __init__(self, **kwargs) -> None:
+                pass
+
+            def add(self, spec) -> None:
+                pass
+
+            def build(self, **kwargs):
+                builds.append("built")
+                return types.SimpleNamespace(model=_model("yam"), close=lambda: None)
+
+        sim = types.SimpleNamespace(
+            scene=types.SimpleNamespace(embodiment=types.SimpleNamespace(spec=types.SimpleNamespace(name="yam"))),
+            request=types.SimpleNamespace(physics=("a physics", 1)),
+            model=_model("yam"),
+        )
+        with mock.patch.object(rss, "Scene", FakeScene), mock.patch.object(rss, "robot", lambda spec: spec):
+            for reg in regs:
+                physics.built_departures(sim, reg)
+        return builds
+
+    def test_another_robot_registered_under_the_same_name_builds_again(self) -> None:
+        first = types.SimpleNamespace(name="yam_kept_test", damping=1.0)
+        second = types.SimpleNamespace(name="yam_kept_test", damping=2.0)
+        self.assertEqual(["built", "built"], self._built_departures([first, second]))
+
+    def test_an_edit_to_the_robots_file_builds_again(self) -> None:
+        from unittest import mock
+
+        reg = types.SimpleNamespace(name="yam_kept_test")
+        stamps = iter([1, 1, 2])
+        with mock.patch.object(physics, "_asset_stamp", lambda reg: next(stamps)):
+            self.assertEqual(["built", "built"], self._built_departures([reg, reg, reg]))
 
     def test_the_second_replay_builds_nothing(self) -> None:
         from unittest import mock
@@ -181,13 +237,11 @@ class TheRegisteredBuildIsKept(unittest.TestCase):
             model=_model("yam"),
         )
         reg = types.SimpleNamespace(name="yam_kept_test")
-        physics._REGISTERED.clear()
         with mock.patch.object(rss, "Scene", FakeScene), mock.patch.object(rss, "robot", lambda spec: spec):
             first = physics.built_departures(sim, reg)
             second = physics.built_departures(sim, reg)
         self.assertEqual(first, second)
         self.assertEqual(["built"], builds, "the registered robot was built again for the second replay")
-        physics._REGISTERED.clear()
 
 
 if __name__ == "__main__":

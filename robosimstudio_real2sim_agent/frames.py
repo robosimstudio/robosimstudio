@@ -341,7 +341,7 @@ def plate(
     med = np.median(frames, axis=0).astype(np.uint8)
     # per pixel, the share of frames that differ from the plate: 0.5 is a coin toss, where a ghost can be. The hand
     # line reads a wrist clip the same way, at its own tolerance (``checks.HAND_TOL``).
-    away = change_map(frames, tol=12)
+    away = change_map(frames, tol=12, median=med)
     moved = float((away > 0.25).mean())
     out_dir = Path(out_dir)
     out_dir.mkdir(parents=True, exist_ok=True)
