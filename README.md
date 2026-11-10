@@ -2,7 +2,7 @@
 
 [Tech report](https://arxiv.org/abs/2610.18835) | [Project Page](https://robosimstudio.github.io/) | [Examples](examples/README.md)
 
-RoboSimStudio is an open, interactive GPU simulation toolkit for rebuilding real
+RoboSimStudio is an open, interactive simulation toolkit for rebuilding real
 robot manipulation tasks in simulation, by hand or with a coding agent.
 
 <p align="center">
@@ -11,8 +11,9 @@ robot manipulation tasks in simulation, by hand or with a coding agent.
 
 ---
 ### News
+- **[2026/11/05]** 🎉 RoboSimStudio is accepted at CoRL 2026 PhysWM Workshop Oral Presentation, and CoRL Late Breaking Results.
 - **[2026/10/21]** 🔥 We have released many-demo collection with physics on the CPU and GL rendering: 500 demos in 4.2 min on one GPU. 
-- **[2026/10/20]** 🔥 We have added fifteen kinds of material, among them rope, knots, paper, bags, brushes, tape, cutting, granular, liquid, dough and water, each with a robot example at [**Materials**](examples/03_materials).
+- **[2026/10/20]** 🔥 We have added fifteen kinds of material, among them rope, knots, paper, bags, brushes, tape, cutting, granular, liquid, dough and water, each with an example at [**Materials**](examples/).
 - **[2026/10/18]** 🔥 RoboSimStudio runs on CPU-only machines. Get started [**Here**](examples/install.md).
 - **[2026/10/14]** 🔥 RoboSimStudio has been released!
 
@@ -22,27 +23,27 @@ We provide an [installation guide](https://github.com/robosimstudio/robosimstudi
 
 ```
 Set up environment for https://github.com/robosimstudio/robosimstudio
-and create a simulation environment for [Your task instruction]
-based on the video at [Your Video Path].
+and create a simulation environment for [Your task instruction] with Robot [Robot URDF]
+based on the video at [Your Video Path] / demonstration at [Robot Demonstration].
 ```
 
 > [!TIP]
-> 1. Use **Codex Astra** for better scene construction.
-> 2. Use **Claude Code** for better robot motion.
-> 3. Keep a **human in the loop** to keep the agent from cheating (a weld, a teleport or a spring where a grasp should be).
+> 1. RoboSimStudio supports human video, ego-centric video, robot video and teleoperation.
+> 2. Use **Codex Astra** for better scene construction.
+> 3. Use **Claude Code** for better robot motion.
+> 4. Keep a **human in the loop** to sometimes remind the agent to reconstruct the physics and geometry.
 
 ## Acknowledgements
 
-RoboSimStudio is built on [Newton](https://github.com/newton-physics/newton),
-[Warp](https://github.com/NVIDIA/warp) and
-[MuJoCo Warp](https://github.com/google-deepmind/mujoco_warp), and its studio
-on [viser](https://github.com/viser-project/viser). It draws on
+RoboSimStudio is hugely inspired and built on [Newton](https://github.com/newton-physics/newton),
+[Warp](https://github.com/NVIDIA/warp),
+[MuJoCo Warp](https://github.com/google-deepmind/mujoco_warp),
+[SuperDex](https://github.com/facebookresearch/project_superdex).
+[viser](https://github.com/viser-project/viser), 
 [Isaac Lab](https://github.com/isaac-sim/IsaacLab),
-[Isaac Lab Arena](https://github.com/isaac-sim/IsaacLab-Arena),
 [PyRoKi](https://github.com/chungmin99/pyroki),
-[Genesis](https://github.com/Genesis-Embodied-AI/Genesis),
-[SuperDex](https://github.com/facebookresearch/project_superdex) and
-[LeRobot](https://github.com/huggingface/lerobot). Robot models come from
+[Genesis](https://github.com/Genesis-Embodied-AI/Genesis).
+Robot models come from
 [i2rt](https://github.com/i2rt-robotics/i2rt) and
 [robosuite](https://github.com/ARISE-Initiative/robosuite); see `NOTICE`.
 Thanks to their authors.

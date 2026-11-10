@@ -1058,11 +1058,48 @@ def add_mjcf_collapsed(
     return collapse_own_fixed_joints(builder, joints_before, verbose=verbose)
 
 
-def strip_free_bodies(scene_xml: str | Path) -> str:
-    """Write a sibling MJCF with every free-jointed body and keyframe removed.
+_ASSET_DIRS = ("meshdir", "texturedir")
 
-    The stripped file goes in the *source's* directory so its relative
-    ``meshdir`` still resolves. The caller owns the temp file.
+
+def _pin_source_paths(root: ET.Element, base: Path) -> None:
+    """Make every path MuJoCo would resolve against ``base`` absolute.
+
+    MuJoCo reads ``assetdir``, ``meshdir``, ``texturedir`` and the ``file`` of
+    an ``<include>`` or ``<model>`` relative to the model file's directory, and
+    a missing ``meshdir``/``texturedir`` falls back to ``assetdir`` and then to
+    that directory. A copy written elsewhere keeps resolving to the same
+    assets only if those paths are spelled out.
+    """
+
+    def absolute(value: str) -> str:
+        return value if Path(value).is_absolute() else str(base / value)
+
+    compilers = root.findall("compiler")
+    if not compilers:
+        compilers = [ET.Element("compiler")]
+        root.insert(0, compilers[0])
+    for compiler in compilers:
+        if assetdir := compiler.get("assetdir"):
+            compiler.set("assetdir", absolute(assetdir))
+        for attr in _ASSET_DIRS:
+            if value := compiler.get(attr):
+                compiler.set(attr, absolute(value))
+            elif not compiler.get("assetdir"):
+                compiler.set(attr, str(base))
+    for element in (*root.iter("include"), *root.iter("model")):
+        if file := element.get("file"):
+            element.set("file", absolute(file))
+
+
+def strip_free_bodies(scene_xml: str | Path) -> str:
+    """Write a copy of the MJCF with every free-jointed body and keyframe removed.
+
+    The copy goes in the system temp directory, never beside the source, so a
+    read-only install (a shared site-packages, a hermetic build) can still
+    strip its scenes. Every path the source resolves against its own directory
+    -- ``assetdir``, ``meshdir``, ``texturedir`` and ``<include>``/``<model>``
+    files -- is written into the copy as an absolute path, so the copy loads
+    the same assets. The caller owns the temp file.
 
     **Both spellings of a free joint count.** MJCF says the same thing two ways
     -- ``<freejoint/>`` and ``<joint type="free"/>`` -- and a check for one of
@@ -1087,7 +1124,9 @@ def strip_free_bodies(scene_xml: str | Path) -> str:
     for keyframe in root.findall("keyframe"):
         root.remove(keyframe)
 
-    fd, path = tempfile.mkstemp(prefix="robosimstudio_stripped_", suffix=".xml", dir=str(src.parent))
+    _pin_source_paths(root, src.resolve().parent)
+
+    fd, path = tempfile.mkstemp(prefix="robosimstudio_stripped_", suffix=".xml")
     os.close(fd)
     tree.write(path, xml_declaration=False, encoding="unicode")
     return path
