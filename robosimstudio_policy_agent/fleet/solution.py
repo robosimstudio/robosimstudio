@@ -45,7 +45,7 @@ from robosimstudio.core.bus import BusTimeout
 from robosimstudio_bench.envs.world_view import WorldView
 from robosimstudio_bench.solutions.fleet import FleetSolution
 
-from ..graphs import stage_graph
+from ..graphs import forget_graph_modules, stage_graph
 from ..perception_tools import SEGMENT, segment_many
 from ..skills import pinned_registries
 from .barrier import Barrier, ParkTable, Rendezvous, StallTimeout
@@ -273,6 +273,7 @@ class SolutionGraphBatched(FleetSolution):
         from ..graph_solution import SolutionGraph
 
         source = SolutionGraph._graph_source(fleet, graph)
+        self._source_graph = source
         self._staged_graph_dir: Path | None = Path(self.graph_path) if Path(self.graph_path) != Path(source) else None
         self.task_tools = self._task_tools(fleet)
         # Work arm first, as a runtime ``arm_id`` counts. Resolved once for the
@@ -316,6 +317,19 @@ class SolutionGraphBatched(FleetSolution):
             timeout=stall_timeout or self.bus_timeout,
         )
 
+    @property
+    def reads_verdicts(self) -> bool:
+        """Whether this wave's graphs can see the evaluator: only with the privileged tools.
+
+        Every road from a graph to ``snapshot.info`` is a privileged tool:
+        ``sim.check_success`` and ``sim.next_goal``, and the suites' own readers
+        (``tool_hanging``'s job cursor), all of them ``sim.`` names or tagged
+        ``privileged``, which :class:`~robosimstudio_policy_agent.connector.NonPrivilegedRegistry`
+        drops. That boundary is what ``--no-privileged`` means: a graph that can
+        read the verdict is not running on vision.
+        """
+        return self.privileged
+
     # ------------------------------------------------------------------ set-up
     @staticmethod
     def _resolve_graph(fleet, graph: str, *, registries: Any = None) -> str:
@@ -353,6 +367,10 @@ class SolutionGraphBatched(FleetSolution):
         """
         super().reset_wave(slots)
         self.close_worlds()
+        # Fresh graph helper modules per wave, as the serial policy does per
+        # episode. Worlds inside one wave still share them, so a helper that
+        # keeps per-episode module state is not fleet-safe either way.
+        forget_graph_modules(self.graph_path, self._source_graph)
         self.waiter.reopen()
         self.rendezvous.reopen()
         self.parks.reset()
@@ -613,8 +631,22 @@ class SolutionGraphBatched(FleetSolution):
                 # what one tick counts down by; the policy's own cadence is 1.
                 state.settle_left -= max(1, int(getattr(self.fleet, "eval_every", 1)))
                 if state.settle_left < 0:
-                    reason = "graph finished" if state.error is None else f"graph failed: {state.error}"
-                    self._requests[world] = reason
+                    self._requests[world] = self._termination_reason(state)
+
+    @staticmethod
+    def _termination_reason(state: _World) -> str:
+        """Why a world's graph ended, in the single-world policy's words.
+
+        ``gap.execute`` does not raise for a workflow that ended at a failure
+        node: the failure is on its result, which :meth:`_record_result` puts
+        in the trace as ``graph_error``. The single-world policy reads both the
+        thread's exception and that; reading only the exception labelled every
+        aborted workflow "graph finished" -- measured on cable_routing/L1, 0 of
+        180 fleet episodes reported "graph failed" against 8 of 90 serially,
+        while 16 of those 180 rows carried the failure in ``graph_error``.
+        """
+        failure = state.error if state.error is not None else state.trace.get("graph_error")
+        return "graph finished" if failure is None else f"graph failed: {failure}"
 
     def termination_requests(self) -> dict[int, str]:
         return dict(self._requests)

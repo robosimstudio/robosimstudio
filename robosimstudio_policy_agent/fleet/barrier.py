@@ -1,9 +1,11 @@
 # SPDX-License-Identifier: Apache-2.0
 """When the fleet is allowed to step, and what it answers together when it is not.
 
-The single-world path gives the graph and the simulation strict turns: while a
-node script is thinking, **nothing steps**. That is not an implementation detail,
-it is the measurement. An object held in a closing hand does not creep while a
+The single-world path under ``--clock lockstep`` gives the graph and the
+simulation strict turns: while a node script is thinking, **nothing steps**
+(:meth:`~robosimstudio_policy_agent.graph_solution.SolutionGraph._lockstep_turn`
+is this rule for one world; the default ``--clock free`` keeps stepping holds).
+That is not an implementation detail, it is the measurement. An object held in a closing hand does not creep while a
 perception node runs, and the episode's step budget is not spent on the seconds
 a planner took.
 

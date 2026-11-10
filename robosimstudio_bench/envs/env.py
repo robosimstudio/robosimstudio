@@ -217,6 +217,19 @@ class Env(Sim):
         rather than a sentence it has to parse back. ``None`` before the first
         reset, and for an evaluator that cannot answer at all."""
 
+        self.video_every = 0
+        """While observations are rendered on demand (``obs_render_enabled``
+        off), still render the video rig on one control step in this many; 0
+        never does.
+
+        For a recording of an on-demand run. Turning per-step observation
+        rendering off stops every picture, the video's included, so an
+        ``--obs-render on-demand`` run recorded nothing but whatever its
+        perception happened to look at. The runner sets this to the recorder's
+        frame cadence, so the video costs what the video needs and the policy
+        still pays for nothing it did not ask for. It never affects a run that
+        renders observations per step, whose video comes from those renders."""
+
         # The one observation a scene cannot answer: an instruction is what the
         # *episode* says this run is for.
         self.add_obs_provider("instruction", lambda env: env.episode.instruction)
@@ -444,6 +457,8 @@ class Env(Sim):
                 self.frames = self.renderer.render(self.state)
             if self.renderer is not None and self.obs_renderer is not None:
                 self.video_frames = self.renderer.render(self.state)
+        elif not self.obs_render_enabled and self.video_every > 0 and self.step_count % self.video_every == 0:
+            self._render_video()
 
         ctx = self.make_context()
         # Kept, not just used. `make_context` reads `body_q`, `body_qd` and the
@@ -492,6 +507,23 @@ class Env(Sim):
             info["close_kind"] = "success"
             terminated = True
         return terminated, truncated, info
+
+    def _render_video(self) -> None:
+        """A video frame for a run whose observations are rendered on demand.
+
+        Into ``video_frames`` when the run has a separate observation rig --
+        that is what the recorder reads then -- and into ``frames`` when the one
+        rig serves both, as a per-step render would have. The latter is also
+        what a ``get_observation`` refreshes before perception reads it, so a
+        video frame never stands in for a look the policy asked for.
+        """
+        if self.renderer is None:
+            return
+        frames = self.renderer.render(self.state)
+        if self.obs_renderer is not None:
+            self.video_frames = frames
+        else:
+            self.frames = frames
 
     # -------------------------------------------------------------- observation
     # ------------------------------------------------------------------ access

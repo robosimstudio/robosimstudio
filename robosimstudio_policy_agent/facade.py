@@ -77,6 +77,16 @@ class EnvFacade(Protocol):
         """Feed waypoints one per control step. The rate is the cell's."""
         ...
 
+    def stream_dual_trajectory(
+        self,
+        tracks: dict[int, list[list[float]]],
+        *,
+        settle_tolerance: float = 0.005,
+        settle_max_steps: int = 60,
+    ) -> None:
+        """Advance several arms along their own trajectories together (``robot.stream_dual``)."""
+        ...
+
     def move_to_joints_blocking(
         self,
         target: np.ndarray,
@@ -180,9 +190,12 @@ class GapEnvFacade:
     def _observation(self, *, refresh_cameras: bool = False, obs=None, body_q=None) -> dict[str, Any]:
         env = self.env
         # A headless evaluation may suppress per-step rendering. Perception
-        # still receives pixels and camera poses from the same current state.
-        if refresh_cameras and not env.obs_render_enabled and env.renderer is not None:
-            env.frames = env.renderer.render(env.state)
+        # still receives pixels and camera poses from the same current state --
+        # from the observation rig when the run has one apart from its video
+        # rig, since that is the one per-step observations would have used.
+        rig = getattr(env, "obs_renderer", None) or env.renderer
+        if refresh_cameras and not env.obs_render_enabled and rig is not None:
+            env.frames = rig.render(env.state)
             obs = None
         # A stepper passes the obs ``env.step`` already gathered: observing is a
         # device readback, and twice a step is once too many.

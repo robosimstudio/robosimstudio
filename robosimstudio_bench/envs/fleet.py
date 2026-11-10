@@ -36,6 +36,7 @@ from __future__ import annotations
 
 import threading
 from collections.abc import Sequence
+from contextlib import nullcontext
 from dataclasses import dataclass
 from typing import Any
 
@@ -43,6 +44,7 @@ import newton
 import numpy as np
 import warp as wp
 
+from robosimstudio.core.gpu_turn import gpu_turn
 from robosimstudio.core.readback import launch_finite_check
 from robosimstudio.core.streams import capturing, reading
 from robosimstudio.core.worlds import WorldMap
@@ -431,7 +433,12 @@ class FleetEnv:
         self._snapshot_lock = threading.RLock()
         """Serialises :meth:`snapshot` and :meth:`context` across the fleet thread
         and the worlds' graph threads -- see :meth:`snapshot`."""
+        self._turn = gpu_turn(str(self.model.device))
+        """This worker's turn on the GPU against its pool's other workers, or ``None``: see :mod:`~robosimstudio.core.gpu_turn`."""
+        self._rendered = False
         self._control_graph = None
+        self._control_graph_unsolved = None
+        """The control stage without the IK solve, for a step on which no world servos: see :meth:`_control_stage`."""
         self._control_key: tuple[int, int] | None = None
 
         # ---- batched control -------------------------------------------------
@@ -627,12 +634,22 @@ class FleetEnv:
             return [{} for _ in range(self.num_worlds)]
         if worlds is None:
             if self._frames is None or self._frames_at != self.step_count:
-                with reading():
+                with self._render_turn(), reading():
                     self._frames = self.renderer.render_worlds(self.pipeline.state_0, None)
                 self._frames_at = self.step_count
             return self._frames
-        with reading():
+        with self._render_turn(), reading():
             return self.renderer.render_worlds(self.pipeline.state_0, worlds)
+
+    def _render_turn(self):
+        """The GPU to itself for this look, against the pool's other workers.
+
+        Not the first one. A renderer's first frame builds its pipelines, which is
+        host work worth nothing to take turns over, and which every worker does at
+        the same moment: at 12-30 s each, in turn, that would cost a cell minutes.
+        """
+        first, self._rendered = not self._rendered, True
+        return nullcontext() if first or self._turn is None else self._turn.rendering()
 
     @property
     def platform(self):
@@ -1324,8 +1341,17 @@ class FleetEnv:
         lazily on the array pair, like every other capture in this stack, and
         falls back to eager launches when capture fails.
         """
-        self._control_stage()
-        self.pipeline.step()
+        if self._turn is None:
+            self._control_stage()
+            self.pipeline.step()
+        else:
+            # The synchronize is what makes the turn cover the work rather than
+            # its enqueueing, and costs nothing: the snapshot that follows would
+            # wait for the same thing.
+            with self._turn.stepping():
+                self._control_stage()
+                self.pipeline.step()
+                wp.synchronize_device(self.model.device)
         self.step_count += 1
 
     @property
@@ -1375,6 +1401,25 @@ class FleetEnv:
         return self._host_joint_q[1]
 
     def _control_stage(self) -> None:
+        """Write this step's targets: the captured stage, with the IK solve only when a world servos.
+
+        Two graphs, because the solve is most of the stage's cost and a step
+        rarely needs it. Its answer reaches the targets through a per-world gate
+        (``_scatter_targets``), and it leaves nothing for the next solve: the
+        seeds are gathered from ``joint_q`` each time and the LM damping restarts
+        on every ``step``. So with every gate shut it writes nothing, and skipping
+        it cannot change a target. Measured on 15 ``cable_route/port_medium``
+        worlds: 7.9 ms of a 60 ms step, on all of the first 6,500 steps, in which
+        no world servoed (the weave's crossings stream joint trajectories; only
+        its terminal stage servos).
+
+        :attr:`~robosimstudio.solvers.ik.batched.RobotIKRig.driving` is the gates
+        as the *device* has them, as of the last :meth:`flush`, so the choice
+        cannot disagree with what a captured solve would have read. Both graphs
+        are captured at the moment the one graph always was, behind the same one
+        eager pass: a segment advances when it is driven, so a capture put off
+        until a later step would run that eager pass mid-motion.
+        """
         targets = self.pipeline.control.joint_target_q
         if targets is None:
             return
@@ -1382,22 +1427,27 @@ class FleetEnv:
         key = (joint_q.ptr, targets.ptr)
         if key != self._control_key:
             self._control_key = key
-            self._control_graph = None
+            self._control_graph = self._control_graph_unsolved = None
             if self.model.device.is_cuda:
                 try:
                     self._control_eager(joint_q, targets)
                     with capturing(self.model.device) as capture:
                         self._control_eager(joint_q, targets)
                     self._control_graph = capture.graph
+                    with capturing(self.model.device) as capture:
+                        self._control_eager(joint_q, targets, solve=False)
+                    self._control_graph_unsolved = capture.graph
                 except Exception as exc:
-                    self._control_graph = None
+                    self._control_graph = self._control_graph_unsolved = None
                     print(f"[fleet] control capture failed ({type(exc).__name__}: {exc}); running eager")
-        if self._control_graph is not None:
-            wp.capture_launch(self._control_graph)
+        solve = self.ik is not None and self.ik.driving
+        graph = self._control_graph if solve else self._control_graph_unsolved
+        if graph is not None:
+            wp.capture_launch(graph)
         else:
-            self._control_eager(joint_q, targets)
+            self._control_eager(joint_q, targets, solve=solve)
 
-    def _control_eager(self, joint_q: wp.array, targets: wp.array) -> None:
+    def _control_eager(self, joint_q: wp.array, targets: wp.array, *, solve: bool = True) -> None:
         """IK, then joint segments, then hands -- the body the graph captures.
 
         The order is the precedence: a world under Cartesian control has its arm
@@ -1405,6 +1455,9 @@ class FleetEnv:
         them overwritten by its segment, and the hand is independent of both.
         Every stage is gated per world, so a world only ever has one of them
         writing it -- the order settles what happens if something asks for two.
+
+        ``solve=False`` is this body for a step no world servos: see
+        :meth:`_control_stage`.
         """
         # Guarded, because Newton's Levenberg-Marquardt solver runs each
         # objective on its own CUDA stream and so moves the device's
@@ -1413,7 +1466,7 @@ class FleetEnv:
         # captured: a graph launch does not run any of this Python, so the lock
         # is taken only on the eager path and during the capture itself.
         with reading():
-            if self.ik is not None:
+            if solve and self.ik is not None:
                 self.ik.solve(joint_q, targets)
             for driver in self.segments.values():
                 driver.drive(targets)
@@ -1607,4 +1660,7 @@ class FleetEnv:
         if self.renderer is not None:
             self.renderer.close()
             self.renderer = None
-        self._control_graph = None
+        self._control_graph = self._control_graph_unsolved = None
+        if self._turn is not None:
+            self._turn.close()
+            self._turn = None

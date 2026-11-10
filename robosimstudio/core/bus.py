@@ -17,10 +17,26 @@ A watchdog bounds the wait. A worker whose request is never pumped -- because th
 owner died, or the episode ended -- gets a timeout rather than hanging the graph
 forever, and the runtime turns that into a node error its own error handling can
 route.
+
+**Lockstep.** By default the owner steps whatever the workers are doing, so how
+many control steps pass while a node thinks depends on how fast the host is.
+An owner that wants the simulation to stand still while the graph runs host
+code asks the bus instead: :meth:`SimBus.await_parked` blocks until the graph's
+own thread -- its *principal*, named by :meth:`SimBus.adopt` -- is **parked**,
+which it is exactly while it has a request queued or is blocked in
+:meth:`SimBus.wait_for_step` on a step not yet published. The discipline is the
+fleet's (:mod:`robosimstudio_policy_agent.fleet.barrier`), and both halves hold
+here by construction because "parked" is *derived* from the queue and the
+published step under one lock rather than kept as a flag beside them: a request
+stops counting the instant a pump takes it, and a wait the instant the step it
+waits for is published -- before either worker is woken. Any other thread's
+requests (gap's observation poller, say) are answered meanwhile, but its waits
+neither hold the clock nor release it.
 """
 
 from __future__ import annotations
 
+import logging
 import queue
 import threading
 import time
@@ -28,6 +44,12 @@ from dataclasses import dataclass, field
 from typing import Any, Protocol, runtime_checkable
 
 __all__ = ["Bus", "BusClosed", "BusTimeout", "SimBus", "SimSnapshot"]
+
+_log = logging.getLogger(__name__)
+
+_AWAIT_CEILING_S = 0.25
+"""Longest a single condition wait in :meth:`SimBus.await_parked` lasts before it
+looks again. A ceiling, not a cadence: every park, publish and close notifies."""
 
 
 class BusTimeout(RuntimeError):
@@ -100,6 +122,9 @@ class _Request:
     state: str = "queued"
     """``queued``, then ``running`` once a pump takes it, or ``cancelled`` once
     its worker has given up -- a cancelled request is dropped unrun."""
+    ident: int = 0
+    """The thread that posted it, so a lockstep owner can tell the graph's own
+    request from a helper thread's."""
 
 
 @runtime_checkable
@@ -161,8 +186,22 @@ class SimBus:
         self._lock = threading.Lock()
         """Makes "closed?" and "enqueue" one step against :meth:`close`, and
         "take" and "cancel" one step between :meth:`pump` and a timed-out worker."""
+        self._changed = threading.Condition(self._lock)
+        """Notified on every park, publish and close -- what :meth:`wait_for_step`
+        and :meth:`await_parked` block on instead of polling."""
         self.owner_thread: int | None = None
         """Set on the first :meth:`pump`, so a re-entrant call can be detected."""
+        # Lockstep bookkeeping, all under ``_lock``. Kept whatever the owner's
+        # clock: a free-running owner simply never asks.
+        self._principal: int | None = None
+        self._departed = False
+        self._queued: dict[int, int] = {}
+        """Per posting thread, its requests no pump has taken yet."""
+        self._waiting: dict[int, int] = {}
+        """Per thread blocked in :meth:`wait_for_step`, the step it waits to see passed."""
+        self._lockstep = False
+        """Set once an owner has asked :meth:`await_parked`: this bus's clock is lockstep."""
+        self._warned_helper_wait = False
 
     # ------------------------------------------------------------ worker side
     def call(self, fn, *args, **kwargs) -> Any:
@@ -192,16 +231,22 @@ class SimBus:
             if self._closed.is_set():
                 raise BusClosed("the simulation bus closed: the episode ended")
             return fn(*args, **kwargs)
-        request = _Request(fn=fn, args=args, kwargs=kwargs)
-        with self._lock:
+        request = _Request(fn=fn, args=args, kwargs=kwargs, ident=threading.get_ident())
+        # Queued and counted under one lock: from this instant the poster reads
+        # as parked to a lockstep owner, and it was never running-with-work-
+        # handed-over in between (the fleet's "park before handing work over").
+        with self._changed:
             if self._closed.is_set():
                 raise BusClosed("the simulation bus closed: the episode ended")
             self._queue.put(request)
+            self._queued[request.ident] = self._queued.get(request.ident, 0) + 1
+            self._changed.notify_all()
         if not request.done.wait(timeout):
             with self._lock:
                 withdrawn = request.state == "queued"
                 if withdrawn:
                     request.state = "cancelled"
+                    self._unqueue(request.ident)
                 serviced = request.done.is_set()  # finished between the wait and the lock
             if finish_started and not withdrawn:
                 request.done.wait()  # taken in time: it runs to its end
@@ -220,16 +265,66 @@ class SimBus:
         """Block until a snapshot later than ``after`` is published.
 
         What a node that has just commanded an action waits on, rather than
-        sleeping for a guessed interval.
+        sleeping for a guessed interval. A condition the owner notifies on every
+        publish, not a poll: a graph thread waiting out a settle costs no CPU.
+
+        While it waits, the calling thread is *parked* -- under a lockstep owner
+        this wait is what lets the clock advance (see :meth:`await_parked`).
         """
-        deadline = time.perf_counter() + (self.timeout if timeout is None else timeout)
-        while self._snapshot.step <= after:
-            if self._closed.is_set():
-                raise BusClosed("the simulation bus closed while waiting for a step: the episode ended")
-            if time.perf_counter() > deadline:
-                raise BusTimeout(f"no step past {after} within the deadline")
-            time.sleep(0.001)
-        return self._snapshot
+        limit = self.timeout if timeout is None else float(timeout)
+        deadline = time.monotonic() + limit
+        ident = threading.get_ident()
+        with self._changed:
+            if self._snapshot.step > after:
+                return self._snapshot
+            self._waiting[ident] = int(after)
+            self._changed.notify_all()
+            if self._lockstep and self._principal not in (None, ident) and not self._warned_helper_wait:
+                # Only the principal's waits release a lockstep clock (as only a
+                # world's principal's release the fleet's barrier), so a wait on
+                # any other thread -- a node gap runs on a pool thread in a
+                # parallel super-step, a streaming node -- gets its step only
+                # when the graph's own thread next parks. Said once, because it
+                # is otherwise a silent stall that ends at this wait's timeout.
+                self._warned_helper_wait = True
+                _log.warning(
+                    "lockstep: thread %r waits for a step but is not the graph's own thread; only that "
+                    "thread's parks advance the clock, so this wait is answered when it next parks "
+                    "(parallel or streaming nodes that wait on the simulator are not lockstep-safe)",
+                    threading.current_thread().name,
+                )
+            try:
+                while self._snapshot.step <= after:
+                    if self._closed.is_set():
+                        raise BusClosed("the simulation bus closed while waiting for a step: the episode ended")
+                    remaining = deadline - time.monotonic()
+                    if remaining <= 0.0:
+                        raise BusTimeout(f"no step past {after} within the deadline")
+                    self._changed.wait(remaining)
+            finally:
+                self._waiting.pop(ident, None)
+            return self._snapshot
+
+    # --------------------------------------------------------- lockstep, graph
+    def adopt(self, ident: int | None = None) -> None:
+        """Name the thread whose parks hold and release a lockstep clock. Called by it.
+
+        From the graph thread itself, before it runs anything, as the fleet's
+        :meth:`~robosimstudio_policy_agent.fleet.barrier.ParkTable.adopt` is: the
+        runtime's own helper threads only exist once the graph has started, so
+        none of them can be mistaken for it. Harmless under a free-running owner,
+        which never asks.
+        """
+        with self._changed:
+            self._principal = threading.get_ident() if ident is None else int(ident)
+            self._departed = False
+            self._changed.notify_all()
+
+    def depart(self) -> None:
+        """Say the principal has finished and will never park again. Called by it, last."""
+        with self._changed:
+            self._departed = True
+            self._changed.notify_all()
 
     # ------------------------------------------------------------- owner side
     def pump(self, *, budget: int = 64) -> int:
@@ -253,29 +348,85 @@ class SimBus:
         serviced = 0
         while serviced < budget:
             with self._lock:
-                try:
-                    request = self._queue.get_nowait()
-                except queue.Empty:
-                    break
-                if request.state == "cancelled":
-                    continue
-                request.state = "running"
-            try:
-                request.result = request.fn(*request.args, **request.kwargs)
-            except Exception as exc:
-                request.error = exc
-            except BaseException:
-                request.error = BusClosed("the simulation bus closed: the owner thread was interrupted")
-                self.close()
-                raise
-            finally:
-                request.done.set()
-                serviced += 1
+                request = self._take()
+            if request is None:
+                break
+            self._service(request)
+            serviced += 1
         return serviced
 
+    def parked(self) -> str:
+        """What the principal is doing, as :meth:`await_parked` reports it, without blocking."""
+        with self._lock:
+            return self._parked_state()
+
+    def await_parked(self, timeout: float) -> str:
+        """Block until the principal is parked. The lockstep owner's half. Owner thread.
+
+        Requests from any *other* thread are serviced while this waits -- they
+        were posted by a parked thread, and servicing one advances nothing, so a
+        helper such as an observation poller is never starved by a graph that is
+        thinking. The principal's own request is left queued for the caller,
+        which decides what it costs in steps (:meth:`service_principal`).
+
+        Args:
+            timeout: Wall-clock seconds to wait for the principal to park.
+
+        Returns:
+            ``"request"`` -- the principal has a request queued; ``"wait"`` -- it
+            is blocked in :meth:`wait_for_step` on a step not yet published;
+            ``"departed"`` -- it has finished (:meth:`depart`); ``"closed"`` --
+            the bus closed; ``""`` -- it is still running host code at the
+            deadline, which is the caller's watchdog to act on.
+        """
+        self.owner_thread = threading.get_ident()
+        self._lockstep = True
+        deadline = time.monotonic() + max(0.0, float(timeout))
+        while True:
+            with self._changed:
+                state = self._parked_state()
+                if state:
+                    return state
+                # The principal has nothing queued, or the state would say so:
+                # whatever is queued is a helper's.
+                request = self._take()
+                if request is None:
+                    remaining = deadline - time.monotonic()
+                    if remaining <= 0.0:
+                        return ""
+                    self._changed.wait(min(remaining, _AWAIT_CEILING_S))
+                    continue
+            self._service(request)
+
+    def service_principal(self) -> bool:
+        """Service queued requests up to and including the principal's one. Owner thread.
+
+        Exactly one of the principal's, so the steps a lockstep turn costs do not
+        depend on how quickly the graph posts its next request. Anything a
+        helper queued ahead of it is serviced first, in order.
+
+        Returns:
+            Whether a principal request was serviced.
+        """
+        self.owner_thread = threading.get_ident()
+        while True:
+            with self._lock:
+                request = self._take()
+            if request is None:
+                return False
+            self._service(request)
+            if request.ident == self._principal:
+                return True
+
     def publish(self, snapshot: SimSnapshot) -> None:
-        """Publish the state of the step just taken. Owner thread."""
-        self._snapshot = snapshot
+        """Publish the state of the step just taken. Owner thread.
+
+        Wakes every :meth:`wait_for_step` it satisfies -- and, being set under
+        the lock those waits are judged under, un-parks them in the same instant.
+        """
+        with self._changed:
+            self._snapshot = snapshot
+            self._changed.notify_all()
 
     def close(self) -> None:
         """Stop serving: every queued request, and every later call, raises :class:`BusClosed`.
@@ -283,7 +434,7 @@ class SimBus:
         Owner thread. Idempotent. A request a pump is already running finishes
         and returns normally.
         """
-        with self._lock:
+        with self._changed:
             self._closed.set()
             while True:
                 try:
@@ -292,7 +443,64 @@ class SimBus:
                     break
                 request.error = BusClosed("the simulation bus closed: the episode ended")
                 request.done.set()
+            self._queued.clear()
+            self._changed.notify_all()
 
     @property
     def closed(self) -> bool:
         return self._closed.is_set()
+
+    # ---------------------------------------------------------------- helpers
+    def _take(self) -> _Request | None:
+        """The next live queued request, now ``running``. Lock held.
+
+        Taking it is what un-parks its poster -- before it runs, so before its
+        worker can wake ("unpark before waking").
+        """
+        while True:
+            try:
+                request = self._queue.get_nowait()
+            except queue.Empty:
+                return None
+            if request.state == "cancelled":
+                continue
+            request.state = "running"
+            self._unqueue(request.ident)
+            return request
+
+    def _service(self, request: _Request) -> None:
+        """Run a taken request on this, the owner, thread, and wake its worker."""
+        try:
+            request.result = request.fn(*request.args, **request.kwargs)
+        except Exception as exc:
+            request.error = exc
+        except BaseException:
+            request.error = BusClosed("the simulation bus closed: the owner thread was interrupted")
+            self.close()
+            raise
+        finally:
+            request.done.set()
+
+    def _unqueue(self, ident: int) -> None:
+        """One fewer request queued by ``ident``. Lock held."""
+        left = self._queued.get(ident, 0) - 1
+        if left > 0:
+            self._queued[ident] = left
+        else:
+            self._queued.pop(ident, None)
+
+    def _parked_state(self) -> str:
+        """The principal's state as :meth:`await_parked` reports it. Lock held."""
+        if self._closed.is_set():
+            return "closed"
+        if self._departed:
+            return "departed"
+        who = self._principal
+        if who is None:
+            return ""
+        if self._queued.get(who, 0) > 0:
+            return "request"
+        after = self._waiting.get(who)
+        if after is not None and self._snapshot.step <= after:
+            return "wait"
+        return ""

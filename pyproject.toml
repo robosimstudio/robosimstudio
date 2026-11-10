@@ -195,8 +195,8 @@ include = [
 [tool.uv.sources]
 ovrtx = { index = "nvidia" }
 # The graph runtime at the revision every graph here was measured against.
-graph-as-policy = { git = "https://github.com/KeplerC/graph-as-policy.git", rev = "09e45f8de27bc1a29629382ed7c2b9b4b384b3d6" }
-graph-as-policy-core = { git = "https://github.com/KeplerC/graph-as-policy.git", rev = "09e45f8de27bc1a29629382ed7c2b9b4b384b3d6", subdirectory = "gap-core" }
+graph-as-policy = { git = "https://github.com/KeplerC/graph-as-policy.git", rev = "06dd6193e13eab816123febef1369deda0849d91" }
+graph-as-policy-core = { git = "https://github.com/KeplerC/graph-as-policy.git", rev = "06dd6193e13eab816123febef1369deda0849d91", subdirectory = "gap-core" }
 nvidia-curobo = { git = "https://github.com/NVlabs/curobo.git", tag = "v0.8.0" }
 
 [[tool.uv.index]]

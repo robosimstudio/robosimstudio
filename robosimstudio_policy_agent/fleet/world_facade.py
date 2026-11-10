@@ -157,6 +157,33 @@ class WorldFacade:
             handle.wait(self.LOST_WAKEUP_S)
         return handle
 
+    def _submit_group(self, intents: list) -> list[IntentHandle]:
+        """Hand several motions to the fleet as one, and block until every one is done.
+
+        :meth:`_submit` for a bimanual motion. The members go into the table
+        under one lock (:meth:`IntentTable.submit_group`), so the fleet installs
+        them in the same drain and they start on the same step, and the thread
+        waits on all of them inside one park -- the table unparks it only on the
+        group's last completion. Every member is waited on even when an earlier
+        one ended in an error, because leaving the park with a member still
+        running would let that member's completion later unpark this thread out
+        of whatever wait it is in by then. The first error is re-raised after.
+        """
+        if self._closed:
+            raise BusTimeout(f"world {self.world}: the episode ended")
+        first_error: BaseException | None = None
+        with park_if(getattr(self.bus, "parks", None), self.world):
+            handles = self.intents.submit_group(self.world, intents)
+            for handle in handles:
+                try:
+                    handle.wait(self.LOST_WAKEUP_S)
+                except Exception as exc:  # re-raised below, once the group is done
+                    if first_error is None:
+                        first_error = exc
+        if first_error is not None:
+            raise first_error
+        return handles
+
     # ------------------------------------------------------------ observation
     def get_observation(self) -> dict[str, Any]:
         """The runtime's observation dict: this world's state, and a fresh look.
@@ -277,6 +304,96 @@ class WorldFacade:
             wait=True,
         )
         return bool(handle.result)
+
+    PATH_CHUNK = 512
+    """Waypoints per submitted path when the arm's driver does not say.
+
+    :meth:`~robosimstudio.solvers.control.batched.SegmentDriver.plan_path`
+    *resamples* a longer path onto its ``max_path`` (512), which keeps the shape
+    and shortens the walk: a 529-waypoint carry -- the longest the cable weave
+    streams on ``port_easy`` -- would cross 34 control steps faster than serially.
+    So :meth:`stream_dual_trajectory` cuts a long path into consecutive pieces
+    no longer than the driver holds instead."""
+
+    def _path_chunk(self, arms) -> int:
+        """The longest path every one of ``arms``' drivers takes without resampling."""
+        sizes = [
+            int(getattr(driver, "max_path", self.PATH_CHUNK))
+            for name in (self.arm_names[a] for a in arms)
+            if (driver := getattr(self.fleet, "segments", {}).get(name)) is not None
+        ]
+        return max(2, min(sizes) if sizes else self.PATH_CHUNK)
+
+    def stream_dual_trajectory(
+        self,
+        tracks: dict[int, list[list[float]]],
+        *,
+        settle_tolerance: float = 0.005,
+        settle_max_steps: int = 60,
+    ) -> None:
+        """Advance several arms along their own dense trajectories TOGETHER.
+
+        The single-world facade's
+        :meth:`~robosimstudio_policy_agent.facade.GapEnvFacade.stream_dual_trajectory`,
+        as fleet motions. Same contract, kept point for point:
+
+        * ``tracks`` maps a runtime ``arm_id`` to its waypoints; an empty track
+          is dropped, and two ids naming one arm (the runtime clamps) keep the
+          later one, as the serial frame's later write wins.
+        * **The arms advance in lockstep**: waypoint ``i`` of every track on the
+          same control step. Serially that is one action vector per waypoint;
+          here one :class:`JointTrajectory` per arm, submitted as one group
+          (:meth:`_submit_group`) so they are installed in the same drain and
+          start on the same step, at the serial cadence of two control steps a
+          waypoint (see :class:`JointTrajectory`).
+        * **A short track holds its last waypoint** while the longest finishes:
+          it is padded with that waypoint, which is also what keeps every arm's
+          walk the same length.
+        * **Then each arm settles on its own end point**, to
+          ``settle_tolerance`` within ``settle_max_steps`` -- the trajectories'
+          own settle phase, run for both arms at once rather than one after the
+          other. Either way both hands hold their end points throughout; only
+          the step this call returns on can differ. ``settle_max_steps=0`` waits
+          for nothing past the last waypoint, which is what the cable carry asks
+          for (holding a dragging hand still mid-carry is what it must not do).
+
+        Returns nothing, like the serial form. Blocks until every arm is done.
+        """
+        paths: dict[int, np.ndarray] = {}
+        for arm_id, waypoints in dict(tracks).items():
+            path = np.asarray(waypoints, dtype=np.float32)
+            if path.size == 0:
+                continue
+            paths[self._arm(int(arm_id))] = path.reshape(len(path), -1)
+        if not paths:
+            return
+        length = max(len(path) for path in paths.values())
+        for arm, path in paths.items():
+            if len(path) < length:
+                paths[arm] = np.concatenate([path, np.repeat(path[-1:], length - len(path), axis=0)])
+        # Consecutive pieces the drivers hold whole, each starting on the
+        # waypoint the last one ended on (held for one step at the seam); see
+        # :attr:`PATH_CHUNK`. One piece for anything that fits.
+        chunk = self._path_chunk(paths)
+        start = 0
+        while True:
+            end = min(length, start + chunk)
+            last = end >= length
+            self._submit_group(
+                [
+                    JointTrajectory(
+                        arm=arm,
+                        waypoints=path[start:end],
+                        steps_per_waypoint=2,  # the serial cadence -- see JointTrajectory
+                        settle_tolerance=float(settle_tolerance),
+                        settle_max_steps=int(settle_max_steps) if last else 0,
+                    )
+                    for arm, path in paths.items()
+                ]
+            )
+            if last:
+                return
+            start = end - 1
 
     def apply_joint_action(self, joints: np.ndarray, arm_id: int = 0) -> None:
         """Command one arm's joint targets without waiting.
