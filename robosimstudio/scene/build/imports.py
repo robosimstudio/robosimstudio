@@ -1062,13 +1062,21 @@ _ASSET_DIRS = ("meshdir", "texturedir")
 
 
 def _pin_source_paths(root: ET.Element, base: Path) -> None:
-    """Make every path MuJoCo would resolve against ``base`` absolute.
+    """Make every path a loader would resolve against ``base`` absolute.
 
-    MuJoCo reads ``assetdir``, ``meshdir``, ``texturedir`` and the ``file`` of
-    an ``<include>`` or ``<model>`` relative to the model file's directory, and
-    a missing ``meshdir``/``texturedir`` falls back to ``assetdir`` and then to
-    that directory. A copy written elsewhere keeps resolving to the same
-    assets only if those paths are spelled out.
+    MuJoCo and Newton read ``assetdir``, ``meshdir``, ``texturedir`` and the
+    ``file`` of an ``<include>`` or ``<model>`` relative to the model file's
+    directory. A copy written elsewhere keeps resolving to the same assets only
+    if those paths are spelled out, and where the file names no directory at
+    all, the copy names the one the loader would have used beside the source.
+
+    **Those defaults go on the first compiler only.** Newton's importer reads
+    that one alone, and MuJoCo merges every ``<compiler>`` with the later one
+    winning, so a default written on a later compiler would override a
+    directory an earlier one names. **A missing ``texturedir`` is the
+    ``meshdir``**, as Newton's importer reads it; it builds every RSS model.
+    MuJoCo would read the model's directory: the two loaders already differ on
+    the source there, and the copy keeps Newton's reading.
     """
 
     def absolute(value: str) -> str:
@@ -1079,13 +1087,15 @@ def _pin_source_paths(root: ET.Element, base: Path) -> None:
         compilers = [ET.Element("compiler")]
         root.insert(0, compilers[0])
     for compiler in compilers:
-        if assetdir := compiler.get("assetdir"):
-            compiler.set("assetdir", absolute(assetdir))
-        for attr in _ASSET_DIRS:
+        for attr in ("assetdir", *_ASSET_DIRS):
             if value := compiler.get(attr):
                 compiler.set(attr, absolute(value))
-            elif not compiler.get("assetdir"):
-                compiler.set(attr, str(base))
+    first = compilers[0]
+    if not first.get("assetdir"):
+        if not first.get("meshdir"):
+            first.set("meshdir", str(base))
+        if not first.get("texturedir"):
+            first.set("texturedir", first.get("meshdir"))
     for element in (*root.iter("include"), *root.iter("model")):
         if file := element.get("file"):
             element.set("file", absolute(file))
