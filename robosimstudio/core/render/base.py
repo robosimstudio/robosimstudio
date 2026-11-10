@@ -115,8 +115,9 @@ class RendererBase:
 
     warms_up: bool | None = None
     """Whether a new renderer's first frame only builds its stage and is drawn again before it is kept. ``None``
-    for a backend that does not say: it is warmed up (:func:`warms_up`), as every backend but the collider tracer
-    was before backends said; each shipped one says."""
+    for a backend that does not say: it is warmed up (:func:`warms_up`), which costs one thrown-away frame and is
+    never a wrong first picture. Each shipped backend says (only the path tracer says yes); a backend of a twin's
+    own that draws its first frame right says ``False``."""
 
     def aim(self, cameras: Sequence[CameraSpec], channels: Sequence[str] | None = None) -> None:
         """Render these cameras from the next frame on.
@@ -187,6 +188,7 @@ def warms_up(renderer: Any) -> bool:
 
     Its own :attr:`RendererBase.warms_up` where it says (the path tracer's first frame only builds its stage; the
     collider tracer, MuJoCo's rasteriser and Blender need nothing), and yes where it does not: a renderer a
-    scene names by dotted path is warmed up, as every backend but the collider tracer was before backends said.
+    scene names by dotted path that does not say is warmed up, since a thrown-away frame costs time and a first
+    frame that only built a stage is a wrong picture.
     """
     return getattr(renderer, "warms_up", None) is not False
