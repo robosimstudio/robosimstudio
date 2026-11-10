@@ -128,6 +128,7 @@ class _Spec:
     look_at: tuple = ()
     up: tuple = ()
     channels: tuple = ()
+    background: str = ""
 
 
 class _Renderer:

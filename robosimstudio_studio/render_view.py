@@ -62,9 +62,10 @@ from typing import Any
 
 import numpy as np
 
+from robosimstudio.core.render.base import warms_up
 from robosimstudio.core.render.live import RenderBudget
 from robosimstudio.machine import platform_of
-from robosimstudio.solvers.render import ENV, FALLBACK, PUBLIC
+from robosimstudio.solvers.render import ENV, FALLBACK, PUBLIC, supported_channels
 
 from .panels import Panel
 
@@ -147,6 +148,11 @@ class PanelRenderView(Panel):
         """Every live renderer, by ``(width, height, model, locked)``: one per
         viewport shape, so a second browser of another aspect gets a frame of
         its own shape rather than the first browser's, stretched."""
+        self._spare: tuple[Any, Any] | None = None
+        """``(model, renderer)``: a retargeting renderer no shape holds any more, kept for the next shape of the same
+        model rather than closed, since a Blender takes seconds to start and is aimed per push anyway."""
+        self._plate_note = ""
+        """Why the locked camera's plate did not draw on the last frame, or ``""``: shown in the readout."""
         self._hidden: list[Any] = []
         self._frames = 0
         self._rate = 0.0
@@ -251,7 +257,13 @@ class PanelRenderView(Panel):
         # the old one is still alive doubles the peak, and on a contended card
         # that is the difference between a resize and a fallback to tiled.
         for key in [k for k in self._renderers if k not in used]:
-            self._close(self._renderers.pop(key))
+            gone = self._renderers.pop(key)
+            if any(r is gone for r in self._renderers.values()):
+                pass  # a retargeting renderer another shape still holds
+            elif getattr(gone, "retargets", False) and key[2] is self.env.model:
+                self._keep(gone)  # the next shape takes it rather than starting another
+            else:
+                self._close(gone)
             if self._built == key:
                 self._renderer = self._built = None
         for client, key in zip(clients, used, strict=True):
@@ -295,7 +307,7 @@ class PanelRenderView(Panel):
                 # renderer -- about 1.8 s, which is why this is a slider you
                 # let go of rather than one you sweep.
                 self.scale = scale
-                self._release()
+                self._retire()
         if self._passes_request is not None:
             self.passes, self._passes_request = self._passes_request, None
         if self._clean_request is not None:
@@ -313,7 +325,7 @@ class PanelRenderView(Panel):
                 # A task camera has its own resolution and film back, so the
                 # renderer it needs is not the one the viewport was using.
                 self.locked = locked
-                self._release()
+                self._retire()
 
     def _interacting(self) -> bool:
         """Whether somebody is moving the camera or dragging something.
@@ -391,20 +403,33 @@ class PanelRenderView(Panel):
         return (width, height, self.env.model, self.locked)
 
     def _ensure(self, client, key: tuple) -> bool:
-        """Build the renderer of this key, if there is not one yet. False when it would not build."""
+        """Build the renderer of this key, if there is not one yet. False when it would not build.
+
+        A backend that reads its cameras every frame (``retargets``: Blender, a process with the scene in it)
+        serves every shape and every client from one renderer, aimed per push, rather than one per shape.
+        """
         if key in self._renderers:
+            return True
+        shared = next(
+            (r for k, r in self._renderers.items() if k[2] is key[2] and getattr(r, "retargets", False)), None
+        )
+        if shared is None and self._spare is not None and self._spare[0] is key[2]:
+            shared, self._spare = self._spare[1], None
+        if shared is not None:
+            self._renderers[key] = shared
             return True
         width, height = key[0], key[1]
         spec = self._spec(client, width, height)
         if spec is None:
             return False
         try:
-            # rgb alone: the depth channel costs 13 ms a frame to encode and
-            # composites nothing. accumulate is set per frame in `drain`.
+            # rgb, and depth only for a camera over a clean plate (_channels): depth costs 13 ms a frame to
+            # encode, and only a plate composites with it. accumulate is set per frame in `drain`.
             extra = {"accumulate": self.passes[0]} if self.backend == PUBLIC else {}
-            renderer = self.env.make_renderer(self.backend, cameras=[spec], channels=["rgb"], **extra)
+            renderer = self.env.make_renderer(self.backend, cameras=[spec], channels=self._channels(spec), **extra)
             self._renderers[key] = renderer
-            renderer.render(self.env.state)
+            if warms_up(renderer):  # a renderer whose first frame only builds its stage
+                renderer.render(self.env.state)
         except Exception as exc:  # no GPU, a contended card, a GPU the rule misjudged
             self._failed(f"{self.backend} would not build -- {type(exc).__name__}: {exc}")
             return False
@@ -453,7 +478,16 @@ class PanelRenderView(Panel):
             look_at=tuple(float(v) for v in look),
             up=tuple(float(v) for v in up),
             channels=("rgb",),
+            background="",  # the free view is no camera's, so a plate the borrowed spec carries does not apply
         )
+
+    def _channels(self, spec) -> list[str]:
+        """What to ask of the renderer for this camera: rgb, and the depth that says which pixels are what moves
+        when the camera has a clean plate and the backend draws depth -- :meth:`Sim.render`'s rule for a still.
+        Without depth the plate is drawn from the collider tracer's segmentation alone."""
+        if spec.background and "depth" in supported_channels(self.backend):
+            return ["rgb", "depth"]
+        return ["rgb"]
 
     def _push(self, client, key: tuple) -> bool:
         """Render this client's camera with the renderer of its shape and make the frame its viewport."""
@@ -461,8 +495,11 @@ class PanelRenderView(Panel):
         spec = self._spec(client, key[0], key[1])
         if spec is None:
             return False
-        renderer.cameras[0] = spec
         try:
+            if getattr(renderer, "retargets", False):  # shared across shapes: aimed, with this camera's channels
+                renderer.aim([spec], channels=self._channels(spec))
+            else:
+                renderer.cameras[0] = spec
             frames = renderer.render(self.env.state)
         except Exception as exc:
             self._failed(f"{self.backend} stopped rendering -- {type(exc).__name__}: {exc}")
@@ -470,6 +507,19 @@ class PanelRenderView(Panel):
         name = "viewport" if self._locked_camera() is None else self.locked
         rgb = np.ascontiguousarray(frames[name]["rgb"][..., :3]).astype(np.uint8)
         if self._locked_camera() is not None:
+            if spec.background:
+                # a camera with a clean plate shows the clip's own pixels behind what moves, as its stills do. The
+                # pass is taken here rather than inside over_plate, so a plate the sim will not draw (no file, a
+                # camera on a body, a failed pass: each said once in the page's log) is said in the readout too
+                try:
+                    passed = self.env.plate_pass(spec)
+                    if passed:
+                        rgb = self.env.over_plate(spec, rgb, depth=frames[name].get("depth"), plate_pass=passed)
+                        self._plate_note = ""
+                    else:
+                        self._plate_note = "the page's log says why"
+                except Exception as exc:
+                    self._plate_note = f"{type(exc).__name__}: {exc}"
             rgb = self._letterbox(rgb, client)
         client.scene.set_background_image(rgb, format="jpeg", jpeg_quality=80)
         return True
@@ -584,14 +634,16 @@ class PanelRenderView(Panel):
         quality = f" {passes}p" if self.backend == PUBLIC else ""
         where = f" on {self.locked}" if self.locked else ""
         clean = ", clean" if self.clean else ""
+        plate = f" -- its plate would not draw ({self._plate_note})" if self.locked and self._plate_note else ""
         self._readout.value = (
             f"on -- {self.backend} {self._built[0]}x{self._built[1]}{quality}{where}{clean} -- "
-            f"{self._rate:.1f} fps, {self._cost * 1000:.0f} ms/frame"
+            f"{self._rate:.1f} fps, {self._cost * 1000:.0f} ms/frame{plate}"
         )
 
     def on_reset(self, obs: dict[str, Any], info: dict[str, Any]) -> None:
         """A reset may have rebuilt the model, which the renderer's stage is of."""
-        if any(key[2] is not self.env.model for key in self._renderers):
+        stale_spare = self._spare is not None and self._spare[0] is not self.env.model
+        if stale_spare or any(key[2] is not self.env.model for key in self._renderers):
             self._release()
 
     def _release(self) -> None:
@@ -602,14 +654,40 @@ class PanelRenderView(Panel):
         result outputs when a renderer goes without being closed, and a page
         that swaps tasks builds one per swap.
         """
-        for renderer in self._renderers.values():
+        kept = [self._spare[1]] if self._spare is not None else []
+        for renderer in {id(r): r for r in (*self._renderers.values(), *kept)}.values():  # a shared one once
             self._close(renderer)
         self._renderers.clear()
+        self._spare = None
+        self._plate_note = ""
         self._renderer = None
         self._built = None
         self._frames = 0
         self._window = (time.time(), 0)
         self.budget.reset()
+
+    def _retire(self) -> None:
+        """:meth:`_release` for a new scale or lock: the same, but a retargeting renderer (Blender) is kept for the
+        next shape. It takes its camera and size per push (:meth:`_push` aims it), so a new one is not a new
+        process -- seconds to start, with the scene sent again."""
+        model = self.env.model
+        keep = next(
+            (r for k, r in self._renderers.items() if k[2] is model and getattr(r, "retargets", False)),
+            self._spare[1] if self._spare is not None and self._spare[0] is model else None,
+        )
+        if keep is not None:
+            self._renderers = {k: r for k, r in self._renderers.items() if r is not keep}
+            if self._spare is not None and self._spare[1] is keep:
+                self._spare = None
+        self._release()
+        if keep is not None:
+            self._spare = (model, keep)
+
+    def _keep(self, renderer) -> None:
+        """Hold a retargeting renderer no shape uses for the next one, giving back any other held before it."""
+        if self._spare is not None and self._spare[1] is not renderer:
+            self._close(self._spare[1])
+        self._spare = (self.env.model, renderer)
 
     @staticmethod
     def _close(renderer) -> None:

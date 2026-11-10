@@ -13,6 +13,8 @@ Static: no model, no scene, no GPU.
 
 from __future__ import annotations
 
+import os
+import shutil
 import tempfile
 import unittest
 import xml.etree.ElementTree as ET
@@ -22,6 +24,19 @@ from robosimstudio.scene.build.imports import strip_free_bodies
 
 TIER = "fast"
 """No GPU. Gates every commit."""
+
+
+def _png_2x2() -> bytes:
+    """A 2x2 red PNG, written by hand so the test needs no image library."""
+    import struct
+    import zlib
+
+    def chunk(kind: bytes, data: bytes) -> bytes:
+        return struct.pack(">I", len(data)) + kind + data + struct.pack(">I", zlib.crc32(kind + data) & 0xFFFFFFFF)
+
+    rows = b"".join(b"\x00" + b"\xff\x00\x00" * 2 for _ in range(2))
+    header = struct.pack(">IIBBBBB", 2, 2, 8, 2, 0, 0, 0)
+    return b"\x89PNG\r\n\x1a\n" + chunk(b"IHDR", header) + chunk(b"IDAT", zlib.compress(rows)) + chunk(b"IEND", b"")
 
 
 def _scene(body_xml: str) -> Path:
@@ -62,7 +77,10 @@ class TestStripFreeBodies(unittest.TestCase):
         loads the same mesh from it."""
         import mujoco
 
+        if os.geteuid() == 0:
+            self.skipTest("root writes through a read-only directory, so it cannot be told from a writable one")
         root = Path(tempfile.mkdtemp())
+        self.addCleanup(shutil.rmtree, root, True)
         (root / "meshes").mkdir()
         (root / "meshes" / "tet.obj").write_text(
             "v 0 0 0\nv 1 0 0\nv 0 1 0\nv 0 0 1\nf 1 3 2\nf 1 2 4\nf 1 4 3\nf 2 3 4\n"
@@ -80,10 +98,62 @@ class TestStripFreeBodies(unittest.TestCase):
         finally:
             for path in (root, root / "meshes"):
                 path.chmod(0o755)
+        self.addCleanup(stripped.unlink, True)
         self.assertNotEqual(stripped.parent, root)
         model = mujoco.MjModel.from_xml_path(str(stripped))
         self.assertEqual(model.nmesh, 1)
         self.assertEqual(model.nbody, 2)  # world and the fixed body; the free one is gone
+
+    def _stripped(self, compilers: str, texture: str = "") -> tuple[Path, ET.Element]:
+        """A scene with a mesh in ``meshes/`` (and ``wood.png``, a 2x2 texture, beside the
+        model) under these compiler elements, stripped: ``(source dir, copy root)``."""
+        root = Path(tempfile.mkdtemp())
+        self.addCleanup(shutil.rmtree, root, True)
+        (root / "meshes").mkdir()
+        (root / "meshes" / "tet.obj").write_text(
+            "v 0 0 0\nv 1 0 0\nv 0 1 0\nv 0 0 1\nf 1 3 2\nf 1 2 4\nf 1 4 3\nf 2 3 4\n"
+        )
+        (root / "wood.png").write_bytes(_png_2x2())
+        src = root / "scene.xml"
+        src.write_text(
+            f'<mujoco>{compilers}<asset><mesh name="tet" file="tet.obj"/>{texture}</asset>'
+            '<worldbody><body name="fixed"><geom type="mesh" mesh="tet"/></body></worldbody></mujoco>'
+        )
+        stripped = Path(strip_free_bodies(src))
+        self.addCleanup(stripped.unlink, True)
+        return root, ET.parse(stripped).getroot()
+
+    def test_a_texture_beside_the_model_still_loads_from_the_copy(self):
+        """MJCF reads a missing ``texturedir`` as the model's own directory, not the
+        ``meshdir``: the copy names the source's directory, and MuJoCo loads the
+        texture from it as it does from the source."""
+        import mujoco
+
+        root, copy = self._stripped(
+            '<compiler meshdir="meshes"/>', texture='<texture name="wood" type="2d" file="wood.png"/>'
+        )
+        compiler = copy.find("compiler")
+        self.assertEqual(compiler.get("meshdir"), str(root / "meshes"))
+        self.assertEqual(compiler.get("texturedir"), str(root))
+        with tempfile.NamedTemporaryFile("w", suffix=".xml", delete=False) as out:
+            out.write(ET.tostring(copy, encoding="unicode"))
+        self.addCleanup(Path(out.name).unlink, True)
+        self.assertEqual(mujoco.MjModel.from_xml_path(out.name).ntex, 1)
+
+    def test_a_later_compiler_does_not_override_the_meshdir_an_earlier_one_names(self):
+        """MuJoCo merges compilers with the later one winning, so the copy's
+        defaults go on the first compiler alone, and MuJoCo still finds the mesh."""
+        import mujoco
+
+        root, copy = self._stripped('<compiler meshdir="meshes"/><compiler angle="radian"/>')
+        first, second = copy.findall("compiler")
+        self.assertEqual(first.get("meshdir"), str(root / "meshes"))
+        self.assertIsNone(second.get("meshdir"))
+        self.assertIsNone(second.get("texturedir"))
+        with tempfile.NamedTemporaryFile("w", suffix=".xml", delete=False) as out:
+            out.write(ET.tostring(copy, encoding="unicode"))
+        self.addCleanup(Path(out.name).unlink, True)
+        self.assertEqual(mujoco.MjModel.from_xml_path(out.name).nmesh, 1)
 
 
 if __name__ == "__main__":
