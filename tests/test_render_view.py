@@ -360,6 +360,38 @@ class TestOneRendererForEveryShape(unittest.TestCase):
         panel._release()
         self.assertEqual(shared.closed, 1)
 
+    def test_a_lock_or_a_scale_change_keeps_the_renderer_rather_than_starting_another(self) -> None:
+        """Blender takes its camera and size per push: a new lock or scale is aimed, not a new process."""
+        built: list[_AimedRenderer] = []
+
+        def make_renderer(backend, cameras, channels, **_):
+            built.append(_AimedRenderer(cameras))
+            return built[-1]
+
+        env = types.SimpleNamespace(
+            model=object(),
+            cameras=(_PlateSpec(background=""),),
+            state=object(),
+            make_renderer=make_renderer,
+            handles=None,
+        )
+        session = _StubSession(env, _StubGui())
+        clients = {1: _client(1, 1600, 900)}
+        session.server.get_clients = lambda: clients
+        with unittest.mock.patch("robosimstudio_studio.render_view._choose", return_value=("tiled", "x")):
+            panel = PanelRenderView(session, world_model=True, scale=0.5)
+        panel.drain()
+        for request in ({"_locked_request": "overhead"}, {"_scale_request": 0.25}, {"_locked_request": ""}):
+            for name, value in request.items():
+                setattr(panel, name, value)
+            panel.budget.reset()
+            panel.drain()
+        self.assertEqual(1, len(built), "a lock or scale change started another renderer")
+        self.assertEqual((225, 400), clients[1].scene.background.shape[:2], "drawn at the new scale")
+        self.assertEqual(0, built[0].closed)
+        panel.close()
+        self.assertEqual(1, built[0].closed)
+
     def test_one_browser_resized_keeps_its_renderer_rather_than_starting_another(self) -> None:
         """With one browser, a resize leaves no other shape holding the renderer: it is kept for the new shape."""
         built: list[_AimedRenderer] = []
@@ -560,18 +592,23 @@ class TestALockedCameraShowsItsPlate(unittest.TestCase):
     """A viewport locked to a camera with a clean plate shows the clip's pixels behind what moves, as that camera's
     stills do; the free view is no camera's, so it draws no plate."""
 
-    def _drained(self, locked: str, *, plate=None, renderer=_DepthRenderer, frames: int = 1):
+    def _drained(self, locked: str, *, passes=None, renderer=_DepthRenderer, frames: int = 1):
+        """Drain ``frames`` frames; ``passes(n)`` is the plate pass of the n-th frame (a dict; ``{}`` for none)."""
         asked: list[list[str]] = []
         plated: list[tuple] = []
+        taken: list[int] = []
 
         def make_renderer(backend, cameras, channels, **_):
             asked.append(list(channels))
             return renderer(cameras)
 
-        def over_plate(spec, rgb, depth=None):
+        def plate_pass(spec):
+            taken.append(len(taken) + 1)
+            return {"seg": "pass"} if passes is None else passes(len(taken))
+
+        def over_plate(spec, rgb, depth=None, plate_pass=None):
+            self.assertTrue(plate_pass, "drawn without the pass the panel took")
             plated.append((spec.name, depth is not None))
-            if plate is not None:
-                plate(len(plated))
             return np.full_like(rgb, 7)
 
         env = types.SimpleNamespace(
@@ -579,6 +616,7 @@ class TestALockedCameraShowsItsPlate(unittest.TestCase):
             cameras=(_PlateSpec(),),
             state=object(),
             make_renderer=make_renderer,
+            plate_pass=plate_pass,
             over_plate=over_plate,
             handles=None,
         )
@@ -622,15 +660,21 @@ class TestALockedCameraShowsItsPlate(unittest.TestCase):
         self.assertEqual([("overhead", False)], got.plated)
         self.assertTrue((got.frame == 7).all())
 
-    def test_a_plate_that_will_not_draw_says_so_until_it_draws(self) -> None:
-        def plate(call: int) -> None:
-            if call == 1:
-                raise RuntimeError("no clip")
-
-        got = self._drained("overhead", plate=plate, frames=2)
-        self.assertIn("its plate would not draw (RuntimeError: no clip)", got.readouts[0])
+    def test_a_plate_the_sim_will_not_draw_says_so_until_it_draws(self) -> None:
+        """No file, a camera on a body, a failed pass: the sim says which once in the log and passes nothing."""
+        got = self._drained("overhead", passes=lambda n: {} if n == 1 else {"seg": "pass"}, frames=2)
+        self.assertIn("its plate would not draw (the page's log says why)", got.readouts[0])
+        self.assertTrue((got.frame == 7).all(), "the second frame drew its plate")
         self.assertNotIn("plate", got.readouts[1], "the reason outlived the plate drawing again")
         self.assertEqual("", got.panel._note, "and it is not left behind as the reason the viewport is off")
+
+    def test_a_plate_pass_that_raises_is_said_with_its_error(self) -> None:
+        def passes(n: int) -> dict:
+            raise RuntimeError("no clip")
+
+        got = self._drained("overhead", passes=passes)
+        self.assertIn("its plate would not draw (RuntimeError: no clip)", got.readouts[0])
+        self.assertTrue((got.frame == 0).all(), "the bare frame is shown")
 
     def test_a_renderer_that_will_not_aim_goes_the_failure_path_rather_than_out_of_drain(self) -> None:
         class Unaimable(_AimedRenderer):
