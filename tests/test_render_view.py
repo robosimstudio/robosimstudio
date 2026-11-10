@@ -22,7 +22,7 @@ import unittest.mock
 
 import numpy as np
 
-from robosimstudio_studio.render_view import PanelRenderView
+from robosimstudio_studio.render_view import RASTER, PanelRenderView
 from tests.fixtures.viser_stubs import _StubGui, _StubSession
 
 TIER = "fast"
@@ -360,6 +360,32 @@ class TestOneRendererForEveryShape(unittest.TestCase):
         panel._release()
         self.assertEqual(shared.closed, 1)
 
+    def test_one_browser_resized_keeps_its_renderer_rather_than_starting_another(self) -> None:
+        """With one browser, a resize leaves no other shape holding the renderer: it is kept for the new shape."""
+        built: list[_AimedRenderer] = []
+
+        def make_renderer(backend, cameras, channels, **_):
+            built.append(_AimedRenderer(cameras))
+            return built[-1]
+
+        env = types.SimpleNamespace(
+            model=object(), cameras=(_Spec(),), state=object(), make_renderer=make_renderer, handles=None
+        )
+        session = _StubSession(env, _StubGui())
+        clients = {1: _client(1, 1600, 900)}
+        session.server.get_clients = lambda: clients
+        with unittest.mock.patch("robosimstudio_studio.render_view._choose", return_value=("tiled", "x")):
+            panel = PanelRenderView(session, world_model=True, scale=0.5)
+        panel.drain()
+        clients[1].camera.image_width = 1200
+        panel.budget.reset()
+        panel.drain()
+        self.assertEqual(1, len(built), "the resize started another renderer")
+        self.assertEqual((450, 600), clients[1].scene.background.shape[:2])
+        self.assertEqual(0, built[0].closed)
+        panel.close()
+        self.assertEqual(1, built[0].closed, "the kept renderer is given back with the panel")
+
 
 class TestTheQualityDial(unittest.TestCase):
     def test_the_passes_pair_is_taken_as_given(self) -> None:
@@ -403,6 +429,7 @@ class _Spec:
     look_at: tuple = ()
     up: tuple = ()
     channels: tuple = ()
+    background: str = ""
 
 
 class _Renderer:
@@ -417,6 +444,22 @@ class _Renderer:
 
     def close(self) -> None:
         self.closed = True
+
+
+class _AimedRenderer(_Renderer):
+    """A retargeting renderer that draws whatever camera it was last aimed at."""
+
+    retargets = True
+
+    def __init__(self, cameras) -> None:
+        super().__init__(cameras)
+        self.closed = 0
+
+    def aim(self, cameras, channels=None) -> None:
+        self.cameras = list(cameras)
+
+    def close(self) -> None:
+        self.closed += 1
 
 
 def _client(cid: int, width: int, height: int):
@@ -517,16 +560,18 @@ class TestALockedCameraShowsItsPlate(unittest.TestCase):
     """A viewport locked to a camera with a clean plate shows the clip's pixels behind what moves, as that camera's
     stills do; the free view is no camera's, so it draws no plate."""
 
-    def _drained(self, locked: str):
+    def _drained(self, locked: str, *, plate=None, renderer=_DepthRenderer, frames: int = 1):
         asked: list[list[str]] = []
         plated: list[tuple] = []
 
         def make_renderer(backend, cameras, channels, **_):
             asked.append(list(channels))
-            return _DepthRenderer(cameras)
+            return renderer(cameras)
 
         def over_plate(spec, rgb, depth=None):
             plated.append((spec.name, depth is not None))
+            if plate is not None:
+                plate(len(plated))
             return np.full_like(rgb, 7)
 
         env = types.SimpleNamespace(
@@ -542,23 +587,59 @@ class TestALockedCameraShowsItsPlate(unittest.TestCase):
         session.server.get_clients = lambda: clients
         with unittest.mock.patch("robosimstudio_studio.render_view._choose", return_value=("tiled", "x")):
             panel = PanelRenderView(session, world_model=True, scale=0.5)
+        panel.build(session.server.gui)
         panel._locked_request = locked
         panel._service_requests()
-        panel.drain()
+        readouts = []
+        for _ in range(frames):
+            panel.budget.reset()
+            panel.drain()
+            panel.refresh()
+            readouts.append(panel._readout.value)
         self.addCleanup(panel.close)
-        return asked, plated, clients[1].scene.background
+        return types.SimpleNamespace(
+            asked=asked, plated=plated, frame=clients[1].scene.background, readouts=readouts, panel=panel
+        )
 
     def test_the_locked_view_is_drawn_over_the_plate_with_the_depth_that_places_it(self) -> None:
-        asked, plated, frame = self._drained("overhead")
-        self.assertEqual([["rgb", "depth"]], asked, "the depth says which pixels are what moves")
-        self.assertEqual([("overhead", True)], plated)
-        self.assertTrue((frame == 7).all(), "the viewport shows the bare render, not the plate")
+        got = self._drained("overhead")
+        self.assertEqual([["rgb", "depth"]], got.asked, "the depth says which pixels are what moves")
+        self.assertEqual([("overhead", True)], got.plated)
+        self.assertTrue((got.frame == 7).all(), "the viewport shows the bare render, not the plate")
 
     def test_the_free_view_draws_no_plate(self) -> None:
-        asked, plated, frame = self._drained("")
-        self.assertEqual([["rgb"]], asked)
-        self.assertEqual([], plated)
-        self.assertTrue((frame == 0).all())
+        got = self._drained("")
+        self.assertEqual([["rgb"]], got.asked)
+        self.assertEqual([], got.plated)
+        self.assertTrue((got.frame == 0).all())
+
+    def test_a_backend_that_draws_no_depth_is_asked_none_and_still_draws_the_plate(self) -> None:
+        """As a still asks: depth only of a backend that has it. Asked of one that does not, the renderer would
+        refuse to build and the whole viewport go with it."""
+        with unittest.mock.patch("robosimstudio_studio.render_view.supported_channels", return_value=("rgb",)):
+            got = self._drained("overhead", renderer=_Renderer)
+        self.assertEqual([["rgb"]], got.asked)
+        self.assertEqual([("overhead", False)], got.plated)
+        self.assertTrue((got.frame == 7).all())
+
+    def test_a_plate_that_will_not_draw_says_so_until_it_draws(self) -> None:
+        def plate(call: int) -> None:
+            if call == 1:
+                raise RuntimeError("no clip")
+
+        got = self._drained("overhead", plate=plate, frames=2)
+        self.assertIn("its plate would not draw (RuntimeError: no clip)", got.readouts[0])
+        self.assertNotIn("plate", got.readouts[1], "the reason outlived the plate drawing again")
+        self.assertEqual("", got.panel._note, "and it is not left behind as the reason the viewport is off")
+
+    def test_a_renderer_that_will_not_aim_goes_the_failure_path_rather_than_out_of_drain(self) -> None:
+        class Unaimable(_AimedRenderer):
+            def aim(self, cameras, channels=None) -> None:
+                raise ValueError("no such channel")
+
+        got = self._drained("overhead", renderer=Unaimable)
+        self.assertEqual(RASTER, got.panel.mode)
+        self.assertIn("stopped rendering -- ValueError: no such channel", got.panel._note)
 
 
 if __name__ == "__main__":
