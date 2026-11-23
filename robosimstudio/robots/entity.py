@@ -1206,6 +1206,8 @@ class EntityEmbodiment(Entity):
                     span=index.gripper_span,
                     width_coords=pair,
                     action_closed_at_high=hand.action_closed_at_high if hand else True,
+                    limiter=(hand.limiter_force, hand.limiter_kp, hand.limiter_kd, hand.limiter_clog_force,
+                             hand.limiter_clog_speed, hand.limiter_release_force, hand.limiter_avg) if hand else (),
                 )
 
         self._home_target = self.home_target_q()

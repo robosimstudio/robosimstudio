@@ -42,6 +42,52 @@ def _write_gripper_targets(
     joint_target_q[gripper_coords[i]] = open_q[i] + (closed_q[i] - open_q[i]) * c
 
 
+@wp.kernel
+def _limit_gripper_targets(
+    gripper_coords: wp.array[wp.int32],
+    gripper_dofs: wp.array[wp.int32],
+    closing: wp.array[wp.float32],
+    joint_q: wp.array[wp.float32],
+    joint_qd: wp.array[wp.float32],
+    force: float,
+    kp: float,
+    kd: float,
+    clog_force: float,
+    clog_speed: float,
+    release_force: float,
+    avg: float,
+    clogged: wp.array[wp.int32],
+    effort: wp.array[wp.float32],
+    last_target: wp.array[wp.float32],
+    joint_target_q: wp.array[wp.float32],
+):
+    """i2rt's GripperForceLimiter: a finger whose servo effort, averaged over a short window, is over
+    ``clog_force`` while it moves slower than ``clog_speed`` is "clogged" and gets the target that asks
+    exactly ``force``. It unclogs when the command opens past where it is, or when the averaged effort
+    falls under ``release_force``.
+
+    The effort is what the driver measures, the servo's own output ``kp (target - q) - kd qd`` on the
+    target it was last given -- not ``kp`` times the new command's error. That error says nothing about
+    load: a 0.8 mm lead is 50 N at kp 6.2e4, so a jaw following a ramped close through free air read as
+    clogged, crept shut at 50 N / kd and was still open when the arm lifted (safety glasses, 17 mm slip).
+    """
+    i = wp.tid()
+    c = gripper_coords[i]
+    d = gripper_dofs[i]
+    q = joint_q[c]
+    e = wp.abs(kp * (last_target[i] - q) - kd * joint_qd[d])
+    effort[i] = effort[i] + avg * (e - effort[i])
+    err = joint_target_q[c] - q
+    if clogged[i] != 0:
+        if err * closing[i] <= 0.0 or effort[i] < release_force:  # the command opens the hand, or no load
+            clogged[i] = 0
+    elif err * closing[i] > 0.0 and effort[i] > clog_force and wp.abs(joint_qd[d]) < clog_speed:
+        clogged[i] = 1
+    if clogged[i] != 0:
+        joint_target_q[c] = q + wp.sign(err) * force / kp
+    last_target[i] = joint_target_q[c]
+
+
 class Gripper:
     """Driven finger joints behind one scalar, 0 open .. 1 closed.
 
@@ -96,6 +142,7 @@ class Gripper:
         span: float = 0.0,
         width_coords: Sequence[int] = (),
         action_closed_at_high: bool = True,
+        limiter: tuple[float, ...] = (),
     ) -> None:
         if not len(coords):
             raise ValueError("a Gripper drives at least one finger joint, got none")
@@ -142,6 +189,20 @@ class Gripper:
         self._open = wp.array(self.open_q, dtype=wp.float32, device=model.device)
         self._closed = wp.array(self.closed_q, dtype=wp.float32, device=model.device)
 
+        self.limiter = tuple(float(v) for v in limiter) if limiter and limiter[0] > 0.0 else ()
+        """``(force [N], servo kp [N/m], servo kd [N s/m], clog force [N], clog speed [m/s], release
+        force [N], effort averaging weight per apply)`` of a driver-side force limiter, or empty.
+        See :meth:`apply`."""
+        if self.limiter:
+            q_start = model.joint_q_start.numpy(); qd_start = model.joint_qd_start.numpy()
+            dofs = [int(qd_start[int(np.flatnonzero(q_start == c)[0])]) for c in self.coords]
+            self._dofs = wp.array(np.asarray(dofs, dtype=np.int32), dtype=wp.int32, device=model.device)
+            self._closing = wp.array(np.sign(self.closed_q - self.open_q).astype(np.float32), dtype=wp.float32,
+                                     device=model.device)
+            self._clogged = wp.zeros(len(self.coords), dtype=wp.int32, device=model.device)
+            self._effort = wp.zeros(len(self.coords), dtype=wp.float32, device=model.device)
+            self._last_target = wp.array(self.open_q, dtype=wp.float32, device=model.device)
+
     @property
     def command(self) -> float:
         """The last command written, 0 open .. 1 closed."""
@@ -152,8 +213,14 @@ class Gripper:
         self._command_host[0] = float(np.clip(value, 0.0, 1.0))
         self._command.assign(self._command_host)
 
-    def apply(self, joint_target_q: wp.array) -> None:
-        """Write the finger targets into the solver's target vector."""
+    def apply(self, joint_target_q: wp.array, state: newton.State | None = None) -> None:
+        """Write the finger targets into the solver's target vector.
+
+        With a :attr:`limiter` and the ``state``, a stalled finger's target is then pulled back so its
+        servo asks for the limiter's force and no more, as i2rt's GripperForceLimiter does on the real
+        crank_4310. Without it the servo would sit past its force cap, where an actuator saturates and
+        loses its damping, and a stiffly coupled jaw rang against the part (crimping pliers lost on lift).
+        """
         wp.launch(
             _write_gripper_targets,
             dim=len(self.coords),
@@ -161,6 +228,15 @@ class Gripper:
             outputs=[joint_target_q],
             device=self.model.device,
         )
+        if self.limiter and state is not None:
+            wp.launch(
+                _limit_gripper_targets,
+                dim=len(self.coords),
+                inputs=[self._coords, self._dofs, self._closing, state.joint_q, state.joint_qd, *self.limiter,
+                        self._clogged, self._effort, self._last_target],
+                outputs=[joint_target_q],
+                device=self.model.device,
+            )
 
     def width(self, state: newton.State) -> float:
         """Current fingertip separation [m].

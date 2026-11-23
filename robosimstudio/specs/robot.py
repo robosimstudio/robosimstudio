@@ -351,6 +351,18 @@ class GripperSpec:
     linear_travel: bool = True
     open_width: float = 0.0
     span: float = 0.0
+    # A driver-side grip-force limiter (i2rt GripperForceLimiter): once the driven finger stalls
+    # (speed under limiter_clog_speed) while the servo's effort kp (target - q) - kd qd, averaged with
+    # weight limiter_avg per control step, is over limiter_clog_force, the target is moved to where the
+    # servo asks exactly limiter_force (limiter_kp/kd are the servo's gains). It lets go when the
+    # command opens or the averaged effort falls under limiter_release_force. limiter_force 0 = off.
+    limiter_force: float = 0.0
+    limiter_kp: float = 0.0
+    limiter_kd: float = 0.0
+    limiter_clog_force: float = 0.0
+    limiter_clog_speed: float = 0.0
+    limiter_release_force: float = 0.0
+    limiter_avg: float = 1.0
 
     # ------------------------------------------------------------- the point
     tcp_body: str = ""

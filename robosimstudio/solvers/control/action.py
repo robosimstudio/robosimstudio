@@ -165,12 +165,11 @@ class ActionJointPosition(ActionSpace):
         self.per_arm = widths.pop() + 1
 
     def apply(self, action: Sequence[float], control, state) -> None:
-        del state
         for (ik, gripper), values in zip(self.arms, self._split(action), strict=True):
             ik.set_joint_targets(values[:-1], control.joint_target_q, by_dof=self.by_dof)
             if gripper is not None:
                 gripper.command = float(values[-1])
-                gripper.apply(control.joint_target_q)
+                gripper.apply(control.joint_target_q, state)
 
     def hold_action(self, state) -> np.ndarray:
         """The live configuration, which is where the arm already is."""
@@ -221,7 +220,7 @@ class ActionEEPoseAbs(ActionSpace):
             ik.solve_into(state.joint_q, control.joint_target_q)
             if gripper is not None:
                 gripper.command = float(values[7])
-                gripper.apply(control.joint_target_q)
+                gripper.apply(control.joint_target_q, state)
 
     def hold_action(self, state) -> np.ndarray:
         """The pose the hand is at, which is an absolute command to stay there."""
@@ -438,7 +437,7 @@ class ActionEEDelta(ActionSpace):
             ik.solve_into(state.joint_q, control.joint_target_q)
             if gripper is not None:
                 gripper.command = self._grip(values[6], gripper)
-                gripper.apply(control.joint_target_q)
+                gripper.apply(control.joint_target_q, state)
 
     def _grip(self, value: float, gripper: Gripper) -> float:
         """This step's gripper command, absolute or accumulated.
@@ -567,7 +566,7 @@ class ActionOsc(ActionSpace):
             controller.apply(values[:6], control, state)
             if gripper is not None:
                 gripper.command = self.grip_command(values[6], gripper)
-                gripper.apply(control.joint_target_q)
+                gripper.apply(control.joint_target_q, state)
 
     def hold_action(self, state) -> np.ndarray:
         """Re-aim at the pose last *commanded* -- not a zero delta.

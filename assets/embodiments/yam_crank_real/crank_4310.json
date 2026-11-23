@@ -1,0 +1,88 @@
+{
+ "tcp_offset": [
+  -8.83230000000001e-05,
+  0.04459000000000004,
+  0.13808203506240746
+ ],
+ "tcp_offset_rot": [
+  0.0,
+  0.0,
+  0.7071067811865475,
+  -0.7071067811865475
+ ],
+ "approach_axis": [
+  0.0,
+  0.0,
+  1.0
+ ],
+ "close_axis": [
+  1.0,
+  0.0,
+  0.0
+ ],
+ "finger_open_q": 0.05205,
+ "finger_closed_q": 0.0,
+ "span_open": 0.0999991349913315,
+ "span_shut": -0.004100865008668566,
+ "tip_reach": 0.008753514185303735,
+ "pad_length": 0.01749999999999998,
+ "grasp_site_to_tcp": -0.008677964937592719,
+ "site_rot_in_gripper": [
+  0.0,
+  0.0,
+  0.7071067811865474,
+  0.7071067811865477
+ ],
+ "guesses": {
+  "tip_friction": 2.0,
+  "housing_friction": 1.0,
+  "arm_joint_damping": 0.0,
+  "limiter_clog_speed_m_s": 0.02,
+  "bases_on_table": true,
+  "mat_ahead_of_bases_m": 0.38
+ },
+ "crank": {
+  "open_gap_m": 0.1,
+  "crank_radius_m": 0.025315483811636244,
+  "crank_radius_i2rt_m": 0.01797399350626173,
+  "crank_close_rad": 0.13962634,
+  "crank_open_rad": 2.96705973
+ },
+ "servo": {
+  "kp_N_m": 31207.396022945475,
+  "kd_N_s_m": 780.1849005736369,
+  "force_cap_N": 276.5106150877691,
+  "armature_kg": 2.8086656420650926,
+  "frictionloss_N": 11.850454932332962
+ },
+ "limiter": {
+  "limiter_force": 35.5,
+  "limiter_kp": 31207.396022945475,
+  "limiter_kd": 780.1849005736369,
+  "limiter_clog_force": 19.75075822055494,
+  "limiter_release_force": 7.900303288221975,
+  "limiter_clog_speed": 0.02,
+  "limiter_avg": 0.2
+ },
+ "wrist_camera": {
+  "sides": [
+   "right"
+  ],
+  "model": "Intel RealSense D405",
+  "body": "{side}_camera",
+  "optical_site": "{side}_camera_optical",
+  "flange_to_camera_pos": [
+   0.0016999000000607195,
+   -0.07972864298920912,
+   0.06602077467211452
+  ],
+  "flange_to_camera_quat_wxyz": [
+   -0.906306513345646,
+   0.4226209931651356,
+   1.6645277061133612e-06,
+   7.761806802841775e-07
+  ],
+  "mass_kg": 0.06,
+  "source": "robot_models/station/yam_station_crank_4310_d405/yam_station_crank_4310_d405.xml"
+ }
+}
