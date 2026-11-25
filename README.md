@@ -30,8 +30,27 @@ based on the video at [Your Video Path] / demonstration at [Robot Demonstration]
 > [!TIP]
 > 1. RoboSimStudio supports human video, ego-centric video, robot video and teleoperation.
 > 2. Use **Codex Astra** for better scene construction.
-> 3. Use **Claude Code** for better robot motion.
+> 3. Use **Claude Code** to supervise Astra can get better results.
 > 4. Keep a **human in the loop** to sometimes remind the agent to reconstruct the physics and geometry.
+
+## How RoboSimStudio works
+
+<p align="center">
+  <img alt="How RoboSimStudio works: a coding agent rebuilds a real task from video by selecting and configuring physical solvers, RoboSimStudio couples them, and a Graph-as-Policy learned in simulation runs on the real robot" src=".github/media/overview.webp" width="100%" />
+</p>
+
+**RoboSimStudio** takes as input a smartphone video of a robot or human performing a task and
+outputs a multi-physics simulation that humans and coding agents can inspect and tune.
+
+- **Agentic Real2Sim.** A coding agent selects a solver for each object and configures it in code.
+- **Cross-Platform Coupler.** RoboSimStudio couples the chosen solvers at every control step, exchanging
+  poses, contact forces and shape between them (e.g. MuJoCo for the arm, SuperDex for the sponge).
+- **Supported solvers.** The same interface supports MuJoCo, VBD, MPM, SuperDex, Genesis,
+  a cage cutter, or your own solver.
+- **Sim2Real.** The simulation is varied in its physical parameters and spatial layout, and
+  Graph-as-Policy uses simulation feedback to improve success rate and cycle time before the
+  policy runs on the real robot.
+
 
 ## Acknowledgements
 
